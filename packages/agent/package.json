@@ -1,5 +1,5 @@
 {
-  "name": "@office-agent/adapter-univer",
+  "name": "@office-agent/agent",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -7,15 +7,14 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
-    "test": "node --import tsx --test src/xlsx-patch.test.ts src/agent-pipeline.test.ts"
+    "test": "node --import tsx --test src/agent.test.ts"
   },
   "dependencies": {
     "@office-agent/core": "0.0.1",
-    "@office-agent/writeback-surgical": "0.0.1",
-    "fflate": "^0.8.2"
+    "@anthropic-ai/sdk": "latest",
+    "openai": "latest"
   },
   "devDependencies": {
-    "@office-agent/agent": "0.0.1",
     "tsx": "^4.19.0"
   }
 }
