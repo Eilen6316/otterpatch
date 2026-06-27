@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/core" },
+    { "path": "packages/skills" },
     { "path": "packages/agent" },
     { "path": "packages/adapter-univer" },
     { "path": "packages/adapter-drawio" },
