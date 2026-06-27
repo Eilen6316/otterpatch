@@ -88,3 +88,5 @@ export const univerAdapterRegistration: AdapterRegistration = {
   engines: ['univer'],
   create: (hostId) => new UniverAdapter(hostId),
 };
+
+export { buildXlsxCompiler } from './xlsx-patch.js';

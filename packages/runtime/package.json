@@ -1,0 +1,30 @@
+{
+  "name": "@opal/runtime",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node --import tsx --test src/runtime.test.ts"
+  },
+  "dependencies": {
+    "@opal/core": "0.0.1",
+    "@opal/agent": "0.0.1",
+    "@opal/skills": "0.0.1",
+    "@opal/writeback-surgical": "0.0.1",
+    "@opal/adapter-univer": "0.0.1",
+    "@opal/adapter-drawio": "0.0.1"
+  },
+  "devDependencies": {
+    "fflate": "^0.8.2",
+    "tsx": "^4.19.0"
+  }
+}
