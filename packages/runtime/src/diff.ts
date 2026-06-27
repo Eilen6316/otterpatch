@@ -25,7 +25,7 @@ function refOf(a: LogicalAnchor | undefined, fallback: string): string {
   const p = a.portable;
   switch (p.kind) {
     case 'grid':
-      return `${p.sheet}!${p.a1}`;
+      return p.a1.includes('!') ? p.a1 : `${p.sheet}!${p.a1}`;
     case 'object':
       return p.elementId;
     case 'flow':

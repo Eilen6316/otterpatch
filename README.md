@@ -28,7 +28,32 @@ packages/agent/               intent → constrained ChangeSet; BYOK, 8 provider
 packages/adapter-univer/      Excel adapter (Univer) — ChangeSet → sheet XML compiler
 packages/adapter-drawio/      drawio adapter — mxCell op engine + diagram-level surgical write-back
 packages/writeback-surgical/  surgical OOXML write-back — validated + tested
+packages/runtime/             headless orchestrator: propose → diff → commit + JSON event stream
 apps/desktop/                 progressive-disclosure cockpit UI + BYOK model config (Vite + React; Electron later)
+apps/mcp-server/              OPAL as an MCP server (stdio) + headless CLI (opal-run)
+```
+
+## Integrate via MCP
+
+OPAL ships as an MCP server so any agent / IDE can drive the propose → review → write-back loop:
+
+```text
+opal_skills   list built-in document skills
+opal_propose  intent (+ selection context) → constrained ChangeSet + reviewable diff   (BYOK)
+opal_diff     ChangeSet → reviewable diff
+opal_commit   ChangeSet + file(base64) → surgical write-back → new file + fidelity report
+```
+
+```jsonc
+// register the server (BYOK key via env or per-call apiKey arg)
+{ "mcpServers": { "opal": { "command": "opal-mcp", "env": { "OPAL_API_KEY": "sk-..." } } } }
+```
+
+Or run it headless and stream JSON events (one per line):
+
+```bash
+opal-run --format excel --intent "fill amount = qty × price" --in book.xlsx --out book.out.xlsx
+# {"type":"propose:start",...} {"type":"diff:done",...} {"type":"commit:done","ok":true,"touchedParts":["xl/worksheets/sheet1.xml"],...}
 ```
 
 ## Develop
@@ -50,8 +75,10 @@ npm test -w @opal/writeback-surgical
 - [x] Surgical OOXML write-back (validated + tested)
 - [x] Agent turn: natural-language intent → constrained `ChangeSet` (BYOK, 8 providers)
 - [x] drawio adapter: mxCell add/delete/setProps/move + diagram-level surgical write-back
-- [ ] Univer adapter live loop: circle → ChangeSet → shadow → diff → write-back
-- [ ] Wire cockpit UI to the real agent + write-back backend
+- [x] Headless runtime: intent → ChangeSet → reviewable diff → surgical write-back, end-to-end (excel/drawio)
+- [x] MCP server + headless CLI with a JSON event stream (BYOK)
+- [ ] Word redline write-back closure + PDF adapter
+- [ ] Wire the cockpit UI to the runtime (and Electron packaging)
 
 ## License
 

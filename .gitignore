@@ -18,5 +18,5 @@ experiments/orig.*
 experiments/roundtrip.*
 experiments/surgical.*
 *.tmp
-# local screenshot helper (not committed)
-/_shoot.mjs
+# local helper / smoke scripts (not committed)
+/_*.mjs

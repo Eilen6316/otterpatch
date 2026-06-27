@@ -8,6 +8,7 @@
     { "path": "packages/adapter-drawio" },
     { "path": "packages/adapter-word" },
     { "path": "packages/writeback-surgical" },
-    { "path": "packages/runtime" }
+    { "path": "packages/runtime" },
+    { "path": "apps/mcp-server" }
   ]
 }
