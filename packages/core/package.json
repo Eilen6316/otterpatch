@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "node --import tsx --test src/registry.test.ts src/resolve-flow.test.ts"
+    "test": "node --import tsx --test src/registry.test.ts src/resolve-flow.test.ts src/risk.test.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.0"
