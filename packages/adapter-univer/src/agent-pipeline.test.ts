@@ -38,6 +38,7 @@ test('意图 → ChangeSet(Mock)→ 外科写回:B1 改为 99,其余部件字节
   );
   const cs = await agent.propose({
     hostId: 'h1',
+    format: 'excel',
     intent: '把 B1 改成 99',
     baseRev: 0 as DocRev,
     anchors: [],
