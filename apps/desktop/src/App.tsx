@@ -209,6 +209,58 @@ const RIBBONS: Record<Fmt, RibTab[]> = {
     },
   ],
 };
+/** 点击功能后展开的面板(向 Office 看齐:列表/调色板/菜单/样式库)。键 = 功能名。 */
+type Drop =
+  | { type: 'list'; items: string[] }
+  | { type: 'colors' }
+  | { type: 'menu'; sections: string[][] }
+  | { type: 'gallery'; title: string; cells: Array<{ label: string; cls?: string }> };
+
+const COLORS = [
+  '#000000', '#ffffff', '#e7e6e6', '#d0cece', '#44546a', '#4472c4', '#ed7d31', '#a5a5a5', '#ffc000', '#5b9bd5', '#70ad47',
+  '#c00000', '#ff0000', '#ffc000', '#ffff00', '#92d050', '#00b050', '#00b0f0', '#0070c0', '#002060', '#7030a0',
+];
+
+const DROPDOWNS: Record<string, Drop> = {
+  字体: { type: 'list', items: ['宋体', '微软雅黑', '等线', '黑体', '楷体', '仿宋', 'Times New Roman', 'Arial', 'Calibri'] },
+  字号: { type: 'list', items: ['8', '9', '10', '10.5', '11', '12', '14', '16', '18', '20', '24', '28', '36', '48', '72'] },
+  字体颜色: { type: 'colors' },
+  填充色: { type: 'colors' },
+  突出显示: { type: 'colors' },
+  常规: { type: 'list', items: ['常规', '数字', '货币', '会计专用', '短日期', '长日期', '时间', '百分比', '分数', '科学记数', '文本'] },
+  自动求和: { type: 'list', items: ['求和', '平均值', '计数', '最大值', '最小值', '其他函数…'] },
+  插入: { type: 'list', items: ['插入单元格…', '插入工作表行', '插入工作表列', '插入工作表'] },
+  删除: { type: 'list', items: ['删除单元格…', '删除工作表行', '删除工作表列', '删除工作表'] },
+  格式: { type: 'list', items: ['行高…', '自动调整行高', '列宽…', '自动调整列宽', '重命名工作表', '保护工作表…'] },
+  填充: { type: 'list', items: ['向下', '向右', '向上', '向左', '序列…', '快速填充'] },
+  清除: { type: 'list', items: ['全部清除', '清除格式', '清除内容', '清除批注', '清除超链接'] },
+  排序和筛选: { type: 'list', items: ['升序', '降序', '自定义排序…', '筛选', '清除', '重新应用'] },
+  查找和选择: { type: 'list', items: ['查找…', '替换…', '定位…', '定位条件…', '公式', '批注'] },
+  排序: { type: 'list', items: ['升序', '降序', '自定义排序…'] },
+  数据透视表: { type: 'list', items: ['表格和区域…', '来自外部数据源', '推荐的数据透视表'] },
+  样式: { type: 'list', items: ['GB/T 7714', 'APA', 'MLA', 'IEEE', 'Chicago'] },
+  边框: { type: 'menu', sections: [['下框线', '上框线', '左框线', '右框线'], ['无框线', '所有框线', '外侧框线', '粗匣框线'], ['绘制边框', '线条颜色', '线型', '其他边框…']] },
+  条件格式: { type: 'menu', sections: [['突出显示单元格规则', '最前/最后规则', '数据条', '色阶', '图标集'], ['新建规则…', '清除规则', '管理规则…']] },
+  单元格样式: {
+    type: 'gallery',
+    title: '单元格样式',
+    cells: [
+      { label: '常规' }, { label: '差', cls: 'bad' }, { label: '好', cls: 'good' }, { label: '适中', cls: 'neutral' },
+      { label: '计算', cls: 'calc' }, { label: '检查单元格', cls: 'check' }, { label: '解释性文本', cls: 'note' }, { label: '警告文本', cls: 'warn' },
+      { label: '输入', cls: 'input' }, { label: '输出', cls: 'output' }, { label: '标题 1', cls: 'h1' }, { label: '汇总', cls: 'total' },
+    ],
+  },
+  套用表格格式: {
+    type: 'gallery',
+    title: '表格样式',
+    cells: [
+      { label: '浅色 1', cls: 'tbl-l' }, { label: '浅色 2', cls: 'tbl-l' }, { label: '中等 1', cls: 'tbl-m' },
+      { label: '中等 2', cls: 'tbl-m' }, { label: '深色 1', cls: 'tbl-d' }, { label: '深色 2', cls: 'tbl-d' },
+    ],
+  },
+  主题: { type: 'gallery', title: '主题', cells: [{ label: 'Office' }, { label: '切片' }, { label: '丝状' }, { label: '回顾' }, { label: '基础' }, { label: '木头型' }] },
+};
+
 const PLACEHOLDERS: Record<Fmt, string> = {
   excel: '圈一块区域,说说你想怎么改…',
   word: '选中文字,说说你想怎么改…',
@@ -283,6 +335,7 @@ export function App() {
   const [sent, setSent] = useState(false);
   const [fmt, setFmt] = useState<Fmt>('excel');
   const [tab, setTab] = useState(0);
+  const [drop, setDrop] = useState<{ key: string; x: number; y: number } | null>(null);
   const [intent, setIntent] = useState('');
   const [cfgOpen, setCfgOpen] = useState(false);
   const [provider, setProvider] = useState(() => lsGet('oa.provider', 'claude'));
@@ -444,11 +497,25 @@ export function App() {
               {(RIBBONS[fmt][tab] ?? RIBBONS[fmt][0]!).groups.map((g) => (
                 <div className="rgroup" key={g.name}>
                   <div className="ritems">
-                    {g.items.map((it) => (
-                      <button className="ritem" key={it} title={it}>
-                        {it}
-                      </button>
-                    ))}
+                    {g.items.map((it) => {
+                      const d = DROPDOWNS[it];
+                      const biu = it === 'B' || it === 'I' || it === 'U';
+                      return (
+                        <button
+                          className={'ritem' + (biu ? ' biu biu-' + it.toLowerCase() : '')}
+                          key={it}
+                          title={it}
+                          onClick={(e) => {
+                            if (!d) return;
+                            const r = e.currentTarget.getBoundingClientRect();
+                            setDrop({ key: it, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 3 });
+                          }}
+                        >
+                          {it}
+                          {d ? <span className="caret">▾</span> : null}
+                        </button>
+                      );
+                    })}
                   </div>
                   <div className="rgname">{g.name}</div>
                 </div>
@@ -654,7 +721,55 @@ export function App() {
           </div>
         </aside>
       </main>
+      {drop && DROPDOWNS[drop.key] && (
+        <Dropdown spec={DROPDOWNS[drop.key]!} x={drop.x} y={drop.y} onClose={() => setDrop(null)} />
+      )}
     </div>
+  );
+}
+
+function Dropdown({ spec, x, y, onClose }: { spec: Drop; x: number; y: number; onClose: () => void }) {
+  return (
+    <>
+      <div className="drop-backdrop" onMouseDown={onClose} />
+      <div className="dropdown" style={{ left: x, top: y }}>
+        {spec.type === 'list' && (
+          <div className="drop-list">
+            {spec.items.map((i) => (
+              <button className="drop-item" key={i} onClick={onClose}>{i}</button>
+            ))}
+          </div>
+        )}
+        {spec.type === 'menu' && (
+          <div className="drop-list">
+            {spec.sections.map((sec, si) => (
+              <div key={si} className={si ? 'drop-sec' : ''}>
+                {sec.map((i) => (
+                  <button className="drop-item" key={i} onClick={onClose}>{i}</button>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+        {spec.type === 'colors' && (
+          <div className="drop-colors">
+            {COLORS.map((c, i) => (
+              <button key={c + i} className="swatch" style={{ background: c }} title={c} onClick={onClose} />
+            ))}
+          </div>
+        )}
+        {spec.type === 'gallery' && (
+          <div className="drop-gallery">
+            <div className="dg-title">{spec.title}</div>
+            <div className="dg-cells">
+              {spec.cells.map((c) => (
+                <button key={c.label} className={'dgcell ' + (c.cls ?? '')} onClick={onClose}>{c.label}</button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
