@@ -32,8 +32,12 @@ const mock = has('mock');
 const rt = new OpalRuntime();
 rt.on(emit);
 
+const isWord = format === 'word' || format === 'docx';
+const mockProposal = isWord
+  ? { plan: intent || 'demo edit', edits: [{ quote: 'hello world', replacement: 'hello brave world' }] }
+  : { plan: intent || 'demo edit', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] };
 const client: ModelClient = mock
-  ? new MockModelClient(() => ({ plan: intent || 'demo edit', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] }))
+  ? new MockModelClient(() => mockProposal)
   : createModelClient(provider, { apiKey: process.env.OPAL_API_KEY, ...(model ? { model } : {}) });
 
 const req: ProposeRequest = { hostId: 'cli', format, intent, baseRev: 0 as DocRev, anchors: [], context };

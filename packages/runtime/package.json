@@ -21,7 +21,8 @@
     "@opal/skills": "0.0.1",
     "@opal/writeback-surgical": "0.0.1",
     "@opal/adapter-univer": "0.0.1",
-    "@opal/adapter-drawio": "0.0.1"
+    "@opal/adapter-drawio": "0.0.1",
+    "@opal/adapter-word": "0.0.1"
   },
   "devDependencies": {
     "fflate": "^0.8.2",

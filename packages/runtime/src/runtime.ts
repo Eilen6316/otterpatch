@@ -11,6 +11,7 @@ import type { ChangeSet, DocHandle, WritebackBackend, WritebackResult } from '@o
 import { SurgicalOoxmlWriteback } from '@opal/writeback-surgical';
 import { buildXlsxCompiler } from '@opal/adapter-univer';
 import { DrawioSurgicalWriteback } from '@opal/adapter-drawio';
+import { WordRedlineWriteback } from '@opal/adapter-word';
 import { defaultLibrary } from '@opal/skills';
 import type { SkillLibrary } from '@opal/skills';
 import { buildDiff, type OpalDiff } from './diff.js';
@@ -39,6 +40,8 @@ export class OpalRuntime {
       excel: () => new SurgicalOoxmlWriteback(buildXlsxCompiler()),
       xlsx: () => new SurgicalOoxmlWriteback(buildXlsxCompiler()),
       drawio: () => new DrawioSurgicalWriteback(),
+      word: () => new WordRedlineWriteback(),
+      docx: () => new WordRedlineWriteback(),
     };
   }
 

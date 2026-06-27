@@ -12,6 +12,7 @@
     { "path": "../skills" },
     { "path": "../writeback-surgical" },
     { "path": "../adapter-univer" },
-    { "path": "../adapter-drawio" }
+    { "path": "../adapter-drawio" },
+    { "path": "../adapter-word" }
   ]
 }
