@@ -13,6 +13,7 @@
     { "path": "../writeback-surgical" },
     { "path": "../adapter-univer" },
     { "path": "../adapter-drawio" },
-    { "path": "../adapter-word" }
+    { "path": "../adapter-word" },
+    { "path": "../adapter-pdf" }
   ]
 }

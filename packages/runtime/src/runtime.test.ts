@@ -59,11 +59,11 @@ test('runtime: propose → diff → commit(excel) 端到端 + 事件流', async 
   }
 });
 
-test('runtime: 未知格式 commit 抛错', async () => {
+test('runtime: 未注册格式 commit 抛错;已注册含 excel/word/pdf/drawio', async () => {
   const rt = new OpalRuntime();
-  assert.ok(rt.formats().includes('excel'));
+  for (const f of ['excel', 'word', 'pdf', 'drawio']) assert.ok(rt.formats().includes(f), `missing backend ${f}`);
   await assert.rejects(
-    () => rt.commit({ format: 'pdf', bytes: new Uint8Array(), changeSet: { id: 'c', hostId: 'h', baseRev: 0 as DocRev, anchors: {}, origin: { by: 'human' }, meta: { intent: 'x' }, edits: [] } }),
+    () => rt.commit({ format: 'ppt', bytes: new Uint8Array(), changeSet: { id: 'c', hostId: 'h', baseRev: 0 as DocRev, anchors: {}, origin: { by: 'human' }, meta: { intent: 'x' }, edits: [] } }),
     /no writeback backend/,
   );
 });

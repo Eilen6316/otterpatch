@@ -266,9 +266,64 @@ export const wordDialect: HostDialect = {
   buildChangeSet: (req, proposal) => buildWordChangeSet(req, proposal as WordProposal),
 };
 
+// ───────────────────────── PDF ─────────────────────────
+
+export interface PdfProposal {
+  plan: string;
+  edits: Array<{ field: string; value: string }>;
+}
+
+function buildPdfChangeSet(req: ProposeRequest, p: PdfProposal): ChangeSet {
+  const anchors: Record<AnchorId, LogicalAnchor> = {};
+  const edits: Edit[] = [];
+  p.edits.forEach((e, i) => {
+    const aid = ('a' + i) as AnchorId;
+    anchors[aid] = {
+      id: aid,
+      hostId: req.hostId as HostId,
+      kind: 'object',
+      ref: null,
+      baseRev: req.baseRev,
+      portable: { kind: 'object', slide: 0, elementId: e.field },
+    };
+    edits.push({ id: 'e' + i, target: aid, op: { family: 'value', kind: 'setValue', value: e.value } });
+  });
+  return newChangeSet(req, p.plan, anchors, edits);
+}
+
+export const pdfDialect: HostDialect = {
+  format: 'pdf',
+  systemPrompt:
+    '你是一个 PDF 表单填写 Agent。用户要填一份带 AcroForm 表单字段的 PDF,把意图转成一组"字段名 → 值"的填写建议,' +
+    '只能通过 propose_changeset 工具提交。规则:① field 必须是表单里真实存在的字段名;② value 是要填入的文本;' +
+    '③ 改动交用户逐条审阅后才落盘,只改字段值、不动页面内容。先给一句话 plan,再给 edits。',
+  toolName: 'propose_changeset',
+  toolDescription: '提出对 PDF 表单字段的填写建议(只改字段值,交用户审阅)。给 field(字段名)与 value(值)。',
+  parameters: {
+    type: 'object',
+    properties: {
+      plan: { type: 'string', description: '一句话说明你打算做什么' },
+      edits: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            field: { type: 'string', description: 'AcroForm 表单字段名' },
+            value: { type: 'string', description: '要填入的文本' },
+          },
+          required: ['field', 'value'],
+        },
+      },
+    },
+    required: ['plan', 'edits'],
+  },
+  buildChangeSet: (req, proposal) => buildPdfChangeSet(req, proposal as PdfProposal),
+};
+
 export const DIALECTS: Record<string, HostDialect> = {
   excel: excelDialect,
   drawio: drawioDialect,
   word: wordDialect,
   docx: wordDialect,
+  pdf: pdfDialect,
 };

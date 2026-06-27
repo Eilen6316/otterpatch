@@ -27,6 +27,8 @@ packages/agent/               intent → constrained ChangeSet; BYOK, 8 provider
                               (Claude native + OpenAI-compatible: DeepSeek/GLM/Kimi/Doubao/MiniMax/Gemini/ChatGPT)
 packages/adapter-univer/      Excel adapter (Univer) — ChangeSet → sheet XML compiler
 packages/adapter-drawio/      drawio adapter — mxCell op engine + diagram-level surgical write-back
+packages/adapter-word/        Word adapter — word-level redline (w:ins/w:del) surgical write-back
+packages/adapter-pdf/         PDF adapter — AcroForm form-fill write-back (pdf-lib)
 packages/writeback-surgical/  surgical OOXML write-back — validated + tested
 packages/runtime/             headless orchestrator: propose → diff → commit + JSON event stream
 apps/desktop/                 progressive-disclosure cockpit UI + BYOK model config (Vite + React; Electron later)
@@ -77,7 +79,7 @@ npm test -w @opal/writeback-surgical
 - [x] drawio adapter: mxCell add/delete/setProps/move + diagram-level surgical write-back
 - [x] Headless runtime: intent → ChangeSet → reviewable diff → surgical write-back, end-to-end (excel/drawio)
 - [x] MCP server + headless CLI with a JSON event stream (BYOK)
-- [ ] Word redline write-back closure + PDF adapter
+- [x] Word redline write-back (w:ins/w:del) + PDF form-fill adapter — propose→commit for excel/word/pdf/drawio
 - [ ] Wire the cockpit UI to the runtime (and Electron packaging)
 
 ## License

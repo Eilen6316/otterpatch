@@ -33,9 +33,12 @@ const rt = new OpalRuntime();
 rt.on(emit);
 
 const isWord = format === 'word' || format === 'docx';
+const isPdf = format === 'pdf';
 const mockProposal = isWord
   ? { plan: intent || 'demo edit', edits: [{ quote: 'hello world', replacement: 'hello brave world' }] }
-  : { plan: intent || 'demo edit', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] };
+  : isPdf
+    ? { plan: intent || 'demo edit', edits: [{ field: 'name', value: 'Alice' }] }
+    : { plan: intent || 'demo edit', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] };
 const client: ModelClient = mock
   ? new MockModelClient(() => mockProposal)
   : createModelClient(provider, { apiKey: process.env.OPAL_API_KEY, ...(model ? { model } : {}) });
