@@ -144,7 +144,31 @@ svg { display: block; }
 .tmpl-empty .te-d { color: var(--muted); font-size: 12px; margin: 3px auto 13px; max-width: 220px; line-height: 1.5; }
 
 /* composer */
-.composer { flex-shrink: 0; padding: 12px; border-top: 1px solid var(--line); }
+.composer { position: relative; flex-shrink: 0; padding: 12px; border-top: 1px solid var(--line); }
+.model.on { border-color: var(--accent); color: var(--accent); }
+
+/* BYOK 模型配置面板 */
+.modelcfg {
+  position: absolute; bottom: calc(100% - 4px); right: 12px; width: 308px; z-index: 30;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: 13px;
+  box-shadow: 0 8px 28px rgba(20, 22, 28, 0.14); padding: 13px;
+}
+.modelcfg h4 { margin: 0 0 10px; font-size: 12.5px; font-weight: 600; }
+.modelcfg .prov { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pchip {
+  padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  cursor: pointer; font-size: 12px; color: var(--ink-soft); text-align: center;
+}
+.pchip:hover { border-color: var(--line-2); }
+.pchip.on { border-color: var(--accent); color: var(--accent); background: #eff3ff; font-weight: 600; }
+.modelcfg label { display: block; font-size: 11px; color: var(--muted); margin: 11px 0 4px; }
+.modelcfg input {
+  width: 100%; padding: 7px 10px; border: 1px solid var(--line-2); border-radius: 8px;
+  font: inherit; font-size: 12.5px; color: var(--text);
+}
+.modelcfg input:focus { outline: none; border-color: var(--faint); }
+.modelcfg .note { display: flex; gap: 6px; align-items: flex-start; font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+.modelcfg .note svg { flex-shrink: 0; margin-top: 1px; }
 .box { border: 1px solid var(--line-2); border-radius: var(--r-lg); padding: 10px 12px; background: var(--surface); box-shadow: var(--shadow); transition: border-color 0.12s; }
 .box:focus-within { border-color: var(--faint); }
 .box textarea { width: 100%; border: 0; outline: 0; resize: none; min-height: 22px; max-height: 150px; font: inherit; line-height: 1.5; color: var(--text); background: transparent; }

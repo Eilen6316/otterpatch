@@ -42,6 +42,23 @@ const RECENT = [
   { t: '标红异常值', time: '今天 09:14' },
 ];
 
+/** 8 家 BYOK 模型(与 @office-agent/agent 的 providers 对应)。 */
+const MODEL_PROVIDERS = [
+  { id: 'claude', label: 'Claude', model: 'claude-opus-4-8' },
+  { id: 'openai', label: 'ChatGPT', model: 'gpt-5.5' },
+  { id: 'deepseek', label: 'DeepSeek', model: 'deepseek-chat' },
+  { id: 'glm', label: '智谱 GLM', model: 'glm-4.6' },
+  { id: 'kimi', label: 'Kimi', model: 'kimi-latest' },
+  { id: 'doubao', label: '豆包', model: 'doubao-seed-1-6-251015' },
+  { id: 'minimax', label: 'MiniMax', model: 'MiniMax-M2' },
+  { id: 'gemini', label: 'Gemini', model: 'gemini-2.5-pro' },
+];
+const lsGet = (k: string, d: string): string =>
+  typeof localStorage !== 'undefined' ? (localStorage.getItem(k) ?? d) : d;
+const lsSet = (k: string, v: string): void => {
+  if (typeof localStorage !== 'undefined') localStorage.setItem(k, v);
+};
+
 function Section({ label, children, defaultOpen = true }: { label: string; children: ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
@@ -58,6 +75,18 @@ function Section({ label, children, defaultOpen = true }: { label: string; child
 export function App() {
   const [sent, setSent] = useState(false);
   const [intent, setIntent] = useState('');
+  const [cfgOpen, setCfgOpen] = useState(false);
+  const [provider, setProvider] = useState(() => lsGet('oa.provider', 'claude'));
+  const [model, setModel] = useState(() => lsGet('oa.model', 'claude-opus-4-8'));
+  const [apiKey, setApiKey] = useState(() => lsGet('oa.apiKey', ''));
+  const curProvider = MODEL_PROVIDERS.find((p) => p.id === provider) ?? MODEL_PROVIDERS[0]!;
+  const pickProvider = (id: string): void => {
+    const p = MODEL_PROVIDERS.find((x) => x.id === id) ?? MODEL_PROVIDERS[0]!;
+    setProvider(p.id);
+    lsSet('oa.provider', p.id);
+    setModel(p.model);
+    lsSet('oa.model', p.model);
+  };
 
   const cellClass = (ri: number, ci: number): string => {
     if (!sent) return ci >= 2 ? 'sel' : '';
@@ -197,6 +226,44 @@ export function App() {
           </div>
 
           <div className="composer">
+            {cfgOpen && (
+              <div className="modelcfg">
+                <h4>模型 · BYOK</h4>
+                <div className="prov">
+                  {MODEL_PROVIDERS.map((p) => (
+                    <button
+                      key={p.id}
+                      className={'pchip' + (p.id === provider ? ' on' : '')}
+                      onClick={() => pickProvider(p.id)}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <label>模型</label>
+                <input
+                  value={model}
+                  onChange={(e) => {
+                    setModel(e.target.value);
+                    lsSet('oa.model', e.target.value);
+                  }}
+                  placeholder={curProvider.model}
+                />
+                <label>API Key(BYOK)</label>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => {
+                    setApiKey(e.target.value);
+                    lsSet('oa.apiKey', e.target.value);
+                  }}
+                  placeholder="sk-..."
+                />
+                <div className="note">
+                  <IconHelp size={13} /> 密钥只存在你的浏览器本地,绝不上传服务器。
+                </div>
+              </div>
+            )}
             <div className="box">
               <textarea
                 value={intent}
@@ -209,7 +276,9 @@ export function App() {
                 <button className="iconbtn" title="图片"><IconImage size={17} /></button>
                 <button className="iconbtn" title="历史"><IconClock size={17} /></button>
                 <span className="grow" />
-                <button className="model">默认模型 <IconChevron size={13} /></button>
+                <button className={'model' + (cfgOpen ? ' on' : '')} onClick={() => setCfgOpen((v) => !v)}>
+                  {curProvider.label} <IconChevron size={13} />
+                </button>
                 <button className="send" title="发送" onClick={() => setSent(true)}><IconSend size={16} /></button>
               </div>
             </div>
