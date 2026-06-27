@@ -29,8 +29,8 @@ const RIBBONS: Record<Fmt, RibTab[]> = {
       name: '开始',
       groups: [
         { name: '剪贴板', items: ['粘贴', '剪切', '复制', '格式刷'] },
-        { name: '字体', items: ['字体', '字号', 'B', 'I', 'U', '边框', '填充色', '字体颜色'] },
-        { name: '对齐方式', items: ['左对齐', '居中', '右对齐', '顶端对齐', '自动换行', '合并后居中', '增加缩进'] },
+        { name: '字体', items: ['字体', '字号', '增大字号', '减小字号', '拼音指南', 'B', 'I', 'U', '边框', '填充色', '字体颜色'] },
+        { name: '对齐方式', items: ['顶端对齐', '居中', '左对齐', '右对齐', '自动换行', '增加缩进', '合并后居中'] },
         { name: '数字', items: ['常规', '货币', '百分比', '千分位', '增加小数', '减少小数'] },
         { name: '样式', items: ['条件格式', '套用表格格式', '单元格样式'] },
         { name: '单元格', items: ['插入', '删除', '格式'] },
@@ -271,6 +271,7 @@ const BIG = new Set<string>([
 ]);
 /** 组合框(显示当前值 + ▾):字体 / 字号 / 数字格式。 */
 const COMBO: Record<string, string> = { 字体: '宋体', 字号: '11', 常规: '常规' };
+const COMBO_W: Record<string, number> = { 字体: 104, 字号: 54, 常规: 92 };
 
 type Cell = { t: 'combo'; it: string } | { t: 'big'; it: string } | { t: 'small'; items: string[] };
 function buildCells(items: string[]): Cell[] {
@@ -836,10 +837,15 @@ type OnOpen = (it: string, el: HTMLElement) => void;
 function SmallCell({ it, onOpen }: { it: string; onOpen: OnOpen }) {
   const Ico = FUNC_ICONS[it];
   const biu = it === 'B' || it === 'I' || it === 'U';
+  const txt = !biu && !Ico; // 无图标 → 显示完整标签文字(不退化成单字)
   const accent = it === '字体颜色' ? ' ic-red' : it === '填充色' || it === '突出显示' ? ' ic-amber' : '';
   return (
-    <button className={'rs' + (biu ? ' biu biu-' + it.toLowerCase() : '') + accent} title={it} onClick={(e) => onOpen(it, e.currentTarget)}>
-      {biu ? it : Ico ? <Ico size={15} /> : it.slice(0, 1)}
+    <button
+      className={'rs' + (biu ? ' biu biu-' + it.toLowerCase() : '') + (txt ? ' rs-txt' : '') + accent}
+      title={it}
+      onClick={(e) => onOpen(it, e.currentTarget)}
+    >
+      {biu || txt ? it : Ico ? <Ico size={15} /> : null}
       {DROPDOWNS[it] ? <span className="caret">▾</span> : null}
     </button>
   );
@@ -860,7 +866,7 @@ function BigCell({ it, onOpen }: { it: string; onOpen: OnOpen }) {
 
 function ComboCell({ it, onOpen }: { it: string; onOpen: OnOpen }) {
   return (
-    <button className="rcombo" title={it} onClick={(e) => onOpen(it, e.currentTarget)}>
+    <button className="rcombo" style={{ minWidth: COMBO_W[it] ?? 88 }} title={it} onClick={(e) => onOpen(it, e.currentTarget)}>
       <span className="rc-val">{COMBO[it]}</span>
       <span className="caret">▾</span>
     </button>
