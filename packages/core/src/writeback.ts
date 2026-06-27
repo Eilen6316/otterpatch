@@ -9,6 +9,7 @@ import type { ChangeSet, EditId, EditOpKind } from './changeset.js';
 export type WritebackId = string & { readonly __brand: 'WritebackId' };
 export type WritebackKind =
   | 'surgical-ooxml' // 首选:只改目标部件 XML、其余字节原样
+  | 'surgical-xml' // drawio 等单 XML:只改目标 <diagram>、其余字节原样
   | 'model-roundtrip'
   | 'libreoffice-headless'
   | 'native-command';
