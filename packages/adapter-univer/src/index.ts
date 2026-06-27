@@ -27,6 +27,8 @@ import type {
   Unsubscribe,
   WritebackBackend,
 } from '@office-agent/core';
+import { SurgicalOoxmlWriteback } from '@office-agent/writeback-surgical';
+import { buildXlsxCompiler } from './xlsx-patch.js';
 
 const TODO = (what: string): never => {
   throw new Error(`UniverAdapter: ${what}() not implemented yet`);
@@ -53,7 +55,8 @@ export class UniverAdapter implements HostAdapter {
     return TODO('project');
   }
   writebacks(): readonly WritebackBackend[] {
-    return TODO('writebacks');
+    // 真实写回:外科补丁 + Excel(xlsx)的 ChangeSet→部件编译器
+    return [new SurgicalOoxmlWriteback(buildXlsxCompiler())];
   }
   overlay(): OverlayPort {
     return TODO('overlay');
