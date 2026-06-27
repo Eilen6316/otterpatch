@@ -5,6 +5,7 @@ import {
   IconFilter, IconFlag, IconSigma, IconPaperclip, IconImage, IconClock,
   IconSend, IconChevron, IconSearch, IconDots, IconUndo, IconCheck, IconX,
   IconDoc, IconPlus,
+  FUNC_ICONS,
 } from './icons.js';
 
 /** 渐进披露驾驶舱(.work/design.md §6)。风格参照 Next AI Drawio:纯白、分区块、线性图标、无 emoji。 */
@@ -500,9 +501,11 @@ export function App() {
                     {g.items.map((it) => {
                       const d = DROPDOWNS[it];
                       const biu = it === 'B' || it === 'I' || it === 'U';
+                      const Ico = FUNC_ICONS[it];
+                      const accent = it === '字体颜色' ? ' ic-red' : it === '填充色' || it === '突出显示' ? ' ic-amber' : '';
                       return (
                         <button
-                          className={'ritem' + (biu ? ' biu biu-' + it.toLowerCase() : '')}
+                          className={'ritem' + (biu ? ' biu biu-' + it.toLowerCase() : '') + accent}
                           key={it}
                           title={it}
                           onClick={(e) => {
@@ -511,7 +514,12 @@ export function App() {
                             setDrop({ key: it, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 3 });
                           }}
                         >
-                          {it}
+                          {Ico && !biu ? (
+                            <span className="ricon">
+                              <Ico size={15} />
+                            </span>
+                          ) : null}
+                          <span className="rlabel">{it}</span>
                           {d ? <span className="caret">▾</span> : null}
                         </button>
                       );
