@@ -1,0 +1,18 @@
+node_modules/
+dist/
+build/
+out/
+*.tsbuildinfo
+.env
+.env.*
+*.local
+.DS_Store
+.vscode/
+.idea/
+# experiment scratch outputs (keep the script, ignore generated docs)
+experiments/_*.docx
+experiments/_*.xlsx
+experiments/orig.*
+experiments/roundtrip.*
+experiments/surgical.*
+*.tmp

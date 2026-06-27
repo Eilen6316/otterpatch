@@ -1,0 +1,20 @@
+{
+  "name": "office-agent-workbench",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Agent-driven, reviewable safe-commit layer for Office files: circle a region, say what you want, review the diff, high-fidelity write-back.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc -b",
+    "dev": "npm run dev --workspace apps/desktop",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}
