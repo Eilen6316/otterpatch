@@ -1,5 +1,7 @@
 # OPAL
 
+**English** · [中文](./README.zh.md) · [日本語](./README.ja.md) · [Français](./README.fr.md) · [한국어](./README.ko.md)
+
 > **O**ffice **P**atch & **A**gent **L**ayer — an Agent-driven, reviewable **safe-commit layer** for documents.
 > Circle a region → say what you want → review the diff → high-fidelity write-back.
 > (Think: opening a PR against your `.xlsx` / `.docx` / `.drawio`.)
