@@ -84,6 +84,18 @@ svg { display: block; }
 .rs.ic-amber { color: #f0a500; }
 .rs.biu { font-size: 13px; min-width: 22px; }
 .rs.rs-txt { min-width: auto; width: auto; padding: 0 7px; font-size: 11px; gap: 2px; color: var(--text-soft); }
+/* 样式画廊(Word/PPT):横排格式样本 */
+.rstyles { display: flex; gap: 5px; align-items: center; }
+.rstyle { width: 66px; height: 46px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--surface); display: flex; align-items: center; justify-content: center; cursor: pointer; overflow: hidden; white-space: nowrap; color: var(--text); }
+.rstyle:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
+.st-body { font-size: 11px; }
+.st-h1 { color: #1f497d; font-size: 14px; font-weight: 600; }
+.st-h2 { color: #2e74b5; font-size: 13px; font-weight: 600; }
+.st-h3 { color: #2e74b5; font-size: 12px; }
+.st-title { color: #1f3864; font-size: 15px; font-weight: 700; }
+.st-sub { color: #5b9bd5; font-size: 12px; font-style: italic; }
+/* 功能执行反馈 */
+.toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 200; background: var(--primary); color: #fff; font-size: 12.5px; padding: 8px 16px; border-radius: 9px; box-shadow: 0 6px 20px rgba(20, 22, 28, 0.22); pointer-events: none; }
 /* 大按钮:图标在上、标签在下,占整组高 */
 .rbig { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 72px; padding: 4px 3px; border: 1px solid transparent; background: transparent; border-radius: 7px; color: var(--text-soft); cursor: pointer; }
 .rbig:hover { background: var(--fill); border-color: var(--line); }

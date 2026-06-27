@@ -272,6 +272,10 @@ const BIG = new Set<string>([
 /** 组合框(显示当前值 + ▾):字体 / 字号 / 数字格式。 */
 const COMBO: Record<string, string> = { 字体: '宋体', 字号: '11', 常规: '常规' };
 const COMBO_W: Record<string, number> = { 字体: 104, 字号: 54, 常规: 92 };
+/** Word/PPT 的样式库:横排格式样本(正文/标题1/…),仿 Office 样式画廊。 */
+const STYLE_KIND: Record<string, string> = {
+  正文: 'body', 无间隔: 'body', 标题1: 'h1', 标题2: 'h2', 标题3: 'h3', 标题: 'title', 副标题: 'sub',
+};
 
 type Cell = { t: 'combo'; it: string } | { t: 'big'; it: string } | { t: 'small'; items: string[] };
 function buildCells(items: string[]): Cell[] {
@@ -373,6 +377,8 @@ export function App() {
   const [fmt, setFmt] = useState<Fmt>('excel');
   const [tab, setTab] = useState(0);
   const [drop, setDrop] = useState<{ key: string; x: number; y: number } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [intent, setIntent] = useState('');
   const [cfgOpen, setCfgOpen] = useState(false);
   const [provider, setProvider] = useState(() => lsGet('oa.provider', 'claude'));
@@ -490,9 +496,22 @@ export function App() {
     setSent(true);
   };
   const openDrop = (it: string, el: HTMLElement): void => {
-    if (!DROPDOWNS[it]) return;
     const r = el.getBoundingClientRect();
     setDrop({ key: it, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 3 });
+  };
+  const notify = (msg: string): void => {
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 1600);
+  };
+  /** 每个功能都可用:有下拉的开面板,其余给执行反馈。 */
+  const act = (it: string, el: HTMLElement): void => {
+    if (DROPDOWNS[it]) openDrop(it, el);
+    else notify('执行 · ' + it);
+  };
+  const pick = (v: string): void => {
+    notify('应用 · ' + v);
+    setDrop(null);
   };
 
   return (
@@ -536,26 +555,44 @@ export function App() {
               ))}
             </div>
             <div className="ribbon-bar">
-              {(RIBBONS[fmt][tab] ?? RIBBONS[fmt][0]!).groups.map((g) => (
-                <div className="rgroup" key={g.name}>
-                  <div className="rgbody">
-                    {buildCells(g.items).map((cell, ci) =>
-                      cell.t === 'combo' ? (
-                        <ComboCell key={ci} it={cell.it} onOpen={openDrop} />
-                      ) : cell.t === 'big' ? (
-                        <BigCell key={ci} it={cell.it} onOpen={openDrop} />
-                      ) : (
-                        <div className="rsmall-grid" key={ci}>
-                          {cell.items.map((it) => (
-                            <SmallCell key={it} it={it} onOpen={openDrop} />
+              {(RIBBONS[fmt][tab] ?? RIBBONS[fmt][0]!).groups.map((g) => {
+                const isStyle = g.items.some((it) => STYLE_KIND[it]);
+                return (
+                  <div className="rgroup" key={g.name}>
+                    <div className="rgbody">
+                      {isStyle ? (
+                        <div className="rstyles">
+                          {g.items.map((it) => (
+                            <button
+                              key={it}
+                              className={'rstyle st-' + (STYLE_KIND[it] ?? 'body')}
+                              title={it}
+                              onClick={() => notify('应用样式 · ' + it)}
+                            >
+                              {it}
+                            </button>
                           ))}
                         </div>
-                      ),
-                    )}
+                      ) : (
+                        buildCells(g.items).map((cell, ci) =>
+                          cell.t === 'combo' ? (
+                            <ComboCell key={ci} it={cell.it} onOpen={act} />
+                          ) : cell.t === 'big' ? (
+                            <BigCell key={ci} it={cell.it} onOpen={act} />
+                          ) : (
+                            <div className="rsmall-grid" key={ci}>
+                              {cell.items.map((it) => (
+                                <SmallCell key={it} it={it} onOpen={act} />
+                              ))}
+                            </div>
+                          ),
+                        )
+                      )}
+                    </div>
+                    <div className="rgname">{g.name}</div>
                   </div>
-                  <div className="rgname">{g.name}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
           <div className="canvas">
@@ -758,13 +795,14 @@ export function App() {
         </aside>
       </main>
       {drop && DROPDOWNS[drop.key] && (
-        <Dropdown spec={DROPDOWNS[drop.key]!} x={drop.x} y={drop.y} onClose={() => setDrop(null)} />
+        <Dropdown spec={DROPDOWNS[drop.key]!} x={drop.x} y={drop.y} onClose={() => setDrop(null)} onPick={pick} />
       )}
+      {toast && <div className="toast">{toast}</div>}
     </div>
   );
 }
 
-function Dropdown({ spec, x, y, onClose }: { spec: Drop; x: number; y: number; onClose: () => void }) {
+function Dropdown({ spec, x, y, onClose, onPick }: { spec: Drop; x: number; y: number; onClose: () => void; onPick: (v: string) => void }) {
   return (
     <>
       <div className="drop-backdrop" onMouseDown={onClose} />
@@ -772,7 +810,7 @@ function Dropdown({ spec, x, y, onClose }: { spec: Drop; x: number; y: number; o
         {spec.type === 'list' && (
           <div className="drop-list">
             {spec.items.map((i) => (
-              <button className="drop-item" key={i} onClick={onClose}>{i}</button>
+              <button className="drop-item" key={i} onClick={() => onPick(i)}>{i}</button>
             ))}
           </div>
         )}
@@ -781,7 +819,7 @@ function Dropdown({ spec, x, y, onClose }: { spec: Drop; x: number; y: number; o
             {spec.sections.map((sec, si) => (
               <div key={si} className={si ? 'drop-sec' : ''}>
                 {sec.map((i) => (
-                  <button className="drop-item" key={i} onClick={onClose}>{i}</button>
+                  <button className="drop-item" key={i} onClick={() => onPick(i)}>{i}</button>
                 ))}
               </div>
             ))}
@@ -790,7 +828,7 @@ function Dropdown({ spec, x, y, onClose }: { spec: Drop; x: number; y: number; o
         {spec.type === 'colors' && (
           <div className="drop-colors">
             {COLORS.map((c, i) => (
-              <button key={c + i} className="swatch" style={{ background: c }} title={c} onClick={onClose} />
+              <button key={c + i} className="swatch" style={{ background: c }} title={c} onClick={() => onPick(c)} />
             ))}
           </div>
         )}
@@ -799,7 +837,7 @@ function Dropdown({ spec, x, y, onClose }: { spec: Drop; x: number; y: number; o
             <div className="dg-title">{spec.title}</div>
             <div className="dg-cells">
               {spec.cells.map((c) => (
-                <button key={c.label} className={'dgcell ' + (c.cls ?? '')} onClick={onClose}>{c.label}</button>
+                <button key={c.label} className={'dgcell ' + (c.cls ?? '')} onClick={() => onPick(c.label)}>{c.label}</button>
               ))}
             </div>
           </div>
