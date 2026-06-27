@@ -7,8 +7,9 @@ import {
   IconDoc, IconPlus,
   FUNC_ICONS,
 } from './icons.js';
+import { LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
 
-/** 渐进披露驾驶舱(.work/design.md §6)。风格参照 Next AI Drawio:纯白、分区块、线性图标、无 emoji。 */
+/** 渐进披露驾驶舱。风格参照 Next AI Drawio:纯白、分区块、线性图标、无 emoji。五语 i18n(t 包裹显示文案)。 */
 
 /** 工作区格式:文件名 + 工具栏随之联动。 */
 const FORMATS = [
@@ -19,7 +20,7 @@ const FORMATS = [
 ] as const;
 type Fmt = (typeof FORMATS)[number]['id'];
 
-/** 仿 Office 功能区:选项卡 → 分组(模块)→ 功能。菜单栏随工作区格式联动。 */
+/** 仿 Office 功能区:选项卡 → 分组(模块)→ 功能。 */
 interface RibGroup { name: string; items: string[] }
 interface RibTab { name: string; groups: RibGroup[] }
 
@@ -210,7 +211,8 @@ const RIBBONS: Record<Fmt, RibTab[]> = {
     },
   ],
 };
-/** 点击功能后展开的面板(向 Office 看齐:列表/调色板/菜单/样式库)。键 = 功能名。 */
+
+/** 点击功能后展开的面板。键 = 功能名。 */
 type Drop =
   | { type: 'list'; items: string[] }
   | { type: 'colors' }
@@ -262,17 +264,14 @@ const DROPDOWNS: Record<string, Drop> = {
   主题: { type: 'gallery', title: '主题', cells: [{ label: 'Office' }, { label: '切片' }, { label: '丝状' }, { label: '回顾' }, { label: '基础' }, { label: '木头型' }] },
 };
 
-/** 大按钮(图标在上 + 标签 + ▾):Office 里突出的功能;其余默认小按钮(仅图标)。 */
 const BIG = new Set<string>([
   '粘贴', '条件格式', '套用表格格式', '单元格样式', '插入', '删除', '格式', '自动求和', '排序和筛选', '查找和选择',
   '数据透视表', '推荐的数据透视表', '表格', '主题', '拼写检查', '获取数据', '全部刷新', '名称管理器', '插入函数',
   '目录', '修订', '保护工作表', '模拟分析', '删除重复值', '数据验证', 'SmartArt', '分类汇总', '页边距', '图表',
   '新建幻灯片', '版式',
 ]);
-/** 组合框(显示当前值 + ▾):字体 / 字号 / 数字格式。 */
 const COMBO: Record<string, string> = { 字体: '宋体', 字号: '11', 常规: '常规' };
 const COMBO_W: Record<string, number> = { 字体: 104, 字号: 54, 常规: 92 };
-/** Word/PPT 的样式库:横排格式样本(正文/标题1/…),仿 Office 样式画廊。 */
 const STYLE_KIND: Record<string, string> = {
   正文: 'body', 无间隔: 'body', 标题1: 'h1', 标题2: 'h2', 标题3: 'h3', 标题: 'title', 副标题: 'sub',
 };
@@ -326,7 +325,7 @@ const DATA = [
 ];
 const AMOUNT = ['4560', '4472', '57000', '4480', '4784'];
 const MARGIN = ['41%', '37%', '41%', '28%', '37%'];
-const ANOMALY_ROWIDX = 3; // 1500 那行(DATA[2])在网格里的 rowIdx(0=表头行)
+const ANOMALY_ROWIDX = 3;
 
 const EXAMPLES = [
   { Icon: IconFilter, t: '清洗这张表', d: '统一日期格式、修复被存成文本的数字、去空值' },
@@ -340,7 +339,6 @@ const RECENT = [
   { t: '标红异常值', time: '今天 09:14' },
 ];
 
-/** 8 家 BYOK 模型(与 @opal/agent 的 providers 对应)。 */
 const MODEL_PROVIDERS = [
   { id: 'claude', label: 'Claude', model: 'claude-opus-4-8' },
   { id: 'openai', label: 'ChatGPT', model: 'gpt-5.5' },
@@ -373,6 +371,8 @@ function Section({ label, children, defaultOpen = true }: { label: string; child
 }
 
 export function App() {
+  const [lang, setLang] = useState<Lang>(() => lsGet('oa.lang', 'zh') as Lang);
+  const t = makeT(lang);
   const [sent, setSent] = useState(false);
   const [fmt, setFmt] = useState<Fmt>('excel');
   const [tab, setTab] = useState(0);
@@ -384,10 +384,8 @@ export function App() {
   const [provider, setProvider] = useState(() => lsGet('oa.provider', 'claude'));
   const [model, setModel] = useState(() => lsGet('oa.model', 'claude-opus-4-8'));
   const [apiKey, setApiKey] = useState(() => lsGet('oa.apiKey', ''));
-  // 选区:锚点 (ar,ac) → 焦点 (br,bc);rowIdx 0=表头行,1..5=数据行;col 0..5=A..F
   const [sel, setSel] = useState<Sel>({ ar: 1, ac: 2, br: 5, bc: 5 });
   const dragRef = useRef(false);
-  // 双击进入单元格编辑;改动存 overrides(以 "ri,ci" 为键),覆盖原始显示值
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<{ ri: number; ci: number } | null>(null);
   const [editVal, setEditVal] = useState('');
@@ -401,8 +399,11 @@ export function App() {
     setModel(p.model);
     lsSet('oa.model', p.model);
   };
+  const pickLang = (l: Lang): void => {
+    setLang(l);
+    lsSet('oa.lang', l);
+  };
 
-  // 拖选:松开鼠标即结束(全局监听,松手在表外也算)
   useEffect(() => {
     const up = (): void => {
       dragRef.current = false;
@@ -416,7 +417,7 @@ export function App() {
   const c1 = Math.min(sel.ac, sel.bc);
   const c2 = Math.max(sel.ac, sel.bc);
   const inSel = (ri: number, ci: number): boolean => ri >= r1 && ri <= r2 && ci >= c1 && ci <= c2;
-  const a1 = (ri: number, ci: number): string => `${COLS[ci]}${ri + 1}`; // rowIdx 0 → 行 1
+  const a1 = (ri: number, ci: number): string => `${COLS[ci]}${ri + 1}`;
   const rangeLabel = r1 === r2 && c1 === c2 ? a1(r1, c1) : `${a1(r1, c1)}:${a1(r2, c2)}`;
   const selRows = r2 - r1 + 1;
   const selCols = c2 - c1 + 1;
@@ -476,10 +477,9 @@ export function App() {
         onMouseDown={(e) => e.stopPropagation()}
       />
     ) : (
-      gridValue(ri, ci)
+      t(gridValue(ri, ci))
     );
 
-  /** 发送时随消息一并交给 Agent 的选区上下文(= ProposeRequest.context)。 */
   const selectionContext = (): string => {
     const lines = [`选区 ${rangeLabel}`];
     for (let r = r1; r <= r2; r++) {
@@ -490,8 +490,6 @@ export function App() {
     return lines.join('\n');
   };
   const send = (): void => {
-    // 选区随消息一并发给 Agent。接真后端时:
-    // agent.propose({ format:'excel', intent, context: selectionContext(), baseRev, anchors, hostId })
     void selectionContext();
     setSent(true);
   };
@@ -507,302 +505,310 @@ export function App() {
   /** 每个功能都可用:有下拉的开面板,其余给执行反馈。 */
   const act = (it: string, el: HTMLElement): void => {
     if (DROPDOWNS[it]) openDrop(it, el);
-    else notify('执行 · ' + it);
+    else notify(t('执行') + ' · ' + t(it));
   };
   const pick = (v: string): void => {
-    notify('应用 · ' + v);
+    notify(t('应用') + ' · ' + t(v));
     setDrop(null);
   };
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <span className="mark"><IconGrid size={18} /></span>
-          OPAL <span className="sub">safe-commit layer</span>
-        </div>
-        <div className="fmttabs">
-          {FORMATS.map((f) => (
-            <button
-              key={f.id}
-              className={'fmttab' + (f.id === fmt ? ' on' : '')}
-              onClick={() => {
-                setFmt(f.id);
-                setTab(0);
-              }}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-        <div className="file">
-          <span className="name">{curFmt.file}</span>
-          <span className="saved">已保存</span>
-        </div>
-        <div className="grow" />
-        <button className="zoom"><IconSearch size={14} /> 100%</button>
-        <button className="icon-ghost" title="更多"><IconDots size={18} /></button>
-      </header>
-
-      <main className="body">
-        <section className="editor">
-          <div className="ribbon">
-            <div className="ribbon-tabs">
-              {RIBBONS[fmt].map((t, i) => (
-                <button key={t.name} className={'rtab' + (i === tab ? ' on' : '')} onClick={() => setTab(i)}>
-                  {t.name}
-                </button>
-              ))}
-            </div>
-            <div className="ribbon-bar">
-              {(RIBBONS[fmt][tab] ?? RIBBONS[fmt][0]!).groups.map((g) => {
-                const isStyle = g.items.some((it) => STYLE_KIND[it]);
-                return (
-                  <div className="rgroup" key={g.name}>
-                    <div className="rgbody">
-                      {isStyle ? (
-                        <div className="rstyles">
-                          {g.items.map((it) => (
-                            <button
-                              key={it}
-                              className={'rstyle st-' + (STYLE_KIND[it] ?? 'body')}
-                              title={it}
-                              onClick={() => notify('应用样式 · ' + it)}
-                            >
-                              {it}
-                            </button>
-                          ))}
-                        </div>
-                      ) : (
-                        buildCells(g.items).map((cell, ci) =>
-                          cell.t === 'combo' ? (
-                            <ComboCell key={ci} it={cell.it} onOpen={act} />
-                          ) : cell.t === 'big' ? (
-                            <BigCell key={ci} it={cell.it} onOpen={act} />
-                          ) : (
-                            <div className="rsmall-grid" key={ci}>
-                              {cell.items.map((it) => (
-                                <SmallCell key={it} it={it} onOpen={act} />
-                              ))}
-                            </div>
-                          ),
-                        )
-                      )}
-                    </div>
-                    <div className="rgname">{g.name}</div>
-                  </div>
-                );
-              })}
-            </div>
+    <TContext.Provider value={t}>
+      <div className="app">
+        <header className="topbar">
+          <div className="brand">
+            <span className="mark"><IconGrid size={18} /></span>
+            OPAL <span className="sub">{t('safe-commit layer')}</span>
           </div>
-          <div className="canvas">
-            {isExcel ? (
-            <table className="sheet">
-              <thead>
-                <tr>
-                  <th className="colh corner" />
-                  {COLS.map((c, ci) => (
-                    <th key={c} className="colh" onMouseDown={() => selColumn(ci)}>{c}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td className="rowh" onMouseDown={() => selRow(0)}>1</td>
-                  {HEADERS.map((_, ci) => (
-                    <td
-                      key={ci}
-                      className={('name ' + cellClass(0, ci)).trim()}
-                      onMouseDown={() => onDown(0, ci)}
-                      onMouseEnter={() => onEnter(0, ci)}
-                      onDoubleClick={() => beginEdit(0, ci)}
-                    >
-                      {cellInner(0, ci)}
-                    </td>
-                  ))}
-                </tr>
-                {DATA.map((_, di) => {
-                  const ri = di + 1;
+          <div className="fmttabs">
+            {FORMATS.map((f) => (
+              <button
+                key={f.id}
+                className={'fmttab' + (f.id === fmt ? ' on' : '')}
+                onClick={() => {
+                  setFmt(f.id);
+                  setTab(0);
+                }}
+              >
+                {t(f.label)}
+              </button>
+            ))}
+          </div>
+          <div className="file">
+            <span className="name">{t(curFmt.file)}</span>
+            <span className="saved">{t('已保存')}</span>
+          </div>
+          <div className="grow" />
+          <select className="langsel" value={lang} onChange={(e) => pickLang(e.target.value as Lang)} title="Language">
+            {LANGS.map((l) => (
+              <option key={l.id} value={l.id}>{l.label}</option>
+            ))}
+          </select>
+          <button className="zoom"><IconSearch size={14} /> 100%</button>
+          <button className="icon-ghost" title={t('更多')}><IconDots size={18} /></button>
+        </header>
+
+        <main className="body">
+          <section className="editor">
+            <div className="ribbon">
+              <div className="ribbon-tabs">
+                {RIBBONS[fmt].map((rt, i) => (
+                  <button key={rt.name} className={'rtab' + (i === tab ? ' on' : '')} onClick={() => setTab(i)}>
+                    {t(rt.name)}
+                  </button>
+                ))}
+              </div>
+              <div className="ribbon-bar">
+                {(RIBBONS[fmt][tab] ?? RIBBONS[fmt][0]!).groups.map((g) => {
+                  const isStyle = g.items.some((it) => STYLE_KIND[it]);
                   return (
-                    <tr key={di}>
-                      <td className="rowh" onMouseDown={() => selRow(ri)}>{ri + 1}</td>
-                      {COLS.map((_, ci) => (
+                    <div className="rgroup" key={g.name}>
+                      <div className="rgbody">
+                        {isStyle ? (
+                          <div className="rstyles">
+                            {g.items.map((it) => (
+                              <button
+                                key={it}
+                                className={'rstyle st-' + (STYLE_KIND[it] ?? 'body')}
+                                title={t(it)}
+                                onClick={() => notify(t('应用样式') + ' · ' + t(it))}
+                              >
+                                {t(it)}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          buildCells(g.items).map((cell, ci) =>
+                            cell.t === 'combo' ? (
+                              <ComboCell key={ci} it={cell.it} onOpen={act} />
+                            ) : cell.t === 'big' ? (
+                              <BigCell key={ci} it={cell.it} onOpen={act} />
+                            ) : (
+                              <div className="rsmall-grid" key={ci}>
+                                {cell.items.map((it) => (
+                                  <SmallCell key={it} it={it} onOpen={act} />
+                                ))}
+                              </div>
+                            ),
+                          )
+                        )}
+                      </div>
+                      <div className="rgname">{t(g.name)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="canvas">
+              {isExcel ? (
+                <table className="sheet">
+                  <thead>
+                    <tr>
+                      <th className="colh corner" />
+                      {COLS.map((c, ci) => (
+                        <th key={c} className="colh" onMouseDown={() => selColumn(ci)}>{c}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td className="rowh" onMouseDown={() => selRow(0)}>1</td>
+                      {HEADERS.map((_, ci) => (
                         <td
                           key={ci}
-                          className={cellClass(ri, ci)}
-                          onMouseDown={() => onDown(ri, ci)}
-                          onMouseEnter={() => onEnter(ri, ci)}
-                          onDoubleClick={() => beginEdit(ri, ci)}
+                          className={('name ' + cellClass(0, ci)).trim()}
+                          onMouseDown={() => onDown(0, ci)}
+                          onMouseEnter={() => onEnter(0, ci)}
+                          onDoubleClick={() => beginEdit(0, ci)}
                         >
-                          {cellInner(ri, ci)}
+                          {cellInner(0, ci)}
                         </td>
                       ))}
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            ) : (
-              <div className="canvas-ph">
-                <div className="ph-badge"><IconDoc size={26} /></div>
-                <div className="ph-t">{curFmt.label} 渲染区</div>
-                <div className="ph-d">{CANVAS_HINT[fmt]}</div>
-              </div>
-            )}
-          </div>
-        </section>
+                    {DATA.map((_, di) => {
+                      const ri = di + 1;
+                      return (
+                        <tr key={di}>
+                          <td className="rowh" onMouseDown={() => selRow(ri)}>{ri + 1}</td>
+                          {COLS.map((_, ci) => (
+                            <td
+                              key={ci}
+                              className={cellClass(ri, ci)}
+                              onMouseDown={() => onDown(ri, ci)}
+                              onMouseEnter={() => onEnter(ri, ci)}
+                              onDoubleClick={() => beginEdit(ri, ci)}
+                            >
+                              {cellInner(ri, ci)}
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="canvas-ph">
+                  <div className="ph-badge"><IconDoc size={26} /></div>
+                  <div className="ph-t">{t(curFmt.label)} · {t('渲染区')}</div>
+                  <div className="ph-d">{t(CANVAS_HINT[fmt])}</div>
+                </div>
+              )}
+            </div>
+          </section>
 
-        <aside className="rail">
-          <div className="selbar">
-            <span className="dot" />
-            选区 <span className="ref">{isExcel ? rangeLabel : '—'}</span>
-            <span className="grow" />
-            <span>{isExcel ? `${selRows} × ${selCols} 单元格` : `${curFmt.label} 工作区`}</span>
-          </div>
+          <aside className="rail">
+            <div className="selbar">
+              <span className="dot" />
+              {t('选区')} <span className="ref">{isExcel ? rangeLabel : '—'}</span>
+              <span className="grow" />
+              <span>{isExcel ? `${selRows} × ${selCols} ${t('单元格')}` : `${t(curFmt.label)} ${t('工作区')}`}</span>
+            </div>
 
-          <div className="rail-body">
-            {!sent ? (
-              <>
-                <Section label="建议操作">
-                  {EXAMPLES.map((e) => {
-                    const Ico = e.Icon;
-                    return (
-                      <button key={e.t} className="example" onClick={() => setSent(true)}>
-                        <span className="ico"><Ico size={17} /></span>
+            <div className="rail-body">
+              {!sent ? (
+                <>
+                  <Section label={t('建议操作')}>
+                    {EXAMPLES.map((e) => {
+                      const Ico = e.Icon;
+                      return (
+                        <button key={e.t} className="example" onClick={() => setSent(true)}>
+                          <span className="ico"><Ico size={17} /></span>
+                          <span>
+                            <div className="t">{t(e.t)}</div>
+                            <div className="d">{t(e.d)}</div>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </Section>
+
+                  <Section label={t('指令模板')}>
+                    <div className="tmpl-empty">
+                      <div className="badge"><IconDoc size={20} /></div>
+                      <div className="te-t">{t('暂无模板')}</div>
+                      <div className="te-d">{t('把常用指令存成模板,下次圈选后一键复用')}</div>
+                      <button className="btn solid"><IconPlus size={14} /> {t('新建模板')}</button>
+                    </div>
+                  </Section>
+
+                  <Section label={t('最近')}>
+                    {RECENT.map((r) => (
+                      <button key={r.t} className="recent">
+                        <span className="ic"><IconCheck size={15} /></span>
                         <span>
-                          <div className="t">{e.t}</div>
-                          <div className="d">{e.d}</div>
+                          <div className="t">{t(r.t)}</div>
+                          <div className="time">{t(r.time)}</div>
                         </span>
                       </button>
-                    );
-                  })}
-                </Section>
+                    ))}
+                  </Section>
+                </>
+              ) : (
+                <Section label={t('本次改动') + ' · 3'}>
+                  <ul className="plan">
+                    <li>{t('按 销量×单价 补齐「金额」列')}</li>
+                    <li>{t('新增「毛利率」列')}</li>
+                    <li>{t('标记偏离均值过大的异常值')}</li>
+                  </ul>
+                  <div className="summary">{t('+10 单元格 · +1 列公式 · 1 处标记')}</div>
 
-                <Section label="指令模板">
-                  <div className="tmpl-empty">
-                    <div className="badge"><IconDoc size={20} /></div>
-                    <div className="te-t">暂无模板</div>
-                    <div className="te-d">把常用指令存成模板,下次圈选后一键复用</div>
-                    <button className="btn solid"><IconPlus size={14} /> 新建模板</button>
+                  <Change tag={t('公式')} title="E2:E6" before={t('空')} after="=C×D" why={t('按 销量×单价 自动补齐金额')} />
+                  <Change tag={t('新列')} title="F2:F6" before={t('空')} after="41% / 37% …" why={t('新增毛利率列')} />
+                  <Change tag={t('标记')} title="C4" before="1500" after="1500" why={t('偏离均值约 8 倍,疑似录入错误')} />
+
+                  <div className="bulk">
+                    <button className="btn ok"><IconCheck size={14} /> {t('全部接受')}</button>
+                    <button className="btn">{t('部分接受')}</button>
+                    <button className="btn no"><IconX size={14} /> {t('拒绝')}</button>
                   </div>
                 </Section>
+              )}
+            </div>
 
-                <Section label="最近">
-                  {RECENT.map((r) => (
-                    <button key={r.t} className="recent">
-                      <span className="ic"><IconCheck size={15} /></span>
-                      <span>
-                        <div className="t">{r.t}</div>
-                        <div className="time">{r.time}</div>
-                      </span>
-                    </button>
-                  ))}
-                </Section>
-              </>
-            ) : (
-              <Section label="本次改动 · 3">
-                <ul className="plan">
-                  <li>按 销量×单价 补齐「金额」列</li>
-                  <li>新增「毛利率」列</li>
-                  <li>标记偏离均值过大的异常值</li>
-                </ul>
-                <div className="summary">+10 单元格 · +1 列公式 · 1 处标记</div>
-
-                <Change tag="公式" title="E2:E6" before="空" after="=C×D" why="按 销量×单价 自动补齐金额" />
-                <Change tag="新列" title="F2:F6" before="空" after="41% / 37% …" why="新增毛利率列" />
-                <Change tag="标记" title="C4" before="1500" after="1500" why="偏离均值约 8 倍,疑似录入错误" />
-
-                <div className="bulk">
-                  <button className="btn ok"><IconCheck size={14} /> 全部接受</button>
-                  <button className="btn">部分接受</button>
-                  <button className="btn no"><IconX size={14} /> 拒绝</button>
+            <div className="composer">
+              {cfgOpen && (
+                <div className="modelcfg">
+                  <h4>{t('模型')} · BYOK</h4>
+                  <div className="prov">
+                    {MODEL_PROVIDERS.map((p) => (
+                      <button
+                        key={p.id}
+                        className={'pchip' + (p.id === provider ? ' on' : '')}
+                        onClick={() => pickProvider(p.id)}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                  <label>{t('模型')}</label>
+                  <input
+                    value={model}
+                    onChange={(e) => {
+                      setModel(e.target.value);
+                      lsSet('oa.model', e.target.value);
+                    }}
+                    placeholder={curProvider.model}
+                  />
+                  <label>API Key(BYOK)</label>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => {
+                      setApiKey(e.target.value);
+                      lsSet('oa.apiKey', e.target.value);
+                    }}
+                    placeholder="sk-..."
+                  />
+                  <div className="note">
+                    <IconHelp size={13} /> {t('密钥只存在你的浏览器本地,绝不上传服务器。')}
+                  </div>
                 </div>
-              </Section>
-            )}
-          </div>
-
-          <div className="composer">
-            {cfgOpen && (
-              <div className="modelcfg">
-                <h4>模型 · BYOK</h4>
-                <div className="prov">
-                  {MODEL_PROVIDERS.map((p) => (
-                    <button
-                      key={p.id}
-                      className={'pchip' + (p.id === provider ? ' on' : '')}
-                      onClick={() => pickProvider(p.id)}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
+              )}
+              <div className="box">
+                <div className="selchip">
+                  <span className="dot" />{' '}
+                  {isExcel ? (
+                    <>
+                      {t('已选')} <b>{rangeLabel}</b> · {selRows}×{selCols}
+                    </>
+                  ) : (
+                    <>
+                      {t('当前')} <b>{t(curFmt.label)}</b> {t('工作区')}
+                    </>
+                  )}
+                  {t(',发送时随选区一并给 Agent')}
                 </div>
-                <label>模型</label>
-                <input
-                  value={model}
-                  onChange={(e) => {
-                    setModel(e.target.value);
-                    lsSet('oa.model', e.target.value);
-                  }}
-                  placeholder={curProvider.model}
+                <textarea
+                  value={intent}
+                  onChange={(e) => setIntent(e.target.value)}
+                  placeholder={t(PLACEHOLDERS[fmt])}
+                  rows={1}
                 />
-                <label>API Key(BYOK)</label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => {
-                    setApiKey(e.target.value);
-                    lsSet('oa.apiKey', e.target.value);
-                  }}
-                  placeholder="sk-..."
-                />
-                <div className="note">
-                  <IconHelp size={13} /> 密钥只存在你的浏览器本地,绝不上传服务器。
+                <div className="row">
+                  <button className="iconbtn" title={t('附件')}><IconPaperclip size={17} /></button>
+                  <button className="iconbtn" title={t('图片')}><IconImage size={17} /></button>
+                  <button className="iconbtn" title={t('历史')}><IconClock size={17} /></button>
+                  <span className="grow" />
+                  <button className={'model' + (cfgOpen ? ' on' : '')} onClick={() => setCfgOpen((v) => !v)}>
+                    {curProvider.label} <IconChevron size={13} />
+                  </button>
+                  <button className="send" title={t('发送')} onClick={send}><IconSend size={16} /></button>
                 </div>
-              </div>
-            )}
-            <div className="box">
-              <div className="selchip">
-                <span className="dot" />{' '}
-                {isExcel ? (
-                  <>
-                    已选 <b>{rangeLabel}</b> · {selRows}×{selCols}
-                  </>
-                ) : (
-                  <>
-                    当前 <b>{curFmt.label}</b> 工作区
-                  </>
-                )}
-                ,发送时随选区一并给 Agent
-              </div>
-              <textarea
-                value={intent}
-                onChange={(e) => setIntent(e.target.value)}
-                placeholder={PLACEHOLDERS[fmt]}
-                rows={1}
-              />
-              <div className="row">
-                <button className="iconbtn" title="附件"><IconPaperclip size={17} /></button>
-                <button className="iconbtn" title="图片"><IconImage size={17} /></button>
-                <button className="iconbtn" title="历史"><IconClock size={17} /></button>
-                <span className="grow" />
-                <button className={'model' + (cfgOpen ? ' on' : '')} onClick={() => setCfgOpen((v) => !v)}>
-                  {curProvider.label} <IconChevron size={13} />
-                </button>
-                <button className="send" title="发送" onClick={send}><IconSend size={16} /></button>
               </div>
             </div>
-          </div>
-        </aside>
-      </main>
-      {drop && DROPDOWNS[drop.key] && (
-        <Dropdown spec={DROPDOWNS[drop.key]!} x={drop.x} y={drop.y} onClose={() => setDrop(null)} onPick={pick} />
-      )}
-      {toast && <div className="toast">{toast}</div>}
-    </div>
+          </aside>
+        </main>
+        {drop && DROPDOWNS[drop.key] && (
+          <Dropdown spec={DROPDOWNS[drop.key]!} x={drop.x} y={drop.y} onClose={() => setDrop(null)} onPick={pick} />
+        )}
+        {toast && <div className="toast">{toast}</div>}
+      </div>
+    </TContext.Provider>
   );
 }
 
 function Dropdown({ spec, x, y, onClose, onPick }: { spec: Drop; x: number; y: number; onClose: () => void; onPick: (v: string) => void }) {
+  const t = useT();
   return (
     <>
       <div className="drop-backdrop" onMouseDown={onClose} />
@@ -810,7 +816,7 @@ function Dropdown({ spec, x, y, onClose, onPick }: { spec: Drop; x: number; y: n
         {spec.type === 'list' && (
           <div className="drop-list">
             {spec.items.map((i) => (
-              <button className="drop-item" key={i} onClick={() => onPick(i)}>{i}</button>
+              <button className="drop-item" key={i} onClick={() => onPick(i)}>{t(i)}</button>
             ))}
           </div>
         )}
@@ -819,7 +825,7 @@ function Dropdown({ spec, x, y, onClose, onPick }: { spec: Drop; x: number; y: n
             {spec.sections.map((sec, si) => (
               <div key={si} className={si ? 'drop-sec' : ''}>
                 {sec.map((i) => (
-                  <button className="drop-item" key={i} onClick={() => onPick(i)}>{i}</button>
+                  <button className="drop-item" key={i} onClick={() => onPick(i)}>{t(i)}</button>
                 ))}
               </div>
             ))}
@@ -834,10 +840,10 @@ function Dropdown({ spec, x, y, onClose, onPick }: { spec: Drop; x: number; y: n
         )}
         {spec.type === 'gallery' && (
           <div className="drop-gallery">
-            <div className="dg-title">{spec.title}</div>
+            <div className="dg-title">{t(spec.title)}</div>
             <div className="dg-cells">
               {spec.cells.map((c) => (
-                <button key={c.label} className={'dgcell ' + (c.cls ?? '')} onClick={() => onPick(c.label)}>{c.label}</button>
+                <button key={c.label} className={'dgcell ' + (c.cls ?? '')} onClick={() => onPick(c.label)}>{t(c.label)}</button>
               ))}
             </div>
           </div>
@@ -863,39 +869,45 @@ function Change(props: { tag: string; title: string; before: string; after: stri
         <div className="why">{props.why}</div>
       </div>
       <div className="acts">
-        <button className="btn ok"><IconCheck size={14} /> 接受</button>
-        <button className="btn no"><IconX size={14} /> 拒绝</button>
+        <button className="btn ok"><IconCheck size={14} /> <T s="接受" /></button>
+        <button className="btn no"><IconX size={14} /> <T s="拒绝" /></button>
       </div>
     </div>
   );
 }
 
+function T({ s }: { s: string }) {
+  return <>{useT()(s)}</>;
+}
+
 type OnOpen = (it: string, el: HTMLElement) => void;
 
 function SmallCell({ it, onOpen }: { it: string; onOpen: OnOpen }) {
+  const t = useT();
   const Ico = FUNC_ICONS[it];
   const biu = it === 'B' || it === 'I' || it === 'U';
-  const txt = !biu && !Ico; // 无图标 → 显示完整标签文字(不退化成单字)
+  const txt = !biu && !Ico;
   const accent = it === '字体颜色' ? ' ic-red' : it === '填充色' || it === '突出显示' ? ' ic-amber' : '';
   return (
     <button
       className={'rs' + (biu ? ' biu biu-' + it.toLowerCase() : '') + (txt ? ' rs-txt' : '') + accent}
-      title={it}
+      title={t(it)}
       onClick={(e) => onOpen(it, e.currentTarget)}
     >
-      {biu || txt ? it : Ico ? <Ico size={15} /> : null}
+      {biu ? it : txt ? t(it) : Ico ? <Ico size={15} /> : null}
       {DROPDOWNS[it] ? <span className="caret">▾</span> : null}
     </button>
   );
 }
 
 function BigCell({ it, onOpen }: { it: string; onOpen: OnOpen }) {
+  const t = useT();
   const Ico = FUNC_ICONS[it];
   return (
-    <button className="rbig" title={it} onClick={(e) => onOpen(it, e.currentTarget)}>
+    <button className="rbig" title={t(it)} onClick={(e) => onOpen(it, e.currentTarget)}>
       <span className="rbig-ic">{Ico ? <Ico size={20} /> : null}</span>
       <span className="rbig-lb">
-        {it}
+        {t(it)}
         {DROPDOWNS[it] ? ' ▾' : ''}
       </span>
     </button>
@@ -903,9 +915,10 @@ function BigCell({ it, onOpen }: { it: string; onOpen: OnOpen }) {
 }
 
 function ComboCell({ it, onOpen }: { it: string; onOpen: OnOpen }) {
+  const t = useT();
   return (
-    <button className="rcombo" style={{ minWidth: COMBO_W[it] ?? 88 }} title={it} onClick={(e) => onOpen(it, e.currentTarget)}>
-      <span className="rc-val">{COMBO[it]}</span>
+    <button className="rcombo" style={{ minWidth: COMBO_W[it] ?? 88 }} title={t(it)} onClick={(e) => onOpen(it, e.currentTarget)}>
+      <span className="rc-val">{t(COMBO[it] ?? '')}</span>
       <span className="caret">▾</span>
     </button>
   );

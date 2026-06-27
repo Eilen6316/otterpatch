@@ -59,6 +59,8 @@ svg { display: block; }
 .topbar .grow { flex: 1; }
 .icon-ghost { width: 32px; height: 32px; display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); border-radius: var(--r-sm); cursor: pointer; }
 .icon-ghost:hover { background: var(--fill); color: var(--text-soft); }
+.langsel { margin-right: 6px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); color: var(--muted); font-size: 12.5px; padding: 5px 7px; cursor: pointer; outline: none; }
+.langsel:hover { border-color: var(--line-2); color: var(--text-soft); }
 .zoom { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--muted); background: var(--surface); cursor: pointer; font-size: 12.5px; }
 .zoom:hover { border-color: var(--line-2); }
 
