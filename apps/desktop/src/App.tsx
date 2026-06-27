@@ -9,13 +9,58 @@ import {
 
 /** 渐进披露驾驶舱(.work/design.md §6)。风格参照 Next AI Drawio:纯白、分区块、线性图标、无 emoji。 */
 
-const TOOLS = [
-  { Icon: IconSelect, label: '圈选', active: true },
-  { Icon: IconArrow, label: '箭头' },
-  { Icon: IconStrike, label: '删除' },
-  { Icon: IconPencil, label: '重写' },
-  { Icon: IconHelp, label: '提问' },
-];
+/** 工作区格式:文件名 + 工具栏随之联动。 */
+const FORMATS = [
+  { id: 'excel', label: 'Excel', file: '月度销售表.xlsx' },
+  { id: 'word', label: 'Word', file: '实训报告.docx' },
+  { id: 'ppt', label: 'PPT', file: '季度汇报.pptx' },
+  { id: 'drawio', label: '流程图', file: '系统架构.drawio' },
+] as const;
+type Fmt = (typeof FORMATS)[number]['id'];
+
+/** 每种格式对应的工具栏(菜单栏随工作区格式而变)。 */
+const TOOLSETS: Record<Fmt, Array<{ Icon: typeof IconSelect; label: string }>> = {
+  excel: [
+    { Icon: IconSelect, label: '圈选区域' },
+    { Icon: IconSigma, label: '求和/统计' },
+    { Icon: IconPencil, label: '公式' },
+    { Icon: IconFilter, label: '排序筛选' },
+    { Icon: IconFlag, label: '标记异常' },
+  ],
+  word: [
+    { Icon: IconSelect, label: '选择文字' },
+    { Icon: IconPencil, label: '加粗/样式' },
+    { Icon: IconDoc, label: '标题层级' },
+    { Icon: IconHelp, label: '批注' },
+    { Icon: IconStrike, label: '修订红线' },
+  ],
+  ppt: [
+    { Icon: IconSelect, label: '选择对象' },
+    { Icon: IconDoc, label: '文本框' },
+    { Icon: IconGrid, label: '形状' },
+    { Icon: IconImage, label: '图片' },
+    { Icon: IconFlag, label: '版式' },
+  ],
+  drawio: [
+    { Icon: IconSelect, label: '选择' },
+    { Icon: IconPlus, label: '添加节点' },
+    { Icon: IconArrow, label: '连线' },
+    { Icon: IconPencil, label: '样式' },
+    { Icon: IconGrid, label: '布局' },
+  ],
+};
+const PLACEHOLDERS: Record<Fmt, string> = {
+  excel: '圈一块区域,说说你想怎么改…',
+  word: '选中文字,说说你想怎么改…',
+  drawio: '选中节点/连线,说说你想怎么改…',
+  ppt: '选中对象,说说你想怎么改…',
+};
+const CANVAS_HINT: Record<Fmt, string> = {
+  excel: '',
+  word: '流式文档:选中文字 → 指令 → 红线修订(@opal/adapter-word)',
+  drawio: '流程图:选中节点/连线 → 指令 → 按 mxCell id 改(@opal/adapter-drawio)',
+  ppt: '幻灯片:选中对象 → 指令 → 版式/文本(适配器规划中)',
+};
 
 const COLS = ['A', 'B', 'C', 'D', 'E', 'F'];
 const HEADERS = ['日期', '产品', '销量', '单价', '金额', '毛利率'];
@@ -76,6 +121,7 @@ function Section({ label, children, defaultOpen = true }: { label: string; child
 
 export function App() {
   const [sent, setSent] = useState(false);
+  const [fmt, setFmt] = useState<Fmt>('excel');
   const [intent, setIntent] = useState('');
   const [cfgOpen, setCfgOpen] = useState(false);
   const [provider, setProvider] = useState(() => lsGet('oa.provider', 'claude'));
@@ -117,6 +163,8 @@ export function App() {
   const rangeLabel = r1 === r2 && c1 === c2 ? a1(r1, c1) : `${a1(r1, c1)}:${a1(r2, c2)}`;
   const selRows = r2 - r1 + 1;
   const selCols = c2 - c1 + 1;
+  const curFmt = FORMATS.find((f) => f.id === fmt) ?? FORMATS[0];
+  const isExcel = fmt === 'excel';
 
   const gridValue = (ri: number, ci: number): string => {
     const ov = overrides[cellKey(ri, ci)];
@@ -198,8 +246,15 @@ export function App() {
           <span className="mark"><IconGrid size={18} /></span>
           OPAL <span className="sub">safe-commit layer</span>
         </div>
+        <div className="fmttabs">
+          {FORMATS.map((f) => (
+            <button key={f.id} className={'fmttab' + (f.id === fmt ? ' on' : '')} onClick={() => setFmt(f.id)}>
+              {f.label}
+            </button>
+          ))}
+        </div>
         <div className="file">
-          <span className="name">月度销售表.xlsx</span>
+          <span className="name">{curFmt.file}</span>
           <span className="saved">已保存</span>
         </div>
         <div className="grow" />
@@ -210,10 +265,10 @@ export function App() {
       <main className="body">
         <section className="editor">
           <div className="toolbar">
-            {TOOLS.map((t) => {
+            {TOOLSETS[fmt].map((t, i) => {
               const Ico = t.Icon;
               return (
-                <button key={t.label} className={'tool' + (t.active ? ' active' : '')} title={t.label}>
+                <button key={t.label} className={'tool' + (i === 0 ? ' active' : '')} title={t.label}>
                   <Ico size={18} />
                 </button>
               );
@@ -222,6 +277,7 @@ export function App() {
             <button className="tool" title="撤销"><IconUndo size={18} /></button>
           </div>
           <div className="canvas">
+            {isExcel ? (
             <table className="sheet">
               <thead>
                 <tr>
@@ -267,15 +323,22 @@ export function App() {
                 })}
               </tbody>
             </table>
+            ) : (
+              <div className="canvas-ph">
+                <div className="ph-badge"><IconDoc size={26} /></div>
+                <div className="ph-t">{curFmt.label} 渲染区</div>
+                <div className="ph-d">{CANVAS_HINT[fmt]}</div>
+              </div>
+            )}
           </div>
         </section>
 
         <aside className="rail">
           <div className="selbar">
             <span className="dot" />
-            选区 <span className="ref">{rangeLabel}</span>
+            选区 <span className="ref">{isExcel ? rangeLabel : '—'}</span>
             <span className="grow" />
-            <span>{selRows} × {selCols} 单元格</span>
+            <span>{isExcel ? `${selRows} × ${selCols} 单元格` : `${curFmt.label} 工作区`}</span>
           </div>
 
           <div className="rail-body">
@@ -380,12 +443,22 @@ export function App() {
             )}
             <div className="box">
               <div className="selchip">
-                <span className="dot" /> 已选 <b>{rangeLabel}</b> · {selRows}×{selCols},发送时随消息一并给 Agent
+                <span className="dot" />{' '}
+                {isExcel ? (
+                  <>
+                    已选 <b>{rangeLabel}</b> · {selRows}×{selCols}
+                  </>
+                ) : (
+                  <>
+                    当前 <b>{curFmt.label}</b> 工作区
+                  </>
+                )}
+                ,发送时随选区一并给 Agent
               </div>
               <textarea
                 value={intent}
                 onChange={(e) => setIntent(e.target.value)}
-                placeholder="圈一块区域,说说你想怎么改…"
+                placeholder={PLACEHOLDERS[fmt]}
                 rows={1}
               />
               <div className="row">

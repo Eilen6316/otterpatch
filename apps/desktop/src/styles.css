@@ -42,7 +42,17 @@ svg { display: block; }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
 .brand .mark { color: var(--text); display: grid; place-items: center; }
 .brand .sub { color: var(--faint); font-weight: 450; }
-.topbar .file { display: flex; align-items: center; gap: 12px; color: var(--muted); }
+/* 工作区格式切换(菜单栏随之联动) */
+.fmttabs { display: flex; gap: 2px; margin-left: 14px; background: var(--fill); border-radius: 9px; padding: 2px; }
+.fmttab { border: 0; background: transparent; padding: 5px 12px; border-radius: 7px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.fmttab:hover { color: var(--text-soft); }
+.fmttab.on { background: var(--surface); color: var(--primary); font-weight: 600; box-shadow: 0 1px 2px rgba(20, 22, 28, 0.09); }
+.topbar .file { display: flex; align-items: center; gap: 12px; margin-left: 14px; color: var(--muted); }
+/* 非 Excel 格式的画布占位 */
+.canvas-ph { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 11px; text-align: center; color: var(--muted); }
+.canvas-ph .ph-badge { width: 58px; height: 58px; border-radius: 15px; background: var(--surface); border: 1px solid var(--line-2); display: grid; place-items: center; color: var(--faint); }
+.canvas-ph .ph-t { font-size: 15px; font-weight: 600; color: var(--text); }
+.canvas-ph .ph-d { font-size: 12.5px; max-width: 380px; line-height: 1.6; }
 .topbar .file .name { font-family: var(--mono); font-size: 12.5px; color: var(--text-soft); }
 .saved { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
 .saved::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--add); }
