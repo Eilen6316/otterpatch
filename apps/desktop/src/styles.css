@@ -159,7 +159,9 @@ svg { display: block; }
 .sheet.full { width: 100%; box-shadow: none; border: 0; border-radius: 0; }
 .sheet.full th, .sheet.full td { padding: 5px 12px; }
 .drawio-board { position: relative; width: 100%; height: 100%; overflow: hidden; }
-.board-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.board-canvas { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.board-svg { position: absolute; top: 0; left: 0; width: 6000px; height: 6000px; overflow: visible; pointer-events: none; }
+.board-zoom { position: absolute; right: 12px; bottom: 10px; font-size: 11px; color: var(--muted); background: rgba(255, 255, 255, 0.85); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; pointer-events: none; }
 .board-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--muted); font-size: 13px; background: rgba(255, 255, 255, 0.78); border: 1px solid var(--line); padding: 9px 15px; border-radius: 9px; pointer-events: none; }
 .bnode { position: absolute; cursor: move; display: grid; place-items: center; }
 .bnode > svg { position: absolute; inset: 0; width: 100%; height: 100%; }

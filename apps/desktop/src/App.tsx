@@ -1307,12 +1307,15 @@ function DrawioBoard() {
   const [drag, setDrag] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const [resize, setResize] = useState<{ id: string; k: string; box: BNode; sx: number; sy: number } | null>(null);
   const [conn, setConn] = useState<{ from: string; x: number; y: number; tgt: string | null } | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState<XY>({ x: 0, y: 0 });
   const ref = useRef<HTMLDivElement | null>(null);
   const idRef = useRef(0);
 
+  // 屏幕坐标 → 画布坐标(扣除平移/缩放),所有节点/连线都用画布坐标
   const pt = (e: { clientX: number; clientY: number }): XY => {
     const r = ref.current?.getBoundingClientRect();
-    return { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) };
+    return { x: (e.clientX - (r?.left ?? 0) - pan.x) / zoom, y: (e.clientY - (r?.top ?? 0) - pan.y) / zoom };
   };
   const nodeAt = (x: number, y: number, not?: string): BNode | undefined =>
     [...nodes].reverse().find((n) => n.id !== not && x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h);
@@ -1375,6 +1378,26 @@ function DrawioBoard() {
     return () => window.removeEventListener('keydown', k);
   }, [sel, selEdge, editing]);
 
+  // Ctrl + 滚轮:朝光标位置缩放画布(光标下的点保持不动)
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent): void => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const mx = e.clientX - r.left;
+      const my = e.clientY - r.top;
+      const nz = Math.min(4, Math.max(0.25, zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+      const cx = (mx - pan.x) / zoom;
+      const cy = (my - pan.y) / zoom;
+      setPan({ x: mx - cx * nz, y: my - cy * nz });
+      setZoom(nz);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [zoom, pan]);
+
   return (
     <div
       className="drawio-board"
@@ -1388,12 +1411,14 @@ function DrawioBoard() {
         setSelEdge(null);
       }}
       onDoubleClick={(e) => {
-        if (e.target === ref.current || (e.target as HTMLElement).classList.contains('board-svg')) {
+        const cl = (e.target as HTMLElement).classList;
+        if (e.target === ref.current || cl.contains('board-svg') || cl.contains('board-canvas')) {
           const { x, y } = pt(e);
           addNode(x, y, '<rect x="4" y="5" width="32" height="20" rx="2"/>', t('文本'));
         }
       }}
     >
+      <div className="board-canvas" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
       <svg className="board-svg">
         <defs>
           <marker id="opal-arr" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
@@ -1502,7 +1527,9 @@ function DrawioBoard() {
           </div>
         );
       })}
-      {nodes.length === 0 && <div className="board-hint">{t('从左侧拖拽形状到画板,或双击空白处新建;拖节点边缘圆点连线')}</div>}
+      </div>
+      {nodes.length === 0 && <div className="board-hint">{t('从左侧拖拽形状到画板,或双击空白处新建;拖节点边缘圆点连线;Ctrl+滚轮缩放')}</div>}
+      <div className="board-zoom">{Math.round(zoom * 100)}%</div>
     </div>
   );
 }
