@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, DragEvent, ReactNode } from 'react';
 import {
   IconGrid, IconSelect, IconArrow, IconStrike, IconPencil, IconHelp,
   IconFilter, IconFlag, IconSigma, IconPaperclip, IconImage, IconClock,
@@ -823,9 +823,7 @@ export function App() {
                   </tbody>
                 </table>
               ) : fmt === 'drawio' ? (
-                <div className="drawio-board">
-                  <div className="board-hint">{t('从左侧拖拽形状到画板,或在右侧让 Agent 画图')}</div>
-                </div>
+                <DrawioBoard />
               ) : (
                 <div className="doc-page">
                   <div className="canvas-ph">
@@ -1231,7 +1229,14 @@ function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
             {isOpen && (
               <div className="pal-grid">
                 {shapes.map((s) => (
-                  <button key={s.name} className="pal-shape" title={s.name} onClick={() => onPick(s.name)}>
+                  <button
+                    key={s.name}
+                    className="pal-shape"
+                    title={s.name}
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('opal/shape', JSON.stringify({ name: s.name, inner: s.inner }))}
+                    onClick={() => onPick(s.name)}
+                  >
                     <svg viewBox="0 0 40 30" fill="none" stroke="currentColor" strokeWidth={1.4} dangerouslySetInnerHTML={{ __html: s.inner }} />
                   </button>
                 ))}
@@ -1242,5 +1247,153 @@ function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
       })}
       <button className="pal-more"><IconPlus size={13} /> {t('更多图形')}</button>
     </aside>
+  );
+}
+
+interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string }
+interface BEdge { id: string; from: string; to: string }
+
+/** 可交互 drawio 画板:左侧拖形状落子、移动节点、节点间拉箭头、双击改名、Del 删除。纯自绘 SVG。 */
+function DrawioBoard() {
+  const t = useT();
+  const [nodes, setNodes] = useState<BNode[]>([]);
+  const [edges, setEdges] = useState<BEdge[]>([]);
+  const [sel, setSel] = useState<string | null>(null);
+  const [drag, setDrag] = useState<{ id: string; dx: number; dy: number } | null>(null);
+  const [conn, setConn] = useState<{ from: string; x: number; y: number } | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const idRef = useRef(0);
+
+  const pt = (e: { clientX: number; clientY: number }): { x: number; y: number } => {
+    const r = ref.current?.getBoundingClientRect();
+    return { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) };
+  };
+  const center = (n: BNode): { x: number; y: number } => ({ x: n.x + n.w / 2, y: n.y + n.h / 2 });
+  const hit = (x: number, y: number, not?: string): BNode | undefined =>
+    [...nodes].reverse().find((n) => n.id !== not && x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h);
+
+  const onDrop = (e: DragEvent<HTMLDivElement>): void => {
+    e.preventDefault();
+    const raw = e.dataTransfer.getData('opal/shape');
+    if (!raw) return;
+    const s = JSON.parse(raw) as { name: string; inner: string };
+    const { x, y } = pt(e);
+    const id = 'n' + ++idRef.current;
+    setNodes((ns) => [...ns, { id, x: x - 45, y: y - 27, w: 90, h: 54, inner: s.inner, label: s.name }]);
+    setSel(id);
+  };
+
+  useEffect(() => {
+    if (!drag && !conn) return;
+    const move = (e: PointerEvent): void => {
+      const { x, y } = pt(e);
+      if (drag) setNodes((ns) => ns.map((n) => (n.id === drag.id ? { ...n, x: x - drag.dx, y: y - drag.dy } : n)));
+      if (conn) setConn((c) => (c ? { ...c, x, y } : c));
+    };
+    const up = (e: PointerEvent): void => {
+      if (conn) {
+        const { x, y } = pt(e);
+        const target = hit(x, y, conn.from);
+        if (target) setEdges((es) => [...es, { id: 'e' + ++idRef.current, from: conn.from, to: target.id }]);
+      }
+      setDrag(null);
+      setConn(null);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+  }, [drag, conn, nodes]);
+
+  useEffect(() => {
+    const k = (e: KeyboardEvent): void => {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && sel && !editing) {
+        setNodes((ns) => ns.filter((n) => n.id !== sel));
+        setEdges((es) => es.filter((ed) => ed.from !== sel && ed.to !== sel));
+        setSel(null);
+      }
+    };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [sel, editing]);
+
+  return (
+    <div className="drawio-board" ref={ref} onDragOver={(e) => e.preventDefault()} onDrop={onDrop} onPointerDown={() => setSel(null)}>
+      <svg className="board-svg">
+        <defs>
+          <marker id="opal-arr" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 z" fill="#7a8090" />
+          </marker>
+        </defs>
+        {edges.map((ed) => {
+          const a = nodes.find((n) => n.id === ed.from);
+          const b = nodes.find((n) => n.id === ed.to);
+          if (!a || !b) return null;
+          const c1 = center(a);
+          const c2 = center(b);
+          return <line key={ed.id} x1={c1.x} y1={c1.y} x2={c2.x} y2={c2.y} stroke="#7a8090" strokeWidth={1.5} markerEnd="url(#opal-arr)" />;
+        })}
+        {conn
+          ? (() => {
+              const a = nodes.find((n) => n.id === conn.from);
+              if (!a) return null;
+              const c = center(a);
+              return <line x1={c.x} y1={c.y} x2={conn.x} y2={conn.y} stroke="var(--accent)" strokeWidth={1.5} strokeDasharray="4 3" />;
+            })()
+          : null}
+      </svg>
+      {nodes.map((n) => (
+        <div
+          key={n.id}
+          className={'bnode' + (sel === n.id ? ' sel' : '')}
+          style={{ left: n.x, top: n.y, width: n.w, height: n.h }}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            setSel(n.id);
+            const { x, y } = pt(e);
+            setDrag({ id: n.id, dx: x - n.x, dy: y - n.y });
+          }}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            setEditing(n.id);
+          }}
+        >
+          <svg viewBox="0 0 40 30" fill="none" stroke="#3a3f4b" strokeWidth={1.2} dangerouslySetInnerHTML={{ __html: n.inner }} />
+          {editing === n.id ? (
+            <input
+              className="bnode-edit"
+              autoFocus
+              defaultValue={n.label}
+              onBlur={(e) => {
+                const v = e.target.value;
+                setNodes((ns) => ns.map((m) => (m.id === n.id ? { ...m, label: v } : m)));
+                setEditing(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <span className="bnode-label">{n.label}</span>
+          )}
+          {sel === n.id && (
+            <span
+              className="bnode-handle"
+              title={t('拖到另一个节点连线')}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                const c = center(n);
+                setConn({ from: n.id, x: c.x, y: c.y });
+              }}
+            />
+          )}
+        </div>
+      ))}
+      {nodes.length === 0 && <div className="board-hint">{t('从左侧拖拽形状到画板,或在右侧让 Agent 画图')}</div>}
+    </div>
   );
 }
