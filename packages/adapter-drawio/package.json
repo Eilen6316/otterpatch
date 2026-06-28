@@ -1,5 +1,5 @@
 {
-  "name": "@opal/adapter-drawio",
+  "name": "@otterpatch/adapter-drawio",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,10 +10,10 @@
     "test": "node --import tsx --test src/mxgraph.test.ts src/writeback.test.ts src/drawio-pipeline.test.ts"
   },
   "dependencies": {
-    "@opal/core": "0.0.1"
+    "@otterpatch/core": "0.0.1"
   },
   "devDependencies": {
-    "@opal/agent": "0.0.1",
+    "@otterpatch/agent": "0.0.1",
     "tsx": "^4.19.0"
   }
 }

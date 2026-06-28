@@ -2,22 +2,22 @@
  * 轻量可审阅 diff —— 由 ChangeSet 的 edits 直接派生(逐 edit:锚点引用 + 徽标 + 标签 + after)。
  * JSON 友好,供 MCP/CLI 消费;不依赖适配器 shadowApply(适配器仍为桩),因此 headless 即可用。
  */
-import type { ChangeSet, EditOp, LogicalAnchor } from '@opal/core';
+import type { ChangeSet, EditOp, LogicalAnchor } from '@otterpatch/core';
 
 export type DiffBadge = 'add' | 'remove' | 'modify' | 'move';
 
-export interface OpalDiffItem {
+export interface OtterPatchDiffItem {
   editId: string;
   ref: string; // 人类可读锚点引用(A1 / mxCell id / 文本引述)
   badge: DiffBadge;
   label: string;
   after?: string;
 }
-export interface OpalDiff {
+export interface OtterPatchDiff {
   changeSetId: string;
   hostId: string;
   intent: string;
-  items: OpalDiffItem[];
+  items: OtterPatchDiffItem[];
 }
 
 function refOf(a: LogicalAnchor | undefined, fallback: string): string {
@@ -74,14 +74,14 @@ function describe(op: EditOp): { badge: DiffBadge; label: string; after?: string
   }
 }
 
-export function buildDiff(cs: ChangeSet): OpalDiff {
+export function buildDiff(cs: ChangeSet): OtterPatchDiff {
   return {
     changeSetId: cs.id,
     hostId: cs.hostId,
     intent: cs.meta.intent,
     items: cs.edits.map((e) => {
       const d = describe(e.op);
-      const item: OpalDiffItem = { editId: e.id, ref: refOf(cs.anchors[e.target], e.target), badge: d.badge, label: d.label };
+      const item: OtterPatchDiffItem = { editId: e.id, ref: refOf(cs.anchors[e.target], e.target), badge: d.badge, label: d.label };
       if (d.after !== undefined) item.after = d.after;
       return item;
     }),

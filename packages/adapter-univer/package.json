@@ -1,5 +1,5 @@
 {
-  "name": "@opal/adapter-univer",
+  "name": "@otterpatch/adapter-univer",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,12 +10,12 @@
     "test": "node --import tsx --test src/xlsx-patch.test.ts src/agent-pipeline.test.ts src/grid-engine.test.ts"
   },
   "dependencies": {
-    "@opal/core": "0.0.1",
-    "@opal/writeback-surgical": "0.0.1",
+    "@otterpatch/core": "0.0.1",
+    "@otterpatch/writeback-surgical": "0.0.1",
     "fflate": "^0.8.2"
   },
   "devDependencies": {
-    "@opal/agent": "0.0.1",
+    "@otterpatch/agent": "0.0.1",
     "tsx": "^4.19.0"
   }
 }

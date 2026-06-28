@@ -5,9 +5,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync } from 'fflate';
-import type { DocRev } from '@opal/core';
-import { Agent, MockModelClient } from '@opal/agent';
-import { SurgicalOoxmlWriteback, comparePartsIntegrity, readOoxmlParts } from '@opal/writeback-surgical';
+import type { DocRev } from '@otterpatch/core';
+import { Agent, MockModelClient } from '@otterpatch/agent';
+import { SurgicalOoxmlWriteback, comparePartsIntegrity, readOoxmlParts } from '@otterpatch/writeback-surgical';
 import { buildXlsxCompiler } from './xlsx-patch.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);

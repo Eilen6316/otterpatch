@@ -1,5 +1,5 @@
 {
-  "name": "@opal/adapter-pdf",
+  "name": "@otterpatch/adapter-pdf",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "test": "node --import tsx --test src/writeback.test.ts"
   },
   "dependencies": {
-    "@opal/core": "0.0.1",
+    "@otterpatch/core": "0.0.1",
     "pdf-lib": "^1.17.1"
   },
   "devDependencies": {

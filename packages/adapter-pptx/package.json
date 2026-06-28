@@ -1,5 +1,5 @@
 {
-  "name": "@opal/adapter-pptx",
+  "name": "@otterpatch/adapter-pptx",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,8 +10,8 @@
     "test": "node --import tsx --test src/pptx-patch.test.ts"
   },
   "dependencies": {
-    "@opal/core": "0.0.1",
-    "@opal/writeback-surgical": "0.0.1"
+    "@otterpatch/core": "0.0.1",
+    "@otterpatch/writeback-surgical": "0.0.1"
   },
   "devDependencies": {
     "fflate": "^0.8.2",

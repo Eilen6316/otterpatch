@@ -4,7 +4,7 @@
  * 由 ProposeRequest.format 选择。模型实现(Claude/OpenAI 兼容/Mock)只负责
  * "按 dialect 调模型 → 拿原始提案 → dialect.buildChangeSet",绝不让模型直接产 OOXML/XML。
  */
-import type { ChangeSet, DocRev, LogicalAnchor } from '@opal/core';
+import type { ChangeSet, DocRev, LogicalAnchor } from '@otterpatch/core';
 
 export interface ProposeRequest {
   hostId: string;

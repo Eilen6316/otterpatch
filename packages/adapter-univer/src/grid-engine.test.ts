@@ -3,7 +3,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { AnchorId, CellValue, ChangeSet, DocRev, HostId, LogicalAnchor, PreviewValue } from '@opal/core';
+import type { AnchorId, CellValue, ChangeSet, DocRev, HostId, LogicalAnchor, PreviewValue } from '@otterpatch/core';
 import { GridChangeSetEngine, gridShadow } from './grid-engine.js';
 
 function gridAnchor(id: string, a1: string): LogicalAnchor {

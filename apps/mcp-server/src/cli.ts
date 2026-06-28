@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 /**
- * opal-run —— headless 跑一遍 propose → diff → commit,把每个阶段的结构化事件
+ * otterpatch-run —— headless 跑一遍 propose → diff → commit,把每个阶段的结构化事件
  * 逐行 JSON 打到 stdout(供非 MCP 宿主 / 管道 / CI 消费)。
  *
  * 用法:
- *   opal-run --format excel --intent "把 B1 改成 99" --in in.xlsx --out out.xlsx
- *   opal-run --mock --in in.xlsx --out out.xlsx        # 无需 API key,固定演示 edit
- * BYOK:export OPAL_API_KEY=...(非 --mock 时必需);--provider/--model 可选。
+ *   otterpatch-run --format excel --intent "把 B1 改成 99" --in in.xlsx --out out.xlsx
+ *   otterpatch-run --mock --in in.xlsx --out out.xlsx        # 无需 API key,固定演示 edit
+ * BYOK:export OtterPatch_API_KEY=...(非 --mock 时必需);--provider/--model 可选。
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import type { DocRev } from '@opal/core';
-import { createModelClient, MockModelClient, type ModelClient, type Provider, type ProposeRequest } from '@opal/agent';
-import { OpalRuntime } from '@opal/runtime';
+import type { DocRev } from '@otterpatch/core';
+import { createModelClient, MockModelClient, type ModelClient, type Provider, type ProposeRequest } from '@otterpatch/agent';
+import { OtterPatchRuntime } from '@otterpatch/runtime';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf('--' + name);
@@ -29,7 +29,7 @@ const provider = (arg('provider') ?? 'claude') as Provider;
 const model = arg('model');
 const mock = has('mock');
 
-const rt = new OpalRuntime();
+const rt = new OtterPatchRuntime();
 rt.on(emit);
 
 const isWord = format === 'word' || format === 'docx';
@@ -44,7 +44,7 @@ const mockProposal = isWord
       : { plan: intent || 'demo edit', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] };
 const client: ModelClient = mock
   ? new MockModelClient(() => mockProposal)
-  : createModelClient(provider, { apiKey: process.env.OPAL_API_KEY, ...(model ? { model } : {}) });
+  : createModelClient(provider, { apiKey: process.env.OtterPatch_API_KEY, ...(model ? { model } : {}) });
 
 const req: ProposeRequest = { hostId: 'cli', format, intent, baseRev: 0 as DocRev, anchors: [], context };
 

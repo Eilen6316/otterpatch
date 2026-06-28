@@ -1,8 +1,8 @@
-# OPAL
+# OtterPatch
 
 [English](./README.md) · [中文](./README.zh.md) · [日本語](./README.ja.md) · **Français** · [한국어](./README.ko.md)
 
-> **O**ffice **P**atch & **A**gent **L**ayer — une **couche de commit sécurisé**, pilotée par agent et révisable, pour vos documents.
+> 🦦 **O**ffice **T**ransforms · **T**racked · **E**dited & **R**eviewed · surgical **Patch** — une **couche de commit sécurisé**, pilotée par agent et révisable, pour vos documents.
 > Sélectionnez une zone → dites ce que vous voulez → relisez le diff → réécriture haute fidélité.
 > (Imaginez : ouvrir une PR sur votre `.xlsx` / `.docx` / `.drawio`.)
 
@@ -10,7 +10,7 @@
 
 ## Pourquoi
 
-Un agent ne devrait pas modifier vos fichiers directement. Dans OPAL, un agent se contente de
+Un agent ne devrait pas modifier vos fichiers directement. Dans OtterPatch, un agent se contente de
 **proposer** un `ChangeSet` structuré ; le système le valide, l'applique à une copie fantôme,
 affiche un **diff révisable** (accepter/rejeter par bloc), puis effectue une réécriture
 **chirurgicale** — seules les parties touchées changent, le reste reste identique au bit près.
@@ -38,11 +38,11 @@ apps/desktop/                 UI cockpit à divulgation progressive + configurat
 npm install
 npm run typecheck                  # tsc -b sur l'ensemble de packages/*
 npm run dev                        # UI cockpit → http://localhost:5173
-npm test -w @opal/core             # registre d'adaptateurs
-npm test -w @opal/agent            # intention → ChangeSet (modèle simulé + fabrique 8 fournisseurs)
-npm test -w @opal/adapter-univer   # intention → ChangeSet → réécriture chirurgicale .xlsx
-npm test -w @opal/adapter-drawio   # opérations mxCell + réécriture chirurgicale inter-diagrammes
-npm test -w @opal/writeback-surgical
+npm test -w @otterpatch/core             # registre d'adaptateurs
+npm test -w @otterpatch/agent            # intention → ChangeSet (modèle simulé + fabrique 8 fournisseurs)
+npm test -w @otterpatch/adapter-univer   # intention → ChangeSet → réécriture chirurgicale .xlsx
+npm test -w @otterpatch/adapter-drawio   # opérations mxCell + réécriture chirurgicale inter-diagrammes
+npm test -w @otterpatch/writeback-surgical
 ```
 
 ## Statut

@@ -1,5 +1,5 @@
 {
-  "name": "opal",
+  "name": "otterpatch",
   "version": "0.0.1",
   "private": true,
   "description": "Agent-driven, reviewable safe-commit layer for Office files: circle a region, say what you want, review the diff, high-fidelity write-back.",

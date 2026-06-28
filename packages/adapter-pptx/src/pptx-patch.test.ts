@@ -4,8 +4,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync, unzipSync } from 'fflate';
-import type { AnchorId, ChangeSet, DocRev, HostId, LogicalAnchor } from '@opal/core';
-import { SurgicalOoxmlWriteback } from '@opal/writeback-surgical';
+import type { AnchorId, ChangeSet, DocRev, HostId, LogicalAnchor } from '@otterpatch/core';
+import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
 import { buildPptxCompiler } from './pptx-patch.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);

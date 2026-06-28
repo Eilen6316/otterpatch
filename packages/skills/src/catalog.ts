@@ -43,7 +43,7 @@ export const BUILTIN_SKILLS: SkillCard[] = [
     description: 'drawio/流程图的读取与编辑:按 mxCell id 增删改节点与连线、样式与布局。',
     formats: ['drawio'],
     keywords: ['drawio', '流程图', '图', '节点', '连线', 'diagram'],
-    source: 'opal',
+    source: 'otterpatch',
   },
 ];
 

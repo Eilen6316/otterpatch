@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * opal-serve —— OPAL runtime 的本地 HTTP 桥。让驾驶舱 UI(浏览器 / Electron)直接 fetch 跑
+ * otterpatch-serve —— OtterPatch runtime 的本地 HTTP 桥。让驾驶舱 UI(浏览器 / Electron)直接 fetch 跑
  * 真实 propose → diff → commit(BYOK),绕开浏览器对各模型厂商的 CORS 限制。
  *
  *   GET  /health            → { ok, formats, skills }
@@ -10,13 +10,13 @@
  * 仅监听 localhost;CORS 放开供本机 UI(:5173)调用。
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import type { ChangeSet, DocRev } from '@opal/core';
-import { createModelClient, type Provider } from '@opal/agent';
-import { BUILTIN_SKILLS } from '@opal/skills';
-import { OpalRuntime } from '@opal/runtime';
+import type { ChangeSet, DocRev } from '@otterpatch/core';
+import { createModelClient, type Provider } from '@otterpatch/agent';
+import { BUILTIN_SKILLS } from '@otterpatch/skills';
+import { OtterPatchRuntime } from '@otterpatch/runtime';
 
-const rt = new OpalRuntime();
-const PORT = Number(process.env.OPAL_PORT ?? 4319);
+const rt = new OtterPatchRuntime();
+const PORT = Number(process.env.OtterPatch_PORT ?? 4319);
 
 function cors(res: ServerResponse): void {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -91,4 +91,4 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
   })();
 });
 
-server.listen(PORT, () => process.stderr.write(`[opal] HTTP bridge on http://localhost:${PORT}  (GET /health, POST /propose, POST /commit)\n`));
+server.listen(PORT, () => process.stderr.write(`[otterpatch] HTTP bridge on http://localhost:${PORT}  (GET /health, POST /propose, POST /commit)\n`));

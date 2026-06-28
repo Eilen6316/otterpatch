@@ -1,7 +1,7 @@
 /**
  * Word 红线(track-changes)生成 —— 把"原文 → 改后"的词级 diff 编译成 Word 原生修订标记:
  * 删除 → <w:del><w:delText>;新增 → <w:ins><w:r><w:t>;未改 → 普通 <w:r><w:t>。
- * 这样 Agent 的改动落到 Word 时是可逐条 接受/拒绝 的原生修订,而非直接改字 —— 契合 OPAL
+ * 这样 Agent 的改动落到 Word 时是可逐条 接受/拒绝 的原生修订,而非直接改字 —— 契合 OtterPatch
  * "可审阅安全执行"。clean-room 实现(仅用公开 OOXML 语义,不拷任何专有 skill 文本)。
  */
 export interface RedlineOptions {
@@ -63,7 +63,7 @@ export function diffWords(a: string, b: string): DiffSeg[] {
 
 /** 把 diff 编译成段落内的 OOXML 修订 run 串(嵌进 word/document.xml 的 <w:p> 里)。 */
 export function buildRedlineXml(original: string, revised: string, opts: RedlineOptions = {}): string {
-  const author = esc(opts.author ?? 'OPAL');
+  const author = esc(opts.author ?? 'OtterPatch');
   const date = opts.date ?? '1970-01-01T00:00:00Z';
   let id = opts.idStart ?? 1;
   const run = (txt: string): string => `<w:r><w:t xml:space="preserve">${esc(txt)}</w:t></w:r>`;

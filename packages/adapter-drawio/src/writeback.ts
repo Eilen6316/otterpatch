@@ -17,7 +17,7 @@ import type {
   WritebackId,
   WritebackKind,
   WritebackResult,
-} from '@opal/core';
+} from '@otterpatch/core';
 import { applyEditsToModel, type DrawioEdit, type DrawioObjectSpec } from './mxgraph.js';
 
 const dec = new TextDecoder();

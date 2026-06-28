@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync, unzipSync } from 'fflate';
-import type { AnchorId, ChangeSet, DocRev, HostId, LogicalAnchor } from '@opal/core';
+import type { AnchorId, ChangeSet, DocRev, HostId, LogicalAnchor } from '@otterpatch/core';
 import { WordRedlineWriteback } from './writeback.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
@@ -42,7 +42,7 @@ test('Word 红线写回:replaceText → w:ins,保留 w:pPr,仅 document.xml 变'
   };
 
   const original = makeDocx('hello world');
-  const wb = new WordRedlineWriteback({ author: 'OPAL', date: '2026-01-01T00:00:00Z' });
+  const wb = new WordRedlineWriteback({ author: 'OtterPatch', date: '2026-01-01T00:00:00Z' });
   const res = await wb.commit(cs, { hostId: 'h', bytes: original, rev: 0 as DocRev });
 
   assert.equal(res.ok, true);

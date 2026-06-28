@@ -1,6 +1,6 @@
 /**
  * 分级审批 —— 把"什么算危险"(riskOf,按 EditOp 机械判定)与"危险了怎么办"(ApprovalPolicy)解耦。
- * 借鉴 codex 的分级审批策略层(与执行循环解耦),按 OPAL 文档操作域改写:不跑 shell,故分级的是
+ * 借鉴 codex 的分级审批策略层(与执行循环解耦),按 OtterPatch 文档操作域改写:不跑 shell,故分级的是
  * "破坏性文档操作"(删行/删区/删对象/逃生舱原生 op)。安全编辑自动放行,破坏性操作默认需人工批准。
  */
 import type { ChangeSet, Edit, EditId, EditOp, EditOpKind } from './changeset.js';

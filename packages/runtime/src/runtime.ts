@@ -1,23 +1,23 @@
 /**
- * OpalRuntime —— headless 编排器,把"上游 Agent(propose)"和"下游外科写回(commit)"接成一条线,
+ * OtterPatchRuntime —— headless 编排器,把"上游 Agent(propose)"和"下游外科写回(commit)"接成一条线,
  * 中间产出可审阅 diff,并对每个阶段发结构化事件。MCP server / CLI / 桌面都复用这一个内核。
  *
  * 端到端:propose(intent → ChangeSet) → diff(可审阅) → 用户接受子集 → commit(外科写回 → 新字节 + 保真报告)。
  * 写回后端按 format 路由:excel/xlsx → 外科 OOXML(Univer 编译器);drawio → 单 XML 外科。
  */
-import { Agent } from '@opal/agent';
-import type { ModelClient, ProposeRequest } from '@opal/agent';
-import type { ChangeSet, DocHandle, WritebackBackend, WritebackResult } from '@opal/core';
-import { SurgicalOoxmlWriteback } from '@opal/writeback-surgical';
-import { buildXlsxCompiler } from '@opal/adapter-univer';
-import { DrawioSurgicalWriteback } from '@opal/adapter-drawio';
-import { WordRedlineWriteback } from '@opal/adapter-word';
-import { PdfFormWriteback } from '@opal/adapter-pdf';
-import { buildPptxCompiler } from '@opal/adapter-pptx';
-import { defaultLibrary } from '@opal/skills';
-import type { SkillLibrary } from '@opal/skills';
-import { buildDiff, type OpalDiff } from './diff.js';
-import type { OpalEvent, OpalEventListener } from './events.js';
+import { Agent } from '@otterpatch/agent';
+import type { ModelClient, ProposeRequest } from '@otterpatch/agent';
+import type { ChangeSet, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
+import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
+import { buildXlsxCompiler } from '@otterpatch/adapter-univer';
+import { DrawioSurgicalWriteback } from '@otterpatch/adapter-drawio';
+import { WordRedlineWriteback } from '@otterpatch/adapter-word';
+import { PdfFormWriteback } from '@otterpatch/adapter-pdf';
+import { buildPptxCompiler } from '@otterpatch/adapter-pptx';
+import { defaultLibrary } from '@otterpatch/skills';
+import type { SkillLibrary } from '@otterpatch/skills';
+import { buildDiff, type OtterPatchDiff } from './diff.js';
+import type { OtterPatchEvent, OtterPatchEventListener } from './events.js';
 
 export interface CommitInput {
   format: string;
@@ -27,16 +27,16 @@ export interface CommitInput {
   acceptedEditIds?: string[];
 }
 
-export interface OpalRuntimeOptions {
+export interface OtterPatchRuntimeOptions {
   skills?: SkillLibrary;
 }
 
-export class OpalRuntime {
-  private readonly listeners = new Set<OpalEventListener>();
+export class OtterPatchRuntime {
+  private readonly listeners = new Set<OtterPatchEventListener>();
   private readonly skills: SkillLibrary;
   private readonly backends: Record<string, () => WritebackBackend>;
 
-  constructor(opts: OpalRuntimeOptions = {}) {
+  constructor(opts: OtterPatchRuntimeOptions = {}) {
     this.skills = opts.skills ?? defaultLibrary();
     this.backends = {
       excel: () => new SurgicalOoxmlWriteback(buildXlsxCompiler()),
@@ -51,13 +51,13 @@ export class OpalRuntime {
   }
 
   /** 订阅事件流;返回取消订阅函数。 */
-  on(cb: OpalEventListener): () => void {
+  on(cb: OtterPatchEventListener): () => void {
     this.listeners.add(cb);
     return () => {
       this.listeners.delete(cb);
     };
   }
-  private emit(e: OpalEvent): void {
+  private emit(e: OtterPatchEvent): void {
     for (const l of this.listeners) l(e);
   }
 
@@ -84,7 +84,7 @@ export class OpalRuntime {
   }
 
   /** ChangeSet → 可审阅 diff。 */
-  diff(cs: ChangeSet): OpalDiff {
+  diff(cs: ChangeSet): OtterPatchDiff {
     const d = buildDiff(cs);
     this.emit({ type: 'diff:done', diff: d });
     return d;
@@ -93,7 +93,7 @@ export class OpalRuntime {
   /** 接受子集 → 外科写回 → 新字节 + 保真报告。 */
   async commit(input: CommitInput): Promise<WritebackResult> {
     const make = this.backends[input.format];
-    if (!make) throw new Error(`OpalRuntime: no writeback backend for format "${input.format}"`);
+    if (!make) throw new Error(`OtterPatchRuntime: no writeback backend for format "${input.format}"`);
     const backend = make();
     const cs: ChangeSet = input.acceptedEditIds
       ? { ...input.changeSet, edits: input.changeSet.edits.filter((e) => input.acceptedEditIds!.includes(e.id)) }

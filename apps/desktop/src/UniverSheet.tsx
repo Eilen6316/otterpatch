@@ -1,7 +1,7 @@
 /**
  * 真实 Univer 电子表格实例(替换 Excel 渲染区的 mock 网格)。
  * 并把用户在表里框选的【区域 + 单元格值 + 格式(加粗/斜体/下划线/字号)】通过 onSelection 上抛给 App,
- * 让右侧 Agent 交互区感知选区,发送时把选区内容一并交给 Agent —— Agent 完全赋能 OPAL。
+ * 让右侧 Agent 交互区感知选区,发送时把选区内容一并交给 Agent —— Agent 完全赋能 OtterPatch。
  */
 import { useEffect, useRef } from 'react';
 import { createUniver, defaultTheme, LocaleType, merge } from '@univerjs/presets';

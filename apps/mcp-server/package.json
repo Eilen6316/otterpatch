@@ -1,12 +1,12 @@
 {
-  "name": "@opal/mcp-server",
+  "name": "@otterpatch/mcp-server",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "bin": {
-    "opal-mcp": "./dist/mcp.js",
-    "opal-run": "./dist/cli.js",
-    "opal-serve": "./dist/serve.js"
+    "otterpatch-mcp": "./dist/mcp.js",
+    "otterpatch-run": "./dist/cli.js",
+    "otterpatch-serve": "./dist/serve.js"
   },
   "scripts": {
     "build": "tsc -b",
@@ -15,9 +15,9 @@
     "serve": "node --import tsx src/serve.ts"
   },
   "dependencies": {
-    "@opal/core": "0.0.1",
-    "@opal/agent": "0.0.1",
-    "@opal/runtime": "0.0.1",
+    "@otterpatch/core": "0.0.1",
+    "@otterpatch/agent": "0.0.1",
+    "@otterpatch/runtime": "0.0.1",
     "@modelcontextprotocol/sdk": "latest",
     "zod": "^4.4.3"
   },

@@ -7,7 +7,7 @@
  * 降级为 tool_choice:'auto' + 追加一条提示消息(否则强制工具会 HTTP 400)。
  */
 import OpenAI from 'openai';
-import type { ChangeSet } from '@opal/core';
+import type { ChangeSet } from '@otterpatch/core';
 import type { HostDialect, ModelClient, ProposeRequest } from './model.js';
 
 export interface OpenAICompatOptions {

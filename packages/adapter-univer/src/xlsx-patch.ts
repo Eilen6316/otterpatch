@@ -1,11 +1,11 @@
 /**
  * Excel ChangeSet → xlsx OOXML 部件补丁编译器(OoxmlPatchCompiler 实现)。
  * 把 setValue 编译成对 xl/worksheets/sheetN.xml 的最小改动;字符串用 inlineStr(不碰 sharedStrings),
- * 保留原单元格样式 s。配合 @opal/writeback-surgical 做外科写回。
+ * 保留原单元格样式 s。配合 @otterpatch/writeback-surgical 做外科写回。
  * MVP:仅 setValue 改"已存在单元格";新增单元格/其它算子留待扩展。
  */
 import { unzipSync } from 'fflate';
-import type { CellValue, ChangeSet, LogicalAnchor } from '@opal/core';
+import type { CellValue, ChangeSet, LogicalAnchor } from '@otterpatch/core';
 
 export type OoxmlParts = Record<string, Uint8Array>;
 

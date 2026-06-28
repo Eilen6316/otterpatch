@@ -1,5 +1,5 @@
 {
-  "name": "@opal/agent",
+  "name": "@otterpatch/agent",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,8 +10,8 @@
     "test": "node --import tsx --test src/agent.test.ts"
   },
   "dependencies": {
-    "@opal/core": "0.0.1",
-    "@opal/skills": "0.0.1",
+    "@otterpatch/core": "0.0.1",
+    "@otterpatch/skills": "0.0.1",
     "@anthropic-ai/sdk": "latest",
     "openai": "latest"
   },

@@ -14,8 +14,8 @@ import type {
   WritebackId,
   WritebackKind,
   WritebackResult,
-} from '@opal/core';
-import { comparePartsIntegrity, readOoxmlParts, repackOoxml } from '@opal/writeback-surgical';
+} from '@otterpatch/core';
+import { comparePartsIntegrity, readOoxmlParts, repackOoxml } from '@otterpatch/writeback-surgical';
 import { redlineDocumentXml, type ParaEdit } from './document.js';
 
 const dec = new TextDecoder();

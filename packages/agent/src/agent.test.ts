@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { DocRev } from '@opal/core';
+import type { DocRev } from '@otterpatch/core';
 import { Agent, ConventionStack, MockModelClient, conventionFromMarkdown, createModelClient, PROVIDERS, type Provider } from './index.js';
-import { defaultLibrary } from '@opal/skills';
+import { defaultLibrary } from '@otterpatch/skills';
 
 test('Agent excel: 意图 + Mock → grid setValue ChangeSet', async () => {
   const mock = new MockModelClient(() => ({ plan: '补 B1', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] }));
@@ -42,7 +42,7 @@ test('Agent drawio: 意图 + Mock → object ChangeSet(按 mxCell id)', async ()
 test('Agent: 未知格式抛错', async () => {
   const mock = new MockModelClient(() => ({ plan: '', edits: [] }));
   await assert.rejects(
-    () => new Agent(mock).propose({ hostId: 'h1', format: 'ppt', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' }),
+    () => new Agent(mock).propose({ hostId: 'h1', format: 'csv', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' }),
     /no dialect/,
   );
 });

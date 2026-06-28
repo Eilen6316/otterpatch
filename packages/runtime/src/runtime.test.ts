@@ -4,11 +4,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync } from 'fflate';
-import type { DocRev } from '@opal/core';
-import { MockModelClient } from '@opal/agent';
-import { comparePartsIntegrity, readOoxmlParts } from '@opal/writeback-surgical';
-import { OpalRuntime } from './runtime.js';
-import type { OpalEvent } from './events.js';
+import type { DocRev } from '@otterpatch/core';
+import { MockModelClient } from '@otterpatch/agent';
+import { comparePartsIntegrity, readOoxmlParts } from '@otterpatch/writeback-surgical';
+import { OtterPatchRuntime } from './runtime.js';
+import type { OtterPatchEvent } from './events.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 const dec = new TextDecoder();
@@ -31,8 +31,8 @@ function makeXlsx(): Uint8Array {
 }
 
 test('runtime: propose → diff → commit(excel) 端到端 + 事件流', async () => {
-  const rt = new OpalRuntime();
-  const seen: OpalEvent['type'][] = [];
+  const rt = new OtterPatchRuntime();
+  const seen: OtterPatchEvent['type'][] = [];
   rt.on((e) => seen.push(e.type));
 
   const model = new MockModelClient(() => ({ plan: '把 B1 改成 99', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] }));
@@ -60,7 +60,7 @@ test('runtime: propose → diff → commit(excel) 端到端 + 事件流', async 
 });
 
 test('runtime: 未注册格式 commit 抛错;已注册含 excel/word/pdf/ppt/drawio', async () => {
-  const rt = new OpalRuntime();
+  const rt = new OtterPatchRuntime();
   for (const f of ['excel', 'word', 'pdf', 'ppt', 'drawio']) assert.ok(rt.formats().includes(f), `missing backend ${f}`);
   await assert.rejects(
     () => rt.commit({ format: 'csv', bytes: new Uint8Array(), changeSet: { id: 'c', hostId: 'h', baseRev: 0 as DocRev, anchors: {}, origin: { by: 'human' }, meta: { intent: 'x' }, edits: [] } }),

@@ -4,8 +4,8 @@
  * 可选校验器 + maxRetries:校验失败时把错误结构化回喂、同回合重试修正(借鉴 codex apply_patch 的
  * 应用-回报-迭代闭环)。后续接技能脚本执行、能力协商、影子校验。
  */
-import type { ChangeSet } from '@opal/core';
-import type { SkillLibrary } from '@opal/skills';
+import type { ChangeSet } from '@otterpatch/core';
+import type { SkillLibrary } from '@otterpatch/skills';
 import type { ConventionStack } from './conventions.js';
 import { DIALECTS } from './dialects.js';
 import type { HostDialect, ModelClient, ProposeRequest } from './model.js';

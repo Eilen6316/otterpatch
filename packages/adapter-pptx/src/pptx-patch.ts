@@ -4,8 +4,8 @@
  * (交 SurgicalOoxmlWriteback 重打包 + 完整性自检)。
  * v1 限制:目标文本需落在单个 <a:t> run 内(短标题/项目符号常见);跨 run 拆分暂不合并。
  */
-import type { ChangeSet } from '@opal/core';
-import { readOoxmlParts, type OoxmlParts, type OoxmlPatchCompiler } from '@opal/writeback-surgical';
+import type { ChangeSet } from '@otterpatch/core';
+import { readOoxmlParts, type OoxmlParts, type OoxmlPatchCompiler } from '@otterpatch/writeback-surgical';
 
 const dec = new TextDecoder();
 const enc = new TextEncoder();

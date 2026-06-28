@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PDFDocument } from 'pdf-lib';
-import type { AnchorId, ChangeSet, DocRev, HostId, LogicalAnchor } from '@opal/core';
+import type { AnchorId, ChangeSet, DocRev, HostId, LogicalAnchor } from '@otterpatch/core';
 import { PdfFormWriteback } from './writeback.js';
 
 async function makePdfWithField(name: string, initial: string): Promise<Uint8Array> {

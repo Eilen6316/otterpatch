@@ -26,7 +26,7 @@ import type {
   ShadowDoc,
   Unsubscribe,
   WritebackBackend,
-} from '@opal/core';
+} from '@otterpatch/core';
 import { DrawioSurgicalWriteback } from './writeback.js';
 
 const TODO = (what: string): never => {

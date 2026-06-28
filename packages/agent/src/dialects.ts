@@ -2,7 +2,7 @@
  * Host 方言:Excel(A1 + setValue/setFormula)与 drawio(mxCell id + add/update/delete/move)。
  * 每种格式有自己的系统提示、工具 schema、原始提案 → ChangeSet 的构造。
  */
-import type { AnchorId, CellValue, ChangeSet, Edit, EditOp, HostId, LogicalAnchor } from '@opal/core';
+import type { AnchorId, CellValue, ChangeSet, Edit, EditOp, HostId, LogicalAnchor } from '@otterpatch/core';
 import type { HostDialect, ProposeRequest } from './model.js';
 
 function newChangeSet(

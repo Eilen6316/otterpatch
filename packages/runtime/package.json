@@ -1,5 +1,5 @@
 {
-  "name": "@opal/runtime",
+  "name": "@otterpatch/runtime",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -16,15 +16,15 @@
     "test": "node --import tsx --test src/runtime.test.ts"
   },
   "dependencies": {
-    "@opal/core": "0.0.1",
-    "@opal/agent": "0.0.1",
-    "@opal/skills": "0.0.1",
-    "@opal/writeback-surgical": "0.0.1",
-    "@opal/adapter-univer": "0.0.1",
-    "@opal/adapter-drawio": "0.0.1",
-    "@opal/adapter-word": "0.0.1",
-    "@opal/adapter-pdf": "0.0.1",
-    "@opal/adapter-pptx": "0.0.1"
+    "@otterpatch/core": "0.0.1",
+    "@otterpatch/agent": "0.0.1",
+    "@otterpatch/skills": "0.0.1",
+    "@otterpatch/writeback-surgical": "0.0.1",
+    "@otterpatch/adapter-univer": "0.0.1",
+    "@otterpatch/adapter-drawio": "0.0.1",
+    "@otterpatch/adapter-word": "0.0.1",
+    "@otterpatch/adapter-pdf": "0.0.1",
+    "@otterpatch/adapter-pptx": "0.0.1"
   },
   "devDependencies": {
     "fflate": "^0.8.2",

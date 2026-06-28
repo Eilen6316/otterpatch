@@ -314,8 +314,8 @@ const PLACEHOLDERS: Record<Fmt, string> = {
 };
 const CANVAS_HINT: Record<Fmt, string> = {
   excel: '',
-  word: '流式文档:选中文字 → 指令 → 红线修订(@opal/adapter-word)',
-  drawio: '流程图:选中节点/连线 → 指令 → 按 mxCell id 改(@opal/adapter-drawio)',
+  word: '流式文档:选中文字 → 指令 → 红线修订(@otterpatch/adapter-word)',
+  drawio: '流程图:选中节点/连线 → 指令 → 按 mxCell id 改(@otterpatch/adapter-drawio)',
   ppt: '幻灯片:选中对象 → 指令 → 版式/文本(适配器规划中)',
 };
 
@@ -380,7 +380,7 @@ interface CellFmt {
 const FMT_BIU: Record<string, 'bold' | 'italic' | 'underline'> = { B: 'bold', I: 'italic', U: 'underline' };
 const FMT_ALIGN: Record<string, 'left' | 'center' | 'right'> = { 左对齐: 'left', 居中: 'center', 右对齐: 'right' };
 
-/** opal-serve 的 /propose 返回的可审阅 diff(结构对齐 @opal/runtime 的 OpalDiff;此处只取 JSON 形状,不引 Node 包)。 */
+/** otterpatch-serve 的 /propose 返回的可审阅 diff(结构对齐 @otterpatch/runtime 的 OtterPatchDiff;此处只取 JSON 形状,不引 Node 包)。 */
 interface AgentDiffItem { editId: string; ref: string; badge: string; label: string; after?: string }
 interface AgentDiff { changeSetId: string; hostId: string; intent: string; items: AgentDiffItem[] }
 
@@ -575,7 +575,7 @@ export function App() {
     }
     return lines.join('\n');
   };
-  /** 配了 opal-serve 端点 + API Key → 走真实 runtime(propose→diff);否则用内置演示。 */
+  /** 配了 otterpatch-serve 端点 + API Key → 走真实 runtime(propose→diff);否则用内置演示。 */
   const send = async (): Promise<void> => {
     const ctx = isExcel && uniSel ? uniSel.text : fmt === 'drawio' && boardSel ? boardSel.context : selectionContext();
     const ep = server.trim().replace(/\/$/, '');
@@ -627,7 +627,7 @@ export function App() {
   };
   const outName = (n: string): string => {
     const dot = n.lastIndexOf('.');
-    return dot > 0 ? n.slice(0, dot) + '.opal' + n.slice(dot) : (n || 'out') + '.opal';
+    return dot > 0 ? n.slice(0, dot) + '.otterpatch' + n.slice(dot) : (n || 'out') + '.otterpatch';
   };
   const toggleAccept = (id: string, on: boolean): void =>
     setAccepted((prev) => {
@@ -636,11 +636,11 @@ export function App() {
       else next.delete(id);
       return next;
     });
-  /** 接受子集 → opal-serve /commit → 外科写回 → 下载结果文件。 */
+  /** 接受子集 → otterpatch-serve /commit → 外科写回 → 下载结果文件。 */
   const doCommit = async (ids: string[]): Promise<void> => {
     const ep = server.trim().replace(/\/$/, '');
     if (!ep || !realCs) {
-      notify(t('请先用 opal-serve 生成提案'));
+      notify(t('请先用 otterpatch-serve 生成提案'));
       return;
     }
     if (!fileB64) {
@@ -711,7 +711,7 @@ export function App() {
         <header className="topbar">
           <div className="brand">
             <span className="mark"><IconGrid size={18} /></span>
-            OPAL <span className="sub">{t('safe-commit layer')}</span>
+            OtterPatch <span className="sub">{t('safe-commit layer')}</span>
           </div>
           <div className="fmttabs">
             {FORMATS.map((f) => (
@@ -970,7 +970,7 @@ export function App() {
                     }}
                     placeholder="sk-..."
                   />
-                  <label>opal-serve URL</label>
+                  <label>otterpatch-serve URL</label>
                   <input
                     value={server}
                     onChange={(e) => {
@@ -1216,7 +1216,7 @@ function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
                     className="pal-shape"
                     title={s.name}
                     draggable
-                    onDragStart={(e) => e.dataTransfer.setData('opal/shape', JSON.stringify({ name: s.name, inner: s.inner }))}
+                    onDragStart={(e) => e.dataTransfer.setData('otterpatch/shape', JSON.stringify({ name: s.name, inner: s.inner }))}
                     onClick={() => onPick(s.name)}
                   >
                     <svg viewBox="0 0 40 30" fill="none" stroke="currentColor" strokeWidth={1.4} dangerouslySetInnerHTML={{ __html: s.inner }} />
@@ -1477,7 +1477,7 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
   };
   const onDrop = (e: DragEvent<HTMLDivElement>): void => {
     e.preventDefault();
-    const raw = e.dataTransfer.getData('opal/shape');
+    const raw = e.dataTransfer.getData('otterpatch/shape');
     if (!raw) return;
     const s = JSON.parse(raw) as { name: string; inner: string };
     const { x, y } = pt(e);
@@ -1796,8 +1796,8 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
       <div className="board-canvas" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
       <svg className="board-svg">
         <defs>
-          <marker id="opal-arr" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="context-stroke" /></marker>
-          <marker id="opal-arr-sel" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--accent)" /></marker>
+          <marker id="otterpatch-arr" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="context-stroke" /></marker>
+          <marker id="otterpatch-arr-sel" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--accent)" /></marker>
           <marker id="m-classic" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="context-stroke" /></marker>
           <marker id="m-open" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto"><path d="M1,0.5 L8,4 L1,7.5" fill="none" stroke="context-stroke" strokeWidth="1.4" /></marker>
           <marker id="m-diamond" markerWidth="13" markerHeight="11" refX="9.5" refY="4" orient="auto"><path d="M0,4 L4.7,0.5 L9.4,4 L4.7,7.5 z" fill="context-stroke" /></marker>
@@ -1824,9 +1824,9 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
               const a = nodes.find((n) => n.id === conn.from);
               if (!a) return null;
               const tgt = conn.tgt ? nodes.find((n) => n.id === conn.tgt) : null;
-              if (tgt) return <path d={roundedPath(ortho(a, tgt))} fill="none" stroke="#16a34a" strokeWidth={2} strokeDasharray="6 3" markerEnd="url(#opal-arr-sel)" />;
+              if (tgt) return <path d={roundedPath(ortho(a, tgt))} fill="none" stroke="#16a34a" strokeWidth={2} strokeDasharray="6 3" markerEnd="url(#otterpatch-arr-sel)" />;
               const p1 = perim(a, conn.x, conn.y);
-              return <line x1={p1.x} y1={p1.y} x2={conn.x} y2={conn.y} stroke="var(--accent)" strokeWidth={1.6} strokeDasharray="5 3" markerEnd="url(#opal-arr-sel)" />;
+              return <line x1={p1.x} y1={p1.y} x2={conn.x} y2={conn.y} stroke="var(--accent)" strokeWidth={1.6} strokeDasharray="5 3" markerEnd="url(#otterpatch-arr-sel)" />;
             })()
           : null}
         {guides ? (

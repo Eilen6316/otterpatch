@@ -1,44 +1,44 @@
 #!/usr/bin/env node
 /**
- * opal-mcp —— 把 OPAL 暴露成 MCP server(stdio),让别的 Agent / IDE 调用其
- * "提议 → diff → 外科写回"能力。BYOK:每次调用传 apiKey,或启动时设 OPAL_API_KEY。
+ * otterpatch-mcp —— 把 OtterPatch 暴露成 MCP server(stdio),让别的 Agent / IDE 调用其
+ * "提议 → diff → 外科写回"能力。BYOK:每次调用传 apiKey,或启动时设 OtterPatch_API_KEY。
  *
  * 工具:
- *  - opal_skills  列出内置(通用)文档技能
- *  - opal_propose 意图 → 受约束 ChangeSet(+ 可审阅 diff)
- *  - opal_diff    ChangeSet → 可审阅 diff
- *  - opal_commit  ChangeSet + 原文件(base64)→ 外科写回 → 新文件(base64)+ 保真报告
+ *  - otterpatch_skills  列出内置(通用)文档技能
+ *  - otterpatch_propose 意图 → 受约束 ChangeSet(+ 可审阅 diff)
+ *  - otterpatch_diff    ChangeSet → 可审阅 diff
+ *  - otterpatch_commit  ChangeSet + 原文件(base64)→ 外科写回 → 新文件(base64)+ 保真报告
  *
  * 注意:stdio 的 stdout 走 JSON-RPC 协议,事件流只能打到 stderr,绝不污染 stdout。
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import type { ChangeSet, DocRev } from '@opal/core';
-import { createModelClient, type Provider } from '@opal/agent';
-import { BUILTIN_SKILLS } from '@opal/skills';
-import { OpalRuntime } from '@opal/runtime';
+import type { ChangeSet, DocRev } from '@otterpatch/core';
+import { createModelClient, type Provider } from '@otterpatch/agent';
+import { BUILTIN_SKILLS } from '@otterpatch/skills';
+import { OtterPatchRuntime } from '@otterpatch/runtime';
 
-const rt = new OpalRuntime();
-rt.on((e) => process.stderr.write('[opal] ' + JSON.stringify(e) + '\n'));
+const rt = new OtterPatchRuntime();
+rt.on((e) => process.stderr.write('[otterpatch] ' + JSON.stringify(e) + '\n'));
 
 const ok = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] });
 const fail = (msg: string) => ({ content: [{ type: 'text' as const, text: msg }], isError: true });
 const emsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-const server = new McpServer({ name: 'opal', version: '0.0.1' });
+const server = new McpServer({ name: 'otterpatch', version: '0.0.1' });
 
 server.registerTool(
-  'opal_skills',
-  { description: 'List OPAL built-in (universal) document skills (xlsx/docx/pptx/pdf/drawio).', inputSchema: {} },
+  'otterpatch_skills',
+  { description: 'List OtterPatch built-in (universal) document skills (xlsx/docx/pptx/pdf/drawio).', inputSchema: {} },
   async () => ok(BUILTIN_SKILLS.map((s) => ({ name: s.name, formats: s.formats, description: s.description }))),
 );
 
 server.registerTool(
-  'opal_propose',
+  'otterpatch_propose',
   {
     description:
-      'Propose a constrained ChangeSet for a document edit (the agent never emits raw OOXML — only a structured ChangeSet). Returns { changeSet, diff }. BYOK: pass apiKey or set OPAL_API_KEY.',
+      'Propose a constrained ChangeSet for a document edit (the agent never emits raw OOXML — only a structured ChangeSet). Returns { changeSet, diff }. BYOK: pass apiKey or set OtterPatch_API_KEY.',
     inputSchema: {
       format: z.string().describe('excel | drawio | word | ...'),
       intent: z.string().describe('natural-language edit intent'),
@@ -51,7 +51,7 @@ server.registerTool(
   async (a) => {
     try {
       const model = createModelClient((a.provider as Provider) || 'claude', {
-        apiKey: a.apiKey ?? process.env.OPAL_API_KEY,
+        apiKey: a.apiKey ?? process.env.OtterPatch_API_KEY,
         ...(a.model ? { model: a.model } : {}),
       });
       const cs = await rt.propose(
@@ -66,7 +66,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'opal_diff',
+  'otterpatch_diff',
   { description: 'Render a reviewable diff for a ChangeSet (passed as JSON string).', inputSchema: { changeSet: z.string().describe('ChangeSet JSON') } },
   async (a) => {
     try {
@@ -78,13 +78,13 @@ server.registerTool(
 );
 
 server.registerTool(
-  'opal_commit',
+  'otterpatch_commit',
   {
     description: 'Surgically write a ChangeSet back into a document — only touched parts change, the rest stays byte-identical. Returns { ok, fileBase64, touchedParts, fidelity }.',
     inputSchema: {
       format: z.string(),
       fileBase64: z.string().describe('original document bytes, base64'),
-      changeSet: z.string().describe('ChangeSet JSON (from opal_propose)'),
+      changeSet: z.string().describe('ChangeSet JSON (from otterpatch_propose)'),
       acceptedEditIds: z.array(z.string()).optional().describe('subset of edit ids to commit; omit = accept all'),
     },
   },
@@ -106,4 +106,4 @@ server.registerTool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-process.stderr.write('[opal] MCP server ready on stdio — tools: opal_skills, opal_propose, opal_diff, opal_commit\n');
+process.stderr.write('[otterpatch] MCP server ready on stdio — tools: otterpatch_skills, otterpatch_propose, otterpatch_diff, otterpatch_commit\n');

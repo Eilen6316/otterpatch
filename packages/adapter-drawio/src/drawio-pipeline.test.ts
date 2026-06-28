@@ -4,8 +4,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { DocRev } from '@opal/core';
-import { Agent, MockModelClient } from '@opal/agent';
+import type { DocRev } from '@otterpatch/core';
+import { Agent, MockModelClient } from '@otterpatch/agent';
 import { DrawioSurgicalWriteback } from './writeback.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);

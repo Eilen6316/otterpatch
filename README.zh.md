@@ -1,8 +1,8 @@
-# OPAL
+# OtterPatch
 
 [English](./README.md) · **中文** · [日本語](./README.ja.md) · [Français](./README.fr.md) · [한국어](./README.ko.md)
 
-> **O**ffice **P**atch & **A**gent **L**ayer —— 由 Agent 驱动、可审阅的文档**安全提交层**。
+> 🦦 **O**ffice **T**ransforms · **T**racked · **E**dited & **R**eviewed · surgical **Patch** —— 由 Agent 驱动、可审阅的文档**安全提交层**。
 > 圈选区域 → 说出诉求 → 审阅差异 → 高保真写回。
 > （可以理解为:给你的 `.xlsx` / `.docx` / `.drawio` 开一个 PR。）
 
@@ -10,7 +10,7 @@
 
 ## 为什么
 
-Agent 不该直接改你的文件。在 OPAL 里,Agent 只**提议**一份结构化的
+Agent 不该直接改你的文件。在 OtterPatch 里,Agent 只**提议**一份结构化的
 `ChangeSet`;系统校验它、应用到影子副本、展示**可审阅的差异**
 (逐块接受/拒绝),然后**外科手术式**写回 —— 只有被改动的部分变化,
 其余字节保持完全一致。
@@ -37,11 +37,11 @@ apps/desktop/                 渐进披露驾驶舱 UI + BYOK 模型配置(Vite 
 npm install
 npm run typecheck                  # 跨 packages/* 执行 tsc -b
 npm run dev                        # 驾驶舱 UI → http://localhost:5173
-npm test -w @opal/core             # 适配器注册表
-npm test -w @opal/agent            # 意图 → ChangeSet(mock 模型 + 8 家工厂)
-npm test -w @opal/adapter-univer   # 意图 → ChangeSet → 外科式 .xlsx 写回
-npm test -w @opal/adapter-drawio   # mxCell 操作 + 跨图外科式写回
-npm test -w @opal/writeback-surgical
+npm test -w @otterpatch/core             # 适配器注册表
+npm test -w @otterpatch/agent            # 意图 → ChangeSet(mock 模型 + 8 家工厂)
+npm test -w @otterpatch/adapter-univer   # 意图 → ChangeSet → 外科式 .xlsx 写回
+npm test -w @otterpatch/adapter-drawio   # mxCell 操作 + 跨图外科式写回
+npm test -w @otterpatch/writeback-surgical
 ```
 
 ## 状态

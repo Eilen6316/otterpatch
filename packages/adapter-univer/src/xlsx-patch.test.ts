@@ -6,12 +6,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync } from 'fflate';
-import type { AnchorId, ChangeSet, DocRev, HostId } from '@opal/core';
+import type { AnchorId, ChangeSet, DocRev, HostId } from '@otterpatch/core';
 import {
   SurgicalOoxmlWriteback,
   comparePartsIntegrity,
   readOoxmlParts,
-} from '@opal/writeback-surgical';
+} from '@otterpatch/writeback-surgical';
 import { buildXlsxCompiler } from './xlsx-patch.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);

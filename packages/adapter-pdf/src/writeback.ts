@@ -1,7 +1,7 @@
 /**
  * PdfFormWriteback —— PDF 表单填写写回(pdf-lib,MIT)。
  * ChangeSet 的 setValue 编辑(object 锚点 elementId = AcroForm 字段名,op.value = 新值)→ 只更新对应表单
- * 字段值,页面内容流保留。这是 PDF 上最干净、可审阅、可逆的"安全提交"能力(填表),契合 OPAL 哲学。
+ * 字段值,页面内容流保留。这是 PDF 上最干净、可审阅、可逆的"安全提交"能力(填表),契合 OtterPatch 哲学。
  * 任意正文重排不在此后端范围(PDF 无稳定文本部件)——交未来 model-roundtrip / 叠加注释。
  */
 import type {
@@ -14,7 +14,7 @@ import type {
   WritebackId,
   WritebackKind,
   WritebackResult,
-} from '@opal/core';
+} from '@otterpatch/core';
 import { PDFDocument } from 'pdf-lib';
 
 const SUPPORTED: ReadonlySet<EditOpKind> = new Set<EditOpKind>(['setValue']);

@@ -4,7 +4,7 @@
  * 捕获逐 edit 反演,产出可审阅 DiffView(batch → leaf),并把公式重算结果放进 effects。
  * rebase:无结构性变更(插删行)→ tracked(锚点零成本平移)。
  *
- * 这让 diff 不再"从 edits 直推",而是反映影子里真实的值与公式重算 —— OPAL 抽象层 §2/§3 的落地。
+ * 这让 diff 不再"从 edits 直推",而是反映影子里真实的值与公式重算 —— OtterPatch 抽象层 §2/§3 的落地。
  */
 import type {
   CellValue,
@@ -24,7 +24,7 @@ import type {
   ShadowDoc,
   ShadowResult,
   ValidationReport,
-} from '@opal/core';
+} from '@otterpatch/core';
 
 export interface GridCell {
   value?: CellValue;

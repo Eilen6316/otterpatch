@@ -1,13 +1,13 @@
 /**
- * OPAL 桌面壳(Electron 主进程)。
+ * OtterPatch 桌面壳(Electron 主进程)。
  * 生产:加载打包好的 dist/index.html(file://,vite base='./' 保证相对资源可解析)。
- * 开发:OPAL_DEV=1 时加载 Vite dev server(http://localhost:5173)并开 DevTools。
+ * 开发:OtterPatch_DEV=1 时加载 Vite dev server(http://localhost:5173)并开 DevTools。
  * 安全:contextIsolation 开、nodeIntegration 关;外链走系统浏览器。
  */
 const { app, BrowserWindow, shell } = require('electron');
 const path = require('node:path');
 
-const isDev = !!process.env.OPAL_DEV;
+const isDev = !!process.env.OtterPatch_DEV;
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -15,7 +15,7 @@ function createWindow() {
     height: 900,
     minWidth: 1080,
     minHeight: 680,
-    title: 'OPAL — safe-commit layer',
+    title: 'OtterPatch — safe-commit layer',
     backgroundColor: '#ffffff',
     autoHideMenuBar: true,
     webPreferences: {

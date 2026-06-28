@@ -1,17 +1,17 @@
 /**
- * 真模型端到端冒烟(BYOK)。仅在设置了 OPAL_API_KEY 时跑;否则跳过(CI 默认无 secret → 跳过)。
+ * 真模型端到端冒烟(BYOK)。仅在设置了 OtterPatch_API_KEY 时跑;否则跳过(CI 默认无 secret → 跳过)。
  * 验证"真实模型 → 受约束 ChangeSet → 外科写回"整条 BYOK 链路能跑通(非确定性,只断言不报错 + 产出非空)。
- *   OPAL_API_KEY=...  OPAL_PROVIDER=claude  node scripts/real-smoke.mjs
+ *   OtterPatch_API_KEY=...  OtterPatch_PROVIDER=claude  node scripts/real-smoke.mjs
  */
 import { zipSync, unzipSync } from 'fflate';
 
-if (!process.env.OPAL_API_KEY) {
-  console.log('[smoke] OPAL_API_KEY not set — skipping real-model smoke (this is OK).');
+if (!process.env.OtterPatch_API_KEY) {
+  console.log('[smoke] OtterPatch_API_KEY not set — skipping real-model smoke (this is OK).');
   process.exit(0);
 }
 
-const { OpalRuntime } = await import('@opal/runtime');
-const { createModelClient } = await import('@opal/agent');
+const { OtterPatchRuntime } = await import('@otterpatch/runtime');
+const { createModelClient } = await import('@otterpatch/agent');
 
 const enc = (s) => new TextEncoder().encode(s);
 const dec = new TextDecoder();
@@ -24,9 +24,9 @@ const xlsx = zipSync({
   'xl/worksheets/sheet1.xml': enc('<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="B1" s="2"><v>20</v></c></row></sheetData></worksheet>'),
 });
 
-const rt = new OpalRuntime();
-const provider = process.env.OPAL_PROVIDER || 'claude';
-const model = createModelClient(provider, { apiKey: process.env.OPAL_API_KEY });
+const rt = new OtterPatchRuntime();
+const provider = process.env.OtterPatch_PROVIDER || 'claude';
+const model = createModelClient(provider, { apiKey: process.env.OtterPatch_API_KEY });
 
 const cs = await rt.propose(
   { hostId: 'smoke', format: 'excel', intent: '把单元格 Sheet1!B1 的值改成 99', baseRev: 0, anchors: [], context: 'Sheet1!B1 = 20' },
