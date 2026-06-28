@@ -163,6 +163,12 @@ svg { display: block; }
 .board-svg { position: absolute; top: 0; left: 0; width: 6000px; height: 6000px; overflow: visible; pointer-events: none; }
 .board-zoom { position: absolute; right: 12px; bottom: 10px; font-size: 11px; color: var(--muted); background: rgba(255, 255, 255, 0.85); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; pointer-events: none; }
 .band { position: absolute; border: 1px solid var(--accent); background: rgba(43, 108, 255, 0.08); pointer-events: none; z-index: 5; }
+/* 选中边的浮动工具栏(线型 + 箭头端) */
+.etoolbar { position: absolute; transform: translateX(-50%); display: flex; align-items: center; gap: 1px; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 3px; z-index: 8; }
+.etb { width: 26px; height: 24px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 5px; background: transparent; cursor: pointer; color: var(--text-soft); font-size: 13px; }
+.etb:hover { background: var(--fill); }
+.etb.on { background: var(--fill); border-color: var(--accent); color: var(--accent); }
+.etb-sep { width: 1px; height: 16px; background: var(--line); margin: 0 3px; }
 .board-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--muted); font-size: 13px; background: rgba(255, 255, 255, 0.78); border: 1px solid var(--line); padding: 9px 15px; border-radius: 9px; pointer-events: none; }
 .bnode { position: absolute; cursor: move; display: grid; place-items: center; }
 .bnode > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
