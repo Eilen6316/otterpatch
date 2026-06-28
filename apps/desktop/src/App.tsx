@@ -1406,6 +1406,7 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
   const [rotate, setRotate] = useState<{ id: string; cx: number; cy: number } | null>(null);
   const [panDrag, setPanDrag] = useState<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
   const [wpDrag, setWpDrag] = useState<{ edgeId: string; index: number } | null>(null);
+  const [epDrag, setEpDrag] = useState<{ edgeId: string; end: 'from' | 'to'; tgt: string | null } | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
   const spaceRef = useRef(false);
   const clipRef = useRef<BNode[]>([]);
@@ -1488,11 +1489,17 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
       setPan({ x: panDrag.ox + (e.clientX - panDrag.sx), y: panDrag.oy + (e.clientY - panDrag.sy) });
       return;
     }
-    if (!drag && !conn && !resize && !band && !arrow && !rotate && !wpDrag) return;
+    if (!drag && !conn && !resize && !band && !arrow && !rotate && !wpDrag && !epDrag) return;
     const { x, y } = pt(e);
     if (wpDrag) {
       movedRef.current = true;
       setEdges((es) => es.map((ed) => (ed.id === wpDrag.edgeId && ed.points ? { ...ed, points: ed.points.map((p, i) => (i === wpDrag.index ? { x: snap(x), y: snap(y) } : p)) } : ed)));
+      return;
+    }
+    if (epDrag) {
+      movedRef.current = true;
+      const tg = nodeAt(x, y);
+      setEpDrag((d) => (d ? { ...d, tgt: tg?.id ?? null } : d));
       return;
     }
     if (rotate) {
@@ -1561,6 +1568,21 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
   const onUp = (): void => {
     if (panDrag) {
       setPanDrag(null);
+      return;
+    }
+    if (epDrag) {
+      if (epDrag.tgt) {
+        const otherEnd = epDrag.end === 'from' ? 'to' : 'from';
+        setEdges((es) => es.map((e) => (e.id === epDrag.edgeId && e[otherEnd] !== epDrag.tgt ? { ...e, [epDrag.end]: epDrag.tgt!, points: undefined } : e)));
+      }
+      if (movedRef.current && preGesture.current) {
+        past.current.push(preGesture.current);
+        if (past.current.length > 80) past.current.shift();
+        future.current = [];
+      }
+      preGesture.current = null;
+      movedRef.current = false;
+      setEpDrag(null);
       return;
     }
     if (arrow) {
@@ -1796,69 +1818,7 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
             </g>
           );
         })}
-        {selEdge
-          ? (() => {
-              const ed = edges.find((x) => x.id === selEdge);
-              const a = ed && nodes.find((n) => n.id === ed.from);
-              const b = ed && nodes.find((n) => n.id === ed.to);
-              if (!ed || !a || !b) return null;
-              const pts = edgePts(a, b, ed.style, ed.points);
-              const s = pts[0]!;
-              const e2 = pts[pts.length - 1]!;
-              const wps = ed.points ?? [];
-              const ctrl = controlPoints(a, b, wps);
-              const removeWp = (i: number): void => {
-                commit();
-                setEdges((es) => es.map((x) => (x.id === ed.id ? { ...x, points: wps.length > 1 ? wps.filter((_, k) => k !== i) : undefined } : x)));
-              };
-              const addWpAt = (segIdx: number, p: XY, e: { stopPropagation: () => void; pointerId: number }): void => {
-                e.stopPropagation();
-                capture(e);
-                beginGesture();
-                movedRef.current = true;
-                const np = [...wps];
-                np.splice(segIdx, 0, { x: snap(p.x), y: snap(p.y) });
-                setEdges((es) => es.map((x) => (x.id === ed.id ? { ...x, points: np } : x)));
-                setWpDrag({ edgeId: ed.id, index: segIdx });
-              };
-              return (
-                <g>
-                  <g style={{ pointerEvents: 'none' }}>
-                    <circle cx={s.x} cy={s.y} r={5} fill="#fff" stroke="var(--accent)" strokeWidth={2} />
-                    <g transform={`translate(${e2.x},${e2.y})`}>
-                      <circle r={6} fill="#fff" stroke="#00c853" strokeWidth={1.5} />
-                      <line x1={-3.4} y1={-3.4} x2={3.4} y2={3.4} stroke="#00c853" strokeWidth={2.2} strokeLinecap="round" />
-                      <line x1={3.4} y1={-3.4} x2={-3.4} y2={3.4} stroke="#00c853" strokeWidth={2.2} strokeLinecap="round" />
-                    </g>
-                  </g>
-                  {ctrl.slice(0, -1).map((c, i) => {
-                    const q = ctrl[i + 1]!;
-                    const mid = { x: (c.x + q.x) / 2, y: (c.y + q.y) / 2 };
-                    return (
-                      <g key={'vb' + i} style={{ cursor: 'crosshair', pointerEvents: 'all' }} onPointerDown={(e) => addWpAt(i, mid, e)}>
-                        <circle cx={mid.x} cy={mid.y} r={10} fill="transparent" />
-                        <circle cx={mid.x} cy={mid.y} r={4.5} fill="var(--accent)" fillOpacity={0.18} stroke="var(--accent)" strokeOpacity={0.65} strokeWidth={1.2} />
-                      </g>
-                    );
-                  })}
-                  {wps.map((p, i) => (
-                    <circle
-                      key={'wp' + i}
-                      cx={p.x}
-                      cy={p.y}
-                      r={5}
-                      fill="var(--accent)"
-                      stroke="#fff"
-                      strokeWidth={1.6}
-                      style={{ cursor: 'move', pointerEvents: 'all' }}
-                      onPointerDown={(e) => { e.stopPropagation(); capture(e); beginGesture(); setWpDrag({ edgeId: ed.id, index: i }); }}
-                      onDoubleClick={(e) => { e.stopPropagation(); removeWp(i); }}
-                    />
-                  ))}
-                </g>
-              );
-            })()
-          : null}
+        {/* 选中边的手柄(端点/航点/虚拟折点)移到节点之上的覆盖层 board-overlay,避免被节点 div 遮挡 */}
         {conn
           ? (() => {
               const a = nodes.find((n) => n.id === conn.from);
@@ -1884,7 +1844,7 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
       {nodes.map((n) => {
         const isSel = selIds.has(n.id);
         const isHover = hover === n.id;
-        const isTgt = conn?.tgt === n.id;
+        const isTgt = conn?.tgt === n.id || epDrag?.tgt === n.id;
         return (
           <div
             key={n.id}
@@ -1995,6 +1955,79 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
           </div>
         );
       })}
+      <svg className="board-svg board-overlay">
+        {selEdge
+          ? (() => {
+              const ed = edges.find((x) => x.id === selEdge);
+              const a = ed && nodes.find((n) => n.id === ed.from);
+              const b = ed && nodes.find((n) => n.id === ed.to);
+              if (!ed || !a || !b) return null;
+              const pts = edgePts(a, b, ed.style, ed.points);
+              const s = pts[0]!;
+              const e2 = pts[pts.length - 1]!;
+              const wps = ed.points ?? [];
+              const ctrl = controlPoints(a, b, wps);
+              const removeWp = (i: number): void => {
+                commit();
+                setEdges((es) => es.map((x) => (x.id === ed.id ? { ...x, points: wps.length > 1 ? wps.filter((_, k) => k !== i) : undefined } : x)));
+              };
+              const addWpAt = (segIdx: number, p: XY, e: { stopPropagation: () => void; pointerId: number }): void => {
+                e.stopPropagation();
+                capture(e);
+                beginGesture();
+                movedRef.current = true;
+                const np = [...wps];
+                np.splice(segIdx, 0, { x: snap(p.x), y: snap(p.y) });
+                setEdges((es) => es.map((x) => (x.id === ed.id ? { ...x, points: np } : x)));
+                setWpDrag({ edgeId: ed.id, index: segIdx });
+              };
+              const epStart = (end: 'from' | 'to', e: { stopPropagation: () => void; pointerId: number }): void => {
+                e.stopPropagation();
+                capture(e);
+                beginGesture();
+                setEpDrag({ edgeId: ed.id, end, tgt: null });
+              };
+              return (
+                <g>
+                  <g style={{ cursor: 'pointer', pointerEvents: 'all' }} onPointerDown={(e) => epStart('from', e)}>
+                    <circle cx={s.x} cy={s.y} r={9} fill="transparent" />
+                    <circle cx={s.x} cy={s.y} r={5} fill="#fff" stroke="var(--accent)" strokeWidth={2} />
+                  </g>
+                  <g style={{ cursor: 'pointer', pointerEvents: 'all' }} transform={`translate(${e2.x},${e2.y})`} onPointerDown={(e) => epStart('to', e)}>
+                    <circle r={10} fill="transparent" />
+                    <circle r={6} fill="#fff" stroke="#00c853" strokeWidth={1.5} />
+                    <line x1={-3.4} y1={-3.4} x2={3.4} y2={3.4} stroke="#00c853" strokeWidth={2.2} strokeLinecap="round" />
+                    <line x1={3.4} y1={-3.4} x2={-3.4} y2={3.4} stroke="#00c853" strokeWidth={2.2} strokeLinecap="round" />
+                  </g>
+                  {ctrl.slice(0, -1).map((c, i) => {
+                    const q = ctrl[i + 1]!;
+                    const mid = { x: (c.x + q.x) / 2, y: (c.y + q.y) / 2 };
+                    return (
+                      <g key={'vb' + i} style={{ cursor: 'crosshair', pointerEvents: 'all' }} onPointerDown={(e) => addWpAt(i, mid, e)}>
+                        <circle cx={mid.x} cy={mid.y} r={10} fill="transparent" />
+                        <circle cx={mid.x} cy={mid.y} r={4.5} fill="var(--accent)" fillOpacity={0.18} stroke="var(--accent)" strokeOpacity={0.65} strokeWidth={1.2} />
+                      </g>
+                    );
+                  })}
+                  {wps.map((p, i) => (
+                    <circle
+                      key={'wp' + i}
+                      cx={p.x}
+                      cy={p.y}
+                      r={5}
+                      fill="var(--accent)"
+                      stroke="#fff"
+                      strokeWidth={1.6}
+                      style={{ cursor: 'move', pointerEvents: 'all' }}
+                      onPointerDown={(e) => { e.stopPropagation(); capture(e); beginGesture(); setWpDrag({ edgeId: ed.id, index: i }); }}
+                      onDoubleClick={(e) => { e.stopPropagation(); removeWp(i); }}
+                    />
+                  ))}
+                </g>
+              );
+            })()
+          : null}
+      </svg>
       {band ? (() => { const r = bandRect(band); return <div className="band" style={{ left: r.x, top: r.y, width: r.w, height: r.h }} />; })() : null}
       </div>
       {selEdge
