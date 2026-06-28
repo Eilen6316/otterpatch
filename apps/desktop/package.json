@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "electron": "electron .",
-    "electron:dev": "cross-env OtterPatch_DEV=1 electron .",
+    "electron:dev": "cross-env OTTERPATCH_DEV=1 electron .",
     "app": "npm run build && electron .",
     "app:pack": "npm run build && electron-builder"
   },
@@ -41,15 +41,18 @@
       "output": "release"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "icons/icon.ico"
     },
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "icon": "icons/icon.png"
     },
     "linux": {
       "target": "AppImage",
-      "category": "Office"
+      "category": "Office",
+      "icon": "icons/icon.png"
     }
   }
 }
