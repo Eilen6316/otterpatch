@@ -1340,6 +1340,7 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
   const [conn, setConn] = useState<{ from: string; x: number; y: number; tgt: string | null } | null>(null);
   const [band, setBand] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const [guides, setGuides] = useState<{ v: number[]; h: number[] } | null>(null);
+  const [arrow, setArrow] = useState<{ from: string; dir: 'up' | 'right' | 'down' | 'left'; sx: number; sy: number } | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<XY>({ x: 0, y: 0 });
   const ref = useRef<HTMLDivElement | null>(null);
@@ -1379,6 +1380,17 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
     setSelIds(new Set([id]));
     setSelEdge(null);
   };
+  // drawio 招牌:点方向箭头 → 克隆源节点放到该方向 60px 外并连上
+  const cloneConnect = (fromId: string, dir: 'up' | 'right' | 'down' | 'left'): void => {
+    const src = nodes.find((n) => n.id === fromId);
+    if (!src) return;
+    const gap = 60;
+    const off = dir === 'up' ? { dx: 0, dy: -(src.h + gap) } : dir === 'down' ? { dx: 0, dy: src.h + gap } : dir === 'left' ? { dx: -(src.w + gap), dy: 0 } : { dx: src.w + gap, dy: 0 };
+    const id = 'n' + ++idRef.current;
+    setNodes((ns) => [...ns, { ...src, id, x: snap(src.x + off.dx), y: snap(src.y + off.dy) }]);
+    setEdges((es) => [...es, { id: 'e' + ++idRef.current, from: fromId, to: id }]);
+    setSelIds(new Set([id]));
+  };
   const onDrop = (e: DragEvent<HTMLDivElement>): void => {
     e.preventDefault();
     const raw = e.dataTransfer.getData('opal/shape');
@@ -1389,8 +1401,15 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
   };
 
   const onMove = (e: { clientX: number; clientY: number; shiftKey?: boolean }): void => {
-    if (!drag && !conn && !resize && !band) return;
+    if (!drag && !conn && !resize && !band && !arrow) return;
     const { x, y } = pt(e);
+    if (arrow) {
+      if (Math.hypot(x - arrow.sx, y - arrow.sy) > 5 / zoom) {
+        setConn({ from: arrow.from, x, y, tgt: nodeAt(x, y, arrow.from)?.id ?? null });
+        setArrow(null);
+      }
+      return;
+    }
     if (drag) {
       let dx = x - drag.sx;
       let dy = y - drag.sy;
@@ -1435,6 +1454,11 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
     if (band) setBand((b) => (b ? { ...b, x1: x, y1: y } : b));
   };
   const onUp = (): void => {
+    if (arrow) {
+      cloneConnect(arrow.from, arrow.dir);
+      setArrow(null);
+      return;
+    }
     if (conn && conn.tgt) {
       const to = conn.tgt;
       setEdges((es) => (es.some((d) => d.from === conn.from && d.to === to) ? es : [...es, { id: 'e' + ++idRef.current, from: conn.from, to }]));
@@ -1547,6 +1571,8 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
           ? (() => {
               const a = nodes.find((n) => n.id === conn.from);
               if (!a) return null;
+              const tgt = conn.tgt ? nodes.find((n) => n.id === conn.tgt) : null;
+              if (tgt) return <path d={roundedPath(ortho(a, tgt))} fill="none" stroke="#16a34a" strokeWidth={2} strokeDasharray="6 3" markerEnd="url(#opal-arr-sel)" />;
               const p1 = perim(a, conn.x, conn.y);
               return <line x1={p1.x} y1={p1.y} x2={conn.x} y2={conn.y} stroke="var(--accent)" strokeWidth={1.6} strokeDasharray="5 3" markerEnd="url(#opal-arr-sel)" />;
             })()
@@ -1637,6 +1663,21 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
                       capture(e);
                       const { x, y } = pt(e);
                       setResize({ id: n.id, k: h.k, box: n, sx: x, sy: y });
+                    }}
+                  />
+                ))
+              : null}
+            {isHover && selIds.size <= 1 && !drag && !resize && !conn && !band
+              ? (['up', 'right', 'down', 'left'] as const).map((dir) => (
+                  <span
+                    key={dir}
+                    className={'barrow ba-' + dir}
+                    title={t('点=克隆并连接,拖=连线')}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      capture(e);
+                      const { x, y } = pt(e);
+                      setArrow({ from: n.id, dir, sx: x, sy: y });
                     }}
                   />
                 ))
