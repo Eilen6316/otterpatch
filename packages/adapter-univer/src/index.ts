@@ -30,6 +30,7 @@ import type {
 } from '@opal/core';
 import { SurgicalOoxmlWriteback } from '@opal/writeback-surgical';
 import { buildXlsxCompiler } from './xlsx-patch.js';
+import { GridChangeSetEngine } from './grid-engine.js';
 
 const TODO = (what: string): never => {
   throw new Error(`UniverAdapter: ${what}() not implemented yet`);
@@ -50,7 +51,7 @@ export class UniverAdapter implements HostAdapter {
     return TODO('anchors');
   }
   changes(): ChangeSetEngine {
-    return TODO('changes');
+    return new GridChangeSetEngine();
   }
   project(_q: ProjectionQuery): Promise<DocProjection> {
     return TODO('project');
@@ -90,3 +91,4 @@ export const univerAdapterRegistration: AdapterRegistration = {
 };
 
 export { buildXlsxCompiler } from './xlsx-patch.js';
+export { GridChangeSetEngine, gridShadow, type GridCell, type GridShadow } from './grid-engine.js';
