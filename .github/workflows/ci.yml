@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # electron's GUI binary isn't needed for typecheck/build/test — skip the ~100MB download
+      - name: Install
+        run: npm install
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - name: Typecheck (tsc -b)
+        run: npm run typecheck
+      - name: Test (all workspaces)
+        run: npm test
+      - name: Build cockpit
+        run: npm run build -w apps/desktop
+
+  real-model-smoke:
+    # BYOK end-to-end smoke; runs only when the OPAL_API_KEY secret is configured.
+    runs-on: ubuntu-latest
+    needs: build-test
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npm run typecheck
+      - name: Real-model smoke (gated on secret)
+        env:
+          OPAL_API_KEY: ${{ secrets.OPAL_API_KEY }}
+          OPAL_PROVIDER: ${{ vars.OPAL_PROVIDER }}
+        run: npm run smoke

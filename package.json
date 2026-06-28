@@ -12,7 +12,9 @@
   "scripts": {
     "typecheck": "tsc -b",
     "dev": "npm run dev --workspace apps/desktop",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "smoke": "node scripts/real-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
