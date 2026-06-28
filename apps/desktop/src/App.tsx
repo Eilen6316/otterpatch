@@ -1233,7 +1233,7 @@ function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
 }
 
 interface XY { x: number; y: number }
-interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string }
+interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string; kind?: string }
 interface BEdge { id: string; from: string; to: string }
 
 const GRID = 10;
@@ -1259,14 +1259,23 @@ function ortho(a: BNode, b: BNode): XY[] {
   const dx = bcx - acx, dy = bcy - acy;
   if (Math.abs(dx) >= Math.abs(dy)) {
     const right = dx >= 0;
-    const p1 = { x: right ? a.x + a.w : a.x, y: acy };
-    const p2 = { x: right ? b.x : b.x + b.w, y: bcy };
+    // 竖直方向有重叠 → 两端取重叠区中点做共同 y,得到一条干净的水平直线
+    const oy0 = Math.max(a.y, b.y);
+    const oy1 = Math.min(a.y + a.h, b.y + b.h);
+    const yy = oy1 > oy0 + 2 ? (oy0 + oy1) / 2 : null;
+    const p1 = { x: right ? a.x + a.w : a.x, y: yy ?? acy };
+    const p2 = { x: right ? b.x : b.x + b.w, y: yy ?? bcy };
+    if (Math.abs(p1.y - p2.y) < 0.5) return [{ x: p1.x, y: p1.y }, { x: p2.x, y: p1.y }];
     const mx = (p1.x + p2.x) / 2;
     return [p1, { x: mx, y: p1.y }, { x: mx, y: p2.y }, p2];
   }
   const down = dy >= 0;
-  const p1 = { x: acx, y: down ? a.y + a.h : a.y };
-  const p2 = { x: bcx, y: down ? b.y : b.y + b.h };
+  const ox0 = Math.max(a.x, b.x);
+  const ox1 = Math.min(a.x + a.w, b.x + b.w);
+  const xx = ox1 > ox0 + 2 ? (ox0 + ox1) / 2 : null;
+  const p1 = { x: xx ?? acx, y: down ? a.y + a.h : a.y };
+  const p2 = { x: xx ?? bcx, y: down ? b.y : b.y + b.h };
+  if (Math.abs(p1.x - p2.x) < 0.5) return [{ x: p1.x, y: p1.y }, { x: p1.x, y: p2.y }];
   const my = (p1.y + p2.y) / 2;
   return [p1, { x: p1.x, y: my }, { x: p2.x, y: my }, p2];
 }
@@ -1355,10 +1364,14 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
       cb.current?.(null);
       return;
     }
-    const label = (id: string): string => nodes.find((n) => n.id === id)?.label ?? id;
+    const nm = (n: BNode): string => n.label || n.kind || '形状';
+    const label = (id: string): string => {
+      const n = nodes.find((x) => x.id === id);
+      return n ? nm(n) : id;
+    };
     const eds = edges.filter((e) => selIds.has(e.from) && selIds.has(e.to));
     const parts: string[] = [];
-    if (sn.length) parts.push(`${sn.length} 个节点: ${sn.map((n) => `「${n.label}」`).join('、')}`);
+    if (sn.length) parts.push(`${sn.length} 个节点: ${sn.map((n) => `「${nm(n)}」`).join('、')}`);
     if (eds.length) parts.push(`${eds.length} 条连线: ${eds.map((e) => `${label(e.from)}→${label(e.to)}`).join('、')}`);
     if (selEdge && !eds.length) {
       const e = edges.find((x) => x.id === selEdge);
@@ -1374,9 +1387,9 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
   };
   const nodeAt = (x: number, y: number, not?: string): BNode | undefined =>
     [...nodes].reverse().find((n) => n.id !== not && x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h);
-  const addNode = (x: number, y: number, inner: string, label: string): void => {
+  const addNode = (x: number, y: number, inner: string, label: string, kind?: string): void => {
     const id = 'n' + ++idRef.current;
-    setNodes((ns) => [...ns, { id, x: snap(x - 45), y: snap(y - 27), w: 90, h: 54, inner, label }]);
+    setNodes((ns) => [...ns, { id, x: snap(x - 45), y: snap(y - 27), w: 90, h: 54, inner, label, ...(kind ? { kind } : {}) }]);
     setSelIds(new Set([id]));
     setSelEdge(null);
   };
@@ -1397,7 +1410,7 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
     if (!raw) return;
     const s = JSON.parse(raw) as { name: string; inner: string };
     const { x, y } = pt(e);
-    addNode(x, y, s.inner, s.name);
+    addNode(x, y, s.inner, '', s.name); // 拖入的图形不显示中文名,但隐藏存 kind 供 Agent 感知
   };
 
   const onMove = (e: { clientX: number; clientY: number; shiftKey?: boolean }): void => {
