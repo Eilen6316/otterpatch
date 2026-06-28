@@ -8,6 +8,23 @@ import { createUniver, defaultTheme, LocaleType, merge } from '@univerjs/presets
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core';
 import sheetsZhCN from '@univerjs/preset-sheets-core/locales/zh-CN';
 import '@univerjs/preset-sheets-core/lib/index.css';
+// 常用数据功能(筛选/排序/条件格式/查找替换/数据验证)—— core preset 不含,在此补上,
+// 让这些功能出现在 Univer 工具栏/菜单里供用户使用。
+import { UniverSheetsFilterPreset } from '@univerjs/preset-sheets-filter';
+import filterZhCN from '@univerjs/preset-sheets-filter/locales/zh-CN';
+import '@univerjs/preset-sheets-filter/lib/index.css';
+import { UniverSheetsSortPreset } from '@univerjs/preset-sheets-sort';
+import sortZhCN from '@univerjs/preset-sheets-sort/locales/zh-CN';
+import '@univerjs/preset-sheets-sort/lib/index.css';
+import { UniverSheetsConditionalFormattingPreset } from '@univerjs/preset-sheets-conditional-formatting';
+import condFmtZhCN from '@univerjs/preset-sheets-conditional-formatting/locales/zh-CN';
+import '@univerjs/preset-sheets-conditional-formatting/lib/index.css';
+import { UniverSheetsFindReplacePreset } from '@univerjs/preset-sheets-find-replace';
+import findReplaceZhCN from '@univerjs/preset-sheets-find-replace/locales/zh-CN';
+import '@univerjs/preset-sheets-find-replace/lib/index.css';
+import { UniverSheetsDataValidationPreset } from '@univerjs/preset-sheets-data-validation';
+import dataValidationZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
+import '@univerjs/preset-sheets-data-validation/lib/index.css';
 
 export interface UniSel {
   a1: string;
@@ -101,10 +118,17 @@ export default function UniverSheet({ onSelection }: { onSelection?: (s: UniSel 
     if (!ref.current) return;
     const { univer, univerAPI } = createUniver({
       locale: LocaleType.ZH_CN,
-      locales: { [LocaleType.ZH_CN]: merge({}, sheetsZhCN) },
+      locales: { [LocaleType.ZH_CN]: merge({}, sheetsZhCN, filterZhCN, sortZhCN, condFmtZhCN, findReplaceZhCN, dataValidationZhCN) },
       theme: { ...defaultTheme, primary: BRAND_PRIMARY },
-      // ribbonType:'simple' 折掉"开始/公式/数据"页签行,回收纵向高度;留单行工具条
-      presets: [UniverSheetsCorePreset({ container: ref.current, ribbonType: 'simple' })],
+      // classic 带页签的功能区:常用功能(筛选/排序/条件格式/数据验证/冻结等)在 数据/开始/视图 页签里可发现
+      presets: [
+        UniverSheetsCorePreset({ container: ref.current }),
+        UniverSheetsFilterPreset(),
+        UniverSheetsSortPreset(),
+        UniverSheetsConditionalFormattingPreset(),
+        UniverSheetsFindReplacePreset(),
+        UniverSheetsDataValidationPreset(),
+      ],
     });
     univerAPI.createWorkbook({ name: '月度销售表' });
 
@@ -114,7 +138,6 @@ export default function UniverSheet({ onSelection }: { onSelection?: (s: UniSel 
       if (sheet) {
         HEADERS.forEach((h, c) => sheet.getRange(0, c).setValue(h));
         DATA.forEach((row, r) => row.forEach((v, c) => sheet.getRange(r + 1, c).setValue(v)));
-        (sheet as { setFrozenRows?: (n: number) => void }).setFrozenRows?.(1); // 冻结表头行,长表下滚不丢列名
       }
     } catch {
       /* 演示数据可选 */
