@@ -85,6 +85,13 @@ function snap(wb: FWorkbookLike | null | undefined): UniSel | null {
   }
 }
 
+// 品牌蓝色阶(Tailwind blue,600=#2563eb 正好=OtterPatch --accent),覆盖 Univer 默认靛蓝,
+// 让激活 tab / 选区边框 / Sheet 标签 / 超链接全部落到品牌蓝,消除"同屏三种蓝"。
+const BRAND_PRIMARY = {
+  50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd', 400: '#60a5fa',
+  500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8', 800: '#1e40af', 900: '#1e3a8a',
+};
+
 export default function UniverSheet({ onSelection }: { onSelection?: (s: UniSel | null) => void }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const cb = useRef(onSelection);
@@ -95,8 +102,9 @@ export default function UniverSheet({ onSelection }: { onSelection?: (s: UniSel 
     const { univer, univerAPI } = createUniver({
       locale: LocaleType.ZH_CN,
       locales: { [LocaleType.ZH_CN]: merge({}, sheetsZhCN) },
-      theme: defaultTheme,
-      presets: [UniverSheetsCorePreset({ container: ref.current })],
+      theme: { ...defaultTheme, primary: BRAND_PRIMARY },
+      // ribbonType:'simple' 折掉"开始/公式/数据"页签行,回收纵向高度;留单行工具条
+      presets: [UniverSheetsCorePreset({ container: ref.current, ribbonType: 'simple' })],
     });
     univerAPI.createWorkbook({ name: '月度销售表' });
 
@@ -106,6 +114,7 @@ export default function UniverSheet({ onSelection }: { onSelection?: (s: UniSel 
       if (sheet) {
         HEADERS.forEach((h, c) => sheet.getRange(0, c).setValue(h));
         DATA.forEach((row, r) => row.forEach((v, c) => sheet.getRange(r + 1, c).setValue(v)));
+        (sheet as { setFrozenRows?: (n: number) => void }).setFrozenRows?.(1); // 冻结表头行,长表下滚不丢列名
       }
     } catch {
       /* 演示数据可选 */
