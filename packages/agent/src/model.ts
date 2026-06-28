@@ -26,9 +26,17 @@ export interface HostDialect {
   buildChangeSet(req: ProposeRequest, proposal: unknown): ChangeSet;
 }
 
-/** 任何模型实现(真实 Claude / OpenAI 兼容 / Mock)都只产 ChangeSet。 */
+/** Agent 对一条请求的回应:要么回答问题(聊天),要么提出表格改动(待审阅 diff)。 */
+export type AgentResponse =
+  | { kind: 'answer'; text: string }
+  | { kind: 'changeset'; changeSet: ChangeSet };
+
+/** 任何模型实现(真实 Claude / OpenAI 兼容 / Mock)。 */
 export interface ModelClient {
+  /** 仅产 ChangeSet(强制执行路径,保留给确定要改表的场景/测试)。 */
   proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet>;
+  /** 智能路由:模型自行决定『回答问题』还是『提出改动』(tool_choice:auto)。可选;无则回退到 proposeChangeSet。 */
+  respond?(req: ProposeRequest, dialect: HostDialect): Promise<AgentResponse>;
 }
 
 /** 测试/离线用:给定 (req → 原始提案) 函数,交 dialect 确定性构造 ChangeSet。 */
@@ -36,5 +44,8 @@ export class MockModelClient implements ModelClient {
   constructor(private readonly fn: (req: ProposeRequest) => unknown) {}
   async proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet> {
     return dialect.buildChangeSet(req, this.fn(req));
+  }
+  async respond(req: ProposeRequest, dialect: HostDialect): Promise<AgentResponse> {
+    return { kind: 'changeset', changeSet: dialect.buildChangeSet(req, this.fn(req)) };
   }
 }

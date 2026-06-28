@@ -418,6 +418,7 @@ export function App() {
   const [playIdx, setPlayIdx] = useState(-1);
   const [playing, setPlaying] = useState(false);
   const [sendErr, setSendErr] = useState<string | null>(null);
+  const [answer, setAnswer] = useState<string | null>(null);
   const [recent, setRecent] = useState<{ t: string; time: string }[]>([]);
   const [realDiff, setRealDiff] = useState<AgentDiff | null>(null);
   const [realCs, setRealCs] = useState<unknown>(null);
@@ -595,12 +596,22 @@ export function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ format: fmt, intent: theIntent, context: ctx, provider, model, apiKey }),
         });
-        const data = (await r.json()) as { changeSet?: unknown; diff?: AgentDiff; error?: string };
-        if (!r.ok || !data.diff) throw new Error(data.error ?? 'propose failed');
+        const data = (await r.json()) as { changeSet?: unknown; diff?: AgentDiff; answer?: string; error?: string };
+        if (!r.ok) throw new Error(data.error ?? 'propose failed');
+        if (theIntent.trim()) setRecent((rr) => [{ t: theIntent.trim(), time: t('刚刚') }, ...rr.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
+        // 路由:Agent 选择了"回答问题" → 聊天气泡,不改表
+        if (data.answer != null) {
+          setAnswer(data.answer);
+          setRealDiff(null);
+          setPlayList([]);
+          setSent(true);
+          return;
+        }
+        if (!data.diff) throw new Error(data.error ?? 'propose failed');
+        setAnswer(null);
         setRealCs(data.changeSet ?? null);
         setRealDiff(data.diff);
         setAccepted(new Set(data.diff.items.map((it) => it.editId)));
-        if (theIntent.trim()) setRecent((r) => [{ t: theIntent.trim(), time: t('刚刚') }, ...r.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
         const ops = diffToOps(data.diff);
         if (ops.length) void playOps(ops); // 把 Agent 的改动逐格"画"到网格上
         else setSent(true);
@@ -629,6 +640,7 @@ export function App() {
     setAccepted(new Set());
     setPlayList([]);
     setPlayIdx(-1);
+    setAnswer(null);
   };
 
   // ── Agent「边画边改」可视化:把操作逐步播放到 Univer 网格,用户看着它一格格地改 ──
@@ -959,6 +971,13 @@ export function App() {
                     )}
                   </Section>
                 </>
+              ) : answer ? (
+                <Section label={t('Agent 回答')}>
+                  <div className="diff-head">
+                    <button className="back-btn" onClick={resetDiff}>← {t('新指令')}</button>
+                  </div>
+                  <div className="answer-bubble">{answer}</div>
+                </Section>
               ) : (
                 <Section label={t('本次改动') + (realDiff ? ' · ' + realDiff.items.length : '')}>
                   <div className="diff-head">

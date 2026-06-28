@@ -65,11 +65,12 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
           apiKey: a.apiKey as string | undefined,
           ...(a.model ? { model: a.model as string } : {}),
         });
-        const cs = await rt.propose(
+        const r = await rt.respond(
           { hostId: 'serve', format: String(a.format), intent: String(a.intent ?? ''), baseRev: 0 as DocRev, anchors: [], context: String(a.context ?? '') },
           model,
         );
-        send(res, 200, { changeSet: cs, diff: rt.diff(cs) });
+        if (r.kind === 'answer') send(res, 200, { answer: r.text });
+        else send(res, 200, { changeSet: r.changeSet, diff: rt.diff(r.changeSet) });
         return;
       }
       if (req.method === 'POST' && url === '/commit') {

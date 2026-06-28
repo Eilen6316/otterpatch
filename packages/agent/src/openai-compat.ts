@@ -8,7 +8,11 @@
  */
 import OpenAI from 'openai';
 import type { ChangeSet } from '@otterpatch/core';
-import type { HostDialect, ModelClient, ProposeRequest } from './model.js';
+import type { AgentResponse, HostDialect, ModelClient, ProposeRequest } from './model.js';
+
+/** 路由前导:让模型自己判断『回答问题』还是『提出改动』(配合 tool_choice:auto)。 */
+const ROUTING_PREAMBLE =
+  '判断用户意图后再行动:① 若用户是在提问/查询/咨询(如"这列平均值多少""哪几行可能有问题""这个公式什么意思"),用 answer_user 工具给出简洁文字回答,【绝不要】修改表格;② 只有当用户明确想修改表格的内容或格式时,才调用修改工具提出改动;③ 指令含糊时,优先用 answer_user 反问澄清,而不是乱改。';
 
 export interface OpenAICompatOptions {
   apiKey?: string;
@@ -78,5 +82,39 @@ export class OpenAICompatModelClient implements ModelClient {
       throw new Error(`OpenAICompatModelClient: model did not call ${dialect.toolName}`);
     }
     return dialect.buildChangeSet(req, JSON.parse(call.function.arguments));
+  }
+
+  /** 智能路由:tool_choice:auto + [改表工具, answer_user]。模型自己选回答还是改表。 */
+  async respond(req: ProposeRequest, dialect: HostDialect): Promise<AgentResponse> {
+    const res = await this.client.chat.completions.create({
+      model: this.model,
+      max_tokens: this.maxTokens,
+      messages: [
+        { role: 'system', content: ROUTING_PREAMBLE + '\n\n' + dialect.systemPrompt + '\n\n当前表格/选区上下文:\n' + req.context },
+        { role: 'user', content: req.intent },
+      ],
+      tools: [
+        { type: 'function', function: { name: dialect.toolName, description: dialect.toolDescription, parameters: dialect.parameters } },
+        {
+          type: 'function',
+          function: {
+            name: 'answer_user',
+            description: '当用户是在提问/查询/咨询表格(而不是要修改它)时,用本工具直接给出文字回答或澄清反问。',
+            parameters: { type: 'object', properties: { text: { type: 'string', description: '给用户的回答(简洁、可含数字结论)' } }, required: ['text'] },
+          },
+        },
+      ],
+      tool_choice: 'auto',
+    });
+    const msg = res.choices[0]?.message;
+    const call = msg?.tool_calls?.[0];
+    if (call?.type === 'function' && call.function.name === dialect.toolName) {
+      return { kind: 'changeset', changeSet: dialect.buildChangeSet(req, JSON.parse(call.function.arguments)) };
+    }
+    if (call?.type === 'function' && call.function.name === 'answer_user') {
+      const a = JSON.parse(call.function.arguments) as { text?: string };
+      return { kind: 'answer', text: a.text ?? '' };
+    }
+    return { kind: 'answer', text: (msg?.content ?? '').trim() || '(模型未返回内容)' };
   }
 }

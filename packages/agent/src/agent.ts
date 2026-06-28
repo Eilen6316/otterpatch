@@ -8,7 +8,7 @@ import type { ChangeSet } from '@otterpatch/core';
 import type { SkillLibrary } from '@otterpatch/skills';
 import type { ConventionStack } from './conventions.js';
 import { DIALECTS } from './dialects.js';
-import type { HostDialect, ModelClient, ProposeRequest } from './model.js';
+import type { AgentResponse, HostDialect, ModelClient, ProposeRequest } from './model.js';
 
 export interface ChangeSetValidation {
   ok: boolean;
@@ -32,16 +32,27 @@ export class Agent {
     private readonly opts: AgentOptions = {},
   ) {}
 
-  async propose(req: ProposeRequest): Promise<ChangeSet> {
+  /** 组装注入了约定/技能的 dialect。 */
+  private dialectFor(req: ProposeRequest): HostDialect {
     const dialect = this.dialects[req.format];
     if (!dialect) throw new Error(`Agent: no dialect for format "${req.format}"`);
-
     const parts = [dialect.systemPrompt];
     const conv = this.conventions?.render();
     if (conv) parts.push(conv);
     const skl = this.skills?.render(req.format, req.intent);
     if (skl) parts.push(skl);
-    const d: HostDialect = parts.length > 1 ? { ...dialect, systemPrompt: parts.join('\n\n') } : dialect;
+    return parts.length > 1 ? { ...dialect, systemPrompt: parts.join('\n\n') } : dialect;
+  }
+
+  /** 智能路由:模型自行决定回答问题还是提出改动(回退到 propose)。 */
+  async respond(req: ProposeRequest): Promise<AgentResponse> {
+    const d = this.dialectFor(req);
+    if (this.model.respond) return this.model.respond(req, d);
+    return { kind: 'changeset', changeSet: await this.model.proposeChangeSet(req, d) };
+  }
+
+  async propose(req: ProposeRequest): Promise<ChangeSet> {
+    const d = this.dialectFor(req);
 
     const validator = this.opts.validator;
     const maxRetries = this.opts.maxRetries ?? 0;

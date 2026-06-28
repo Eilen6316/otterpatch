@@ -6,7 +6,7 @@
  * 写回后端按 format 路由:excel/xlsx → 外科 OOXML(Univer 编译器);drawio → 单 XML 外科。
  */
 import { Agent } from '@otterpatch/agent';
-import type { ModelClient, ProposeRequest } from '@otterpatch/agent';
+import type { AgentResponse, ModelClient, ProposeRequest } from '@otterpatch/agent';
 import type { ChangeSet, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
 import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
 import { buildXlsxCompiler } from '@otterpatch/adapter-univer';
@@ -77,6 +77,22 @@ export class OtterPatchRuntime {
       const cs = await agent.propose(req);
       this.emit({ type: 'propose:done', changeSetId: cs.id, editCount: cs.edits.length, ...(cs.meta.planSummary ? { planSummary: cs.meta.planSummary } : {}) });
       return cs;
+    } catch (err) {
+      this.emit({ type: 'error', stage: 'propose', message: errMsg(err) });
+      throw err;
+    }
+  }
+
+  /** 智能路由:模型自行决定『回答问题』还是『提出改动』。 */
+  async respond(req: ProposeRequest, model: ModelClient): Promise<AgentResponse> {
+    this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
+    try {
+      const agent = new Agent(model, undefined, this.skills);
+      const r = await agent.respond(req);
+      if (r.kind === 'changeset') {
+        this.emit({ type: 'propose:done', changeSetId: r.changeSet.id, editCount: r.changeSet.edits.length, ...(r.changeSet.meta.planSummary ? { planSummary: r.changeSet.meta.planSummary } : {}) });
+      }
+      return r;
     } catch (err) {
       this.emit({ type: 'error', stage: 'propose', message: errMsg(err) });
       throw err;

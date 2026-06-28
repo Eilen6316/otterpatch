@@ -311,6 +311,7 @@ svg { display: block; }
 .agent-err .ae-t { font-weight: 600; font-size: 13px; color: var(--text); }
 .agent-err .ae-m { font-size: 12px; color: var(--muted); font-family: var(--mono); word-break: break-word; }
 .agent-err .ae-acts { display: flex; gap: 8px; margin-top: 6px; }
+.answer-bubble { background: var(--fill); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; font-size: 13px; line-height: 1.65; color: var(--text); white-space: pre-wrap; word-break: break-word; }
 
 /* change cards */
 .change { border: 1px solid var(--line); border-radius: var(--r); margin-bottom: 8px; overflow: hidden; }
