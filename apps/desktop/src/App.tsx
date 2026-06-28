@@ -1293,15 +1293,31 @@ const bandRect = (b: { x0: number; y0: number; x1: number; y1: number }): { x: n
 const intersects = (r: { x: number; y: number; w: number; h: number }, n: BNode): boolean =>
   !(n.x > r.x + r.w || n.x + n.w < r.x || n.y > r.y + r.h || n.y + n.h < r.y);
 
-function resizeNode(r: { box: BNode; k: string; sx: number; sy: number }, x: number, y: number): BNode {
+function resizeNode(r: { box: BNode; k: string; sx: number; sy: number }, x: number, y: number, shift: boolean): BNode {
   const b = r.box;
-  let nx = b.x, ny = b.y, w = b.w, h = b.h;
   const dx = x - r.sx, dy = y - r.sy;
-  if (r.k.includes('e')) w = b.w + dx;
-  if (r.k.includes('s')) h = b.h + dy;
-  if (r.k.includes('w')) { w = b.w - dx; nx = b.x + dx; }
-  if (r.k.includes('n')) { h = b.h - dy; ny = b.y + dy; }
-  return { ...b, x: snap(nx), y: snap(ny), w: snap(Math.max(40, w)), h: snap(Math.max(30, h)) };
+  let w = b.w + (r.k.includes('e') ? dx : r.k.includes('w') ? -dx : 0);
+  let h = b.h + (r.k.includes('s') ? dy : r.k.includes('n') ? -dy : 0);
+  w = Math.max(40, w);
+  h = Math.max(30, h);
+  if (shift) {
+    const aspect = b.w / b.h || 1;
+    if (r.k.length === 2) {
+      // 角手柄:取位移更大的轴为主,另一轴按比例
+      if (Math.abs(w - b.w) >= Math.abs(h - b.h)) h = w / aspect;
+      else w = h * aspect;
+    } else if (r.k === 'n' || r.k === 's') {
+      w = h * aspect;
+    } else {
+      h = w / aspect;
+    }
+    w = Math.max(40, w);
+    h = Math.max(30, h);
+  }
+  let nx = b.x, ny = b.y;
+  if (r.k.includes('w')) nx = b.x + b.w - w; // 锚定右/对边
+  if (r.k.includes('n')) ny = b.y + b.h - h;
+  return { ...b, x: snap(nx), y: snap(ny), w: snap(w), h: snap(h) };
 }
 const HANDLES: { k: string; fx: number; fy: number }[] = [
   { k: 'nw', fx: 0, fy: 0 }, { k: 'n', fx: 0.5, fy: 0 }, { k: 'ne', fx: 1, fy: 0 },
@@ -1323,6 +1339,7 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
   const [resize, setResize] = useState<{ id: string; k: string; box: BNode; sx: number; sy: number } | null>(null);
   const [conn, setConn] = useState<{ from: string; x: number; y: number; tgt: string | null } | null>(null);
   const [band, setBand] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const [guides, setGuides] = useState<{ v: number[]; h: number[] } | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<XY>({ x: 0, y: 0 });
   const ref = useRef<HTMLDivElement | null>(null);
@@ -1371,15 +1388,46 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
     addNode(x, y, s.inner, s.name);
   };
 
-  const onMove = (e: { clientX: number; clientY: number }): void => {
+  const onMove = (e: { clientX: number; clientY: number; shiftKey?: boolean }): void => {
     if (!drag && !conn && !resize && !band) return;
     const { x, y } = pt(e);
     if (drag) {
-      const dx = x - drag.sx;
-      const dy = y - drag.sy;
+      let dx = x - drag.sx;
+      let dy = y - drag.sy;
+      // 对齐参考线:把拖动选区的 左/中/右、上/中/下 吸附到其它节点的同类线
+      const movingIds = new Set(Object.keys(drag.origins));
+      const moved = nodes.filter((n) => movingIds.has(n.id)).map((n) => ({ ...n, x: drag.origins[n.id]!.x + dx, y: drag.origins[n.id]!.y + dy }));
+      if (moved.length) {
+        const bx0 = Math.min(...moved.map((n) => n.x));
+        const bx1 = Math.max(...moved.map((n) => n.x + n.w));
+        const by0 = Math.min(...moved.map((n) => n.y));
+        const by1 = Math.max(...moved.map((n) => n.y + n.h));
+        const myX = [bx0, (bx0 + bx1) / 2, bx1];
+        const myY = [by0, (by0 + by1) / 2, by1];
+        const others = nodes.filter((n) => !movingIds.has(n.id));
+        const tol = 6 / zoom;
+        const gv: number[] = [];
+        const gh: number[] = [];
+        let bestX = Infinity, bestY = Infinity, sxAdj = 0, syAdj = 0;
+        for (const o of others) {
+          for (const ox of [o.x, o.x + o.w / 2, o.x + o.w]) for (const mx of myX) {
+            const d = ox - mx;
+            if (Math.abs(d) <= tol && Math.abs(d) < Math.abs(bestX)) { bestX = d; sxAdj = d; }
+            if (Math.abs(ox - mx) <= tol) gv.push(ox);
+          }
+          for (const oy of [o.y, o.y + o.h / 2, o.y + o.h]) for (const my of myY) {
+            const d = oy - my;
+            if (Math.abs(d) <= tol && Math.abs(d) < Math.abs(bestY)) { bestY = d; syAdj = d; }
+            if (Math.abs(oy - my) <= tol) gh.push(oy);
+          }
+        }
+        if (Number.isFinite(bestX)) dx += sxAdj;
+        if (Number.isFinite(bestY)) dy += syAdj;
+        setGuides(gv.length || gh.length ? { v: [...new Set(gv)], h: [...new Set(gh)] } : null);
+      }
       setNodes((ns) => ns.map((n) => (drag.origins[n.id] ? { ...n, x: snap(drag.origins[n.id]!.x + dx), y: snap(drag.origins[n.id]!.y + dy) } : n)));
     }
-    if (resize) setNodes((ns) => ns.map((n) => (n.id === resize.id ? resizeNode(resize, x, y) : n)));
+    if (resize) setNodes((ns) => ns.map((n) => (n.id === resize.id ? resizeNode(resize, x, y, e.shiftKey === true) : n)));
     if (conn) {
       const tg = nodeAt(x, y, conn.from);
       setConn((c) => (c ? { ...c, x, y, tgt: tg?.id ?? null } : c));
@@ -1399,6 +1447,7 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
     setDrag(null);
     setConn(null);
     setResize(null);
+    setGuides(null);
   };
   const capture = (e: { pointerId: number }): void => {
     try {
@@ -1502,6 +1551,16 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
               return <line x1={p1.x} y1={p1.y} x2={conn.x} y2={conn.y} stroke="var(--accent)" strokeWidth={1.6} strokeDasharray="5 3" markerEnd="url(#opal-arr-sel)" />;
             })()
           : null}
+        {guides ? (
+          <g stroke="#ff5a5a" strokeWidth={1} strokeDasharray="4 4" vectorEffect="non-scaling-stroke" style={{ pointerEvents: 'none' }}>
+            {guides.v.map((vx, i) => (
+              <line key={'v' + i} x1={vx} y1={0} x2={vx} y2={6000} />
+            ))}
+            {guides.h.map((hy, i) => (
+              <line key={'h' + i} x1={0} y1={hy} x2={6000} y2={hy} />
+            ))}
+          </g>
+        ) : null}
       </svg>
 
       {nodes.map((n) => {
