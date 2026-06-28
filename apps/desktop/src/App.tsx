@@ -1233,7 +1233,7 @@ function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
 }
 
 interface XY { x: number; y: number }
-interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string; kind?: string }
+interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string; kind?: string; rot?: number }
 type ArrowKind = 'classic' | 'open' | 'diamond' | 'circle' | 'none';
 type EdgeStyle = 'ortho' | 'straight';
 interface BEdge { id: string; from: string; to: string; arrow?: ArrowKind; style?: EdgeStyle }
@@ -1377,6 +1377,7 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
   const [band, setBand] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const [guides, setGuides] = useState<{ v: number[]; h: number[] } | null>(null);
   const [arrow, setArrow] = useState<{ from: string; dir: 'up' | 'right' | 'down' | 'left'; sx: number; sy: number } | null>(null);
+  const [rotate, setRotate] = useState<{ id: string; cx: number; cy: number } | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<XY>({ x: 0, y: 0 });
   const ref = useRef<HTMLDivElement | null>(null);
@@ -1448,8 +1449,15 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
   };
 
   const onMove = (e: { clientX: number; clientY: number; shiftKey?: boolean }): void => {
-    if (!drag && !conn && !resize && !band && !arrow) return;
+    if (!drag && !conn && !resize && !band && !arrow && !rotate) return;
     const { x, y } = pt(e);
+    if (rotate) {
+      let deg = (Math.atan2(y - rotate.cy, x - rotate.cx) * 180) / Math.PI + 90;
+      if (e.shiftKey) deg = Math.round(deg / 15) * 15;
+      deg = Math.round(((deg % 360) + 360) % 360);
+      setNodes((ns) => ns.map((n) => (n.id === rotate.id ? { ...n, rot: deg } : n)));
+      return;
+    }
     if (arrow) {
       if (Math.hypot(x - arrow.sx, y - arrow.sy) > 5 / zoom) {
         setConn({ from: arrow.from, x, y, tgt: nodeAt(x, y, arrow.from)?.id ?? null });
@@ -1519,6 +1527,7 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
     setConn(null);
     setResize(null);
     setGuides(null);
+    setRotate(null);
   };
   const capture = (e: { pointerId: number }): void => {
     try {
@@ -1667,7 +1676,7 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
           <div
             key={n.id}
             className={'bnode' + (isSel ? ' sel' : '') + (isHover && !isSel ? ' hover' : '') + (isTgt ? ' tgt' : '')}
-            style={{ left: n.x, top: n.y, width: n.w, height: n.h }}
+            style={{ left: n.x, top: n.y, width: n.w, height: n.h, ...(n.rot ? { transform: `rotate(${n.rot}deg)` } : {}) }}
             onPointerEnter={() => setHover(n.id)}
             onPointerLeave={() => setHover((h) => (h === n.id ? null : h))}
             onPointerDown={(e) => {
@@ -1737,7 +1746,20 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
                   />
                 ))
               : null}
-            {isHover && selIds.size <= 1 && !drag && !resize && !conn && !band
+            {isSel && selIds.size === 1 ? (
+              <span
+                className="brot"
+                title={t('拖动旋转,按住 Shift 吸附 15°')}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  capture(e);
+                  setRotate({ id: n.id, cx: n.x + n.w / 2, cy: n.y + n.h / 2 });
+                }}
+              >
+                ↻
+              </span>
+            ) : null}
+            {isHover && selIds.size <= 1 && !drag && !resize && !conn && !band && !rotate
               ? (['up', 'right', 'down', 'left'] as const).map((dir) => (
                   <span
                     key={dir}
