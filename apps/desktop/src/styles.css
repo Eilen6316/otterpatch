@@ -282,6 +282,24 @@ svg { display: block; }
 .back-btn { font-size: 12px; color: var(--muted); background: var(--fill); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; cursor: pointer; }
 .back-btn:hover { color: var(--text); border-color: var(--accent); }
 .demo-badge { font-size: 11px; font-weight: 600; color: #b26a00; background: #fff5e6; border: 1px solid #ffd591; border-radius: 6px; padding: 3px 8px; }
+/* Agent 边画边改 · 操作播放面板 */
+.oplist { margin: 2px 0 14px; border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; background: var(--surface); }
+.opbar { display: flex; align-items: center; font-size: 12px; margin-bottom: 8px; }
+.oplbl { font-weight: 600; color: var(--text-soft); }
+.oplbl.live { color: var(--accent); }
+.oplbl.live::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 6px; vertical-align: middle; animation: oppulse 1s ease-in-out infinite; }
+@keyframes oppulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.opcount { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.opprog { height: 4px; border-radius: 3px; background: var(--fill); overflow: hidden; margin-bottom: 10px; }
+.opprog-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.25s ease; }
+.opitem { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 3px 0; color: var(--muted); }
+.opitem .opdot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex-shrink: 0; }
+.opitem.done { color: var(--text-soft); }
+.opitem.done .opdot { background: var(--add); }
+.opitem.cur { color: var(--accent); font-weight: 600; }
+.opitem.cur .opdot { background: var(--accent); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18); animation: oppulse 1s ease-in-out infinite; }
+.opa1 { font-family: var(--mono); font-size: 11.5px; min-width: 42px; }
+.opnote { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* change cards */
 .change { border: 1px solid var(--line); border-radius: var(--r); margin-bottom: 8px; overflow: hidden; }

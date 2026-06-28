@@ -3,7 +3,7 @@
  * 并把用户在表里框选的【区域 + 单元格值 + 格式(加粗/斜体/下划线/字号)】通过 onSelection 上抛给 App,
  * 让右侧 Agent 交互区感知选区,发送时把选区内容一并交给 Agent —— Agent 完全赋能 OtterPatch。
  */
-import { useEffect, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { createUniver, defaultTheme, LocaleType, merge } from '@univerjs/presets';
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core';
 import sheetsZhCN from '@univerjs/preset-sheets-core/locales/zh-CN';
@@ -25,6 +25,27 @@ import '@univerjs/preset-sheets-find-replace/lib/index.css';
 import { UniverSheetsDataValidationPreset } from '@univerjs/preset-sheets-data-validation';
 import dataValidationZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
 import '@univerjs/preset-sheets-data-validation/lib/index.css';
+
+// App 通过这个句柄"边画边改"地驱动 Univer 网格(Agent 操作可视化)。
+export interface SheetHandle {
+  setCell(a1: string, value: unknown): void;
+  setBackground(a1: string, color: string | null): void;
+  setFontColor(a1: string, color: string): void;
+  setBold(a1: string): void;
+  focus(a1: string): void;
+  getValue(a1: string): unknown;
+}
+interface FRangeOps {
+  setValue(v: unknown): void;
+  setBackground(c: string | null): void;
+  setFontColor(c: string): void;
+  setFontWeight(w: string): void;
+  getValue(): unknown;
+}
+interface FSheetOps {
+  getRange(a1: string): FRangeOps;
+  setActiveRange(r: FRangeOps): void;
+}
 
 export interface UniSel {
   a1: string;
@@ -109,20 +130,41 @@ const BRAND_PRIMARY = {
   500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8', 800: '#1e40af', 900: '#1e3a8a',
 };
 
-export default function UniverSheet({ onSelection }: { onSelection?: (s: UniSel | null) => void }) {
-  const ref = useRef<HTMLDivElement | null>(null);
+const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) => void }>(function UniverSheet({ onSelection }, ref) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const apiRef = useRef<{ getActiveWorkbook?: () => { getActiveSheet?: () => FSheetOps } } | null>(null);
   const cb = useRef(onSelection);
   cb.current = onSelection;
 
+  // 命令式句柄:App 用它驱动单元格(取值/写值/底色/字色/加粗/定位光标)
+  useImperativeHandle(ref, () => {
+    const sheet = (): FSheetOps | null => apiRef.current?.getActiveWorkbook?.()?.getActiveSheet?.() ?? null;
+    const safe = (fn: () => void): void => {
+      try {
+        fn();
+      } catch {
+        /* 网格未就绪可忽略 */
+      }
+    };
+    return {
+      setCell: (a1, v) => safe(() => sheet()?.getRange(a1).setValue(v)),
+      setBackground: (a1, c) => safe(() => sheet()?.getRange(a1).setBackground(c)),
+      setFontColor: (a1, c) => safe(() => sheet()?.getRange(a1).setFontColor(c)),
+      setBold: (a1) => safe(() => sheet()?.getRange(a1).setFontWeight('bold')),
+      focus: (a1) => safe(() => { const s = sheet(); if (s) s.setActiveRange(s.getRange(a1)); }),
+      getValue: (a1) => { let v: unknown; safe(() => { v = sheet()?.getRange(a1).getValue(); }); return v; },
+    };
+  }, []);
+
   useEffect(() => {
-    if (!ref.current) return;
+    if (!hostRef.current) return;
     const { univer, univerAPI } = createUniver({
       locale: LocaleType.ZH_CN,
       locales: { [LocaleType.ZH_CN]: merge({}, sheetsZhCN, filterZhCN, sortZhCN, condFmtZhCN, findReplaceZhCN, dataValidationZhCN) },
       theme: { ...defaultTheme, primary: BRAND_PRIMARY },
       // classic 带页签的功能区:常用功能(筛选/排序/条件格式/数据验证/冻结等)在 数据/开始/视图 页签里可发现
       presets: [
-        UniverSheetsCorePreset({ container: ref.current }),
+        UniverSheetsCorePreset({ container: hostRef.current }),
         UniverSheetsFilterPreset(),
         UniverSheetsSortPreset(),
         UniverSheetsConditionalFormattingPreset(),
@@ -131,6 +173,7 @@ export default function UniverSheet({ onSelection }: { onSelection?: (s: UniSel 
       ],
     });
     univerAPI.createWorkbook({ name: '月度销售表' });
+    apiRef.current = univerAPI as unknown as { getActiveWorkbook?: () => { getActiveSheet?: () => FSheetOps } };
 
     const wb = univerAPI.getActiveWorkbook() as unknown as (FWorkbookLike & { getActiveSheet?: () => { getRange: (r: number, c: number) => { setValue: (v: unknown) => void } } }) | null;
     try {
@@ -154,9 +197,12 @@ export default function UniverSheet({ onSelection }: { onSelection?: (s: UniSel 
 
     return () => {
       dispose?.();
+      apiRef.current = null;
       univer.dispose();
     };
   }, []);
 
-  return <div className="univer-host" ref={ref} />;
-}
+  return <div className="univer-host" ref={hostRef} />;
+});
+
+export default UniverSheet;

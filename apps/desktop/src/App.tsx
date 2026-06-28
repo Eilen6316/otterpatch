@@ -9,7 +9,10 @@ import {
 } from './icons.js';
 import { LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
-import type { UniSel } from './UniverSheet.js';
+import type { UniSel, SheetHandle } from './UniverSheet.js';
+
+/** Agent 在网格上的一步操作(用于"边画边改"的可视化播放)。 */
+interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bold?: boolean; note: string }
 
 /** 真 Univer 表格(体积大 → 懒加载,仅 Excel 用)。 */
 const UniverSheet = lazy(() => import('./UniverSheet.js'));
@@ -414,6 +417,10 @@ export function App() {
   const [server, setServer] = useState(() => lsGet('oa.server', ''));
   const [uniSel, setUniSel] = useState<UniSel | null>(null);
   const [boardSel, setBoardSel] = useState<BoardSel | null>(null);
+  const univerRef = useRef<SheetHandle>(null);
+  const [playList, setPlayList] = useState<GridOp[]>([]);
+  const [playIdx, setPlayIdx] = useState(-1);
+  const [playing, setPlaying] = useState(false);
   const [realDiff, setRealDiff] = useState<AgentDiff | null>(null);
   const [realCs, setRealCs] = useState<unknown>(null);
   const [accepted, setAccepted] = useState<Set<string>>(new Set());
@@ -594,7 +601,9 @@ export function App() {
         setRealCs(data.changeSet ?? null);
         setRealDiff(data.diff);
         setAccepted(new Set(data.diff.items.map((it) => it.editId)));
-        setSent(true);
+        const ops = diffToOps(data.diff);
+        if (ops.length) void playOps(ops); // 把 Agent 的改动逐格"画"到网格上
+        else setSent(true);
       } catch (e) {
         notify('Agent · ' + (e instanceof Error ? e.message : String(e)));
       } finally {
@@ -602,7 +611,8 @@ export function App() {
       }
       return;
     }
-    setSent(true);
+    // 无 serve+Key:演示态也完整播放"边画边改",让你先看到效果
+    void playOps(demoOps());
   };
   /** 退出「本次改动」回到建议视图,可发起新指令。 */
   const resetDiff = (): void => {
@@ -610,7 +620,48 @@ export function App() {
     setRealDiff(null);
     setRealCs(null);
     setAccepted(new Set());
+    setPlayList([]);
+    setPlayIdx(-1);
   };
+
+  // ── Agent「边画边改」可视化:把操作逐步播放到 Univer 网格,用户看着它一格格地改 ──
+  const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  const playOps = async (ops: GridOp[]): Promise<void> => {
+    const api = univerRef.current;
+    if (!api || !ops.length) return;
+    setPlayList(ops);
+    setPlaying(true);
+    setSent(true);
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i]!;
+      setPlayIdx(i);
+      api.focus(op.a1); // 光标移到目标格(Univer 选区高亮 = 笔尖)
+      await delay(260);
+      api.setBackground(op.a1, '#dbeafe'); // 落笔:闪一下品牌浅蓝
+      await delay(150);
+      if (op.value !== undefined) api.setCell(op.a1, op.value);
+      if (op.bold) api.setBold(op.a1);
+      if (op.color) api.setFontColor(op.a1, op.color);
+      await delay(300);
+      api.setBackground(op.a1, op.bg ?? null); // 落定:目标底色或清除高亮
+      await delay(180);
+    }
+    setPlayIdx(ops.length);
+    setPlaying(false);
+  };
+  /** 演示用操作序列(无 serve 时也能完整看到"边画边改"的效果)。 */
+  const demoOps = (): GridOp[] => [
+    { a1: 'A1:F1', bold: true, bg: '#eef2ff', note: '加粗并高亮表头' },
+    { a1: 'E2', value: '=C2*D2', note: '按 销量×单价 补「金额」' },
+    { a1: 'E3', value: '=C3*D3', note: '按 销量×单价 补「金额」' },
+    { a1: 'E4', value: '=C4*D4', note: '按 销量×单价 补「金额」' },
+    { a1: 'E5', value: '=C5*D5', note: '按 销量×单价 补「金额」' },
+    { a1: 'E6', value: '=C6*D6', note: '按 销量×单价 补「金额」' },
+    { a1: 'C4', bg: '#ffe3e3', color: '#d11', note: '标红异常值 1500(≈8× 均值)' },
+  ];
+  /** 把 Agent 返回的 diff 转成可播放的网格操作(尽力而为)。 */
+  const diffToOps = (d: AgentDiff): GridOp[] =>
+    d.items.filter((it) => it.ref && it.after != null).map((it) => ({ a1: it.ref, value: it.after, note: it.label ?? it.badge }));
   /** 读入要写回的真实文件(.xlsx/.docx/.pdf/.drawio)为 base64。 */
   const onFile = (f: File | undefined): void => {
     if (!f) return;
@@ -808,7 +859,7 @@ export function App() {
             <div className={'canvas' + (isExcel ? ' excel' : fmt === 'drawio' ? ' board' : ' doc')}>
               {isExcel ? (
                 <Suspense fallback={<div className="univer-loading">{t('加载表格引擎…')}</div>}>
-                  <UniverSheet onSelection={setUniSel} />
+                  <UniverSheet ref={univerRef} onSelection={setUniSel} />
                 </Suspense>
               ) : fmt === 'drawio' ? (
                 <DrawioBoard onBoardSel={setBoardSel} />
@@ -874,9 +925,26 @@ export function App() {
               ) : (
                 <Section label={t('本次改动') + ' · ' + (realDiff ? realDiff.items.length : 3)}>
                   <div className="diff-head">
-                    <button className="back-btn" onClick={resetDiff}>← {t('新指令')}</button>
+                    <button className="back-btn" onClick={resetDiff} disabled={playing}>← {t('新指令')}</button>
                     {!realDiff && <span className="demo-badge">{t('演示模式 · 未连接 serve')}</span>}
                   </div>
+                  {playList.length > 0 && (
+                    <div className="oplist">
+                      <div className="opbar">
+                        <span className={'oplbl' + (playing ? ' live' : '')}>{playing ? t('Agent 正在操作网格') : t('Agent 操作完成')}</span>
+                        <span className="grow" />
+                        <span className="opcount">{Math.min(playIdx + 1, playList.length)}/{playList.length}</span>
+                      </div>
+                      <div className="opprog"><div className="opprog-fill" style={{ width: `${(Math.min(Math.max(playIdx + 1, 0), playList.length) / playList.length) * 100}%` }} /></div>
+                      {playList.map((op, i) => (
+                        <div key={i} className={'opitem' + (i < playIdx ? ' done' : i === playIdx ? ' cur' : '')}>
+                          <span className="opdot" />
+                          <span className="opa1">{op.a1}</span>
+                          <span className="opnote">{op.note}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {realDiff ? (
                     <>
                       <div className="summary">{realDiff.intent}</div>
