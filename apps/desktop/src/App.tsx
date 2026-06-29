@@ -50,6 +50,13 @@ function buildHistory(thread: Turn[]): Array<{ role: 'user' | 'assistant'; conte
   return kept;
 }
 
+/** 载入持久化对话时净化:清掉流式残留(刷新后卡在"正在思考"),丢弃空占位回合。 */
+function sanitizeThread(th: Turn[]): Turn[] {
+  return th
+    .map((t) => (t.role === 'assistant' && t.kind === 'answer' && t.streaming ? { ...t, streaming: false } : t))
+    .filter((t) => !(t.role === 'assistant' && t.kind === 'answer' && !t.text?.trim() && !t.reasoning?.trim()));
+}
+
 /** DeepSeek 式可折叠"思考过程":流式期间默认展开看它边想,结束后可折叠。 */
 function ThinkingPanel({ reasoning, streaming }: { reasoning: string; streaming?: boolean }): ReactNode {
   const t = useT();
@@ -488,7 +495,7 @@ export function App() {
   const [answer, setAnswer] = useState<string | null>(null);
   const lsJson = <T,>(k: string, fb: T): T => { try { const v = JSON.parse(localStorage.getItem(k) ?? 'null'); return v == null ? fb : (v as T); } catch { return fb; } };
   // Cursor 式连续对话流 + 模型历史,持久化到当前工作区(localStorage)
-  const [thread, setThread] = useState<Turn[]>(() => lsJson<Turn[]>('oa.thread', []));
+  const [thread, setThread] = useState<Turn[]>(() => sanitizeThread(lsJson<Turn[]>('oa.thread', [])));
   const [recent, setRecent] = useState<{ t: string; time: string }[]>([]);
   const [realDiff, setRealDiff] = useState<AgentDiff | null>(null);
   const [realCs, setRealCs] = useState<unknown>(null);
@@ -747,8 +754,8 @@ export function App() {
                     board = { byEdit: streamByEditRef.current, objs: streamObjsRef.current };
                   } else {
                     const b = drawioCsToBoard(cs);
-                    boardRef.current?.addObjects(b.nodes, b.edges);
                     board = { byEdit: b.byEdit, objs: b.objs };
+                    void playBoard(b.nodes, b.edges); // 兜底:逐个补图,保留"边画"观感
                   }
                   setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], board: { byEdit: board.byEdit, objs: board.objs }, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                 } else {
@@ -833,29 +840,50 @@ export function App() {
 
   // ── Agent「边画边改」可视化:把操作逐步播放到 Univer 网格,用户看着它一格格地改 ──
   const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  const CINEMATIC_MAX = 10; // ≤ 此数才逐格电影感;更多则区域整体 + 分块快速应用,避免一格格爬
   const playOps = async (ops: GridOp[]): Promise<void> => {
     const api = univerRef.current;
     if (!api || !ops.length) return;
     setPlayList(ops);
     setPlaying(true);
     setSent(true);
-    for (let i = 0; i < ops.length; i++) {
-      const op = ops[i]!;
-      setPlayIdx(i);
-      api.focus(op.a1); // 光标移到目标格(Univer 选区高亮 = 笔尖)
-      await delay(260);
-      api.setBackground(op.a1, '#dbeafe'); // 落笔:闪一下品牌浅蓝
-      await delay(150);
-      if (op.value !== undefined) api.setCell(op.a1, op.value);
-      if (op.bold) api.setBold(op.a1);
-      if (op.color) api.setFontColor(op.a1, op.color);
-      if (op.numFmt) api.setNumberFormat(op.a1, op.numFmt);
-      await delay(300);
-      api.setBackground(op.a1, op.bg ?? null); // 落定:目标底色或清除高亮
-      await delay(180);
+    if (ops.length <= CINEMATIC_MAX) {
+      // 少量:逐格电影感(光标移动 + 落笔闪蓝 + 落定)
+      for (let i = 0; i < ops.length; i++) {
+        const op = ops[i]!;
+        setPlayIdx(i);
+        api.focus(op.a1);
+        await delay(220);
+        api.setBackground(op.a1, '#dbeafe');
+        await delay(120);
+        if (op.value !== undefined) api.setCell(op.a1, op.value);
+        if (op.bold) api.setBold(op.a1);
+        if (op.color) api.setFontColor(op.a1, op.color);
+        if (op.numFmt) api.setNumberFormat(op.a1, op.numFmt);
+        await delay(240);
+        api.setBackground(op.a1, op.bg ?? null);
+        await delay(140);
+      }
+    } else {
+      // 大批量:先聚焦整体区域(让用户看到"在改这一片"),再分块成批写入 + 进度条
+      const region = boundingA1(ops);
+      if (region) api.focus(region);
+      await delay(120);
+      const CHUNK = 24;
+      for (let i = 0; i < ops.length; i += CHUNK) {
+        const end = Math.min(i + CHUNK, ops.length);
+        for (let k = i; k < end; k++) applyGridOp(ops[k]!); // 一块内同步写,Univer 合并渲染
+        setPlayIdx(end);
+        await delay(20); // 让进度条刷新一帧
+      }
     }
     setPlayIdx(ops.length);
     setPlaying(false);
+  };
+  /** drawio 兜底:provider 不流式吐入参时,在 done 后把对象逐个补到画板(保留"边画"观感)。 */
+  const playBoard = async (nodes: BNode[], edges: BEdge[]): Promise<void> => {
+    for (const n of nodes) { boardRef.current?.addObjects([n], []); await delay(75); }
+    for (const ed of edges) { boardRef.current?.addObjects([], [ed]); await delay(45); }
   };
   /** 把 Agent 返回的 diff 转成可播放的网格操作:setStyle→真实底色/字色/加粗;否则写值。 */
   const diffToOps = (d: AgentDiff): GridOp[] =>
@@ -1835,6 +1863,21 @@ function makeRawBoardConv(seq: number): (op: RawDrawioOp, index: number) => { ed
     const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(op.style), label: String(op.value ?? ''), kind: st.text ? 'text' : 'agent', ...st };
     return { editId: 'e' + index, boardId: id, node };
   };
+}
+/** 一组 A1 格的包围区(用于大批量改动时整体聚焦,而非逐格)。 */
+function boundingA1(ops: { a1: string }[]): string | null {
+  let minC = Infinity, minR = Infinity, maxC = -Infinity, maxR = -Infinity;
+  for (const o of ops) {
+    const m = /([A-Za-z]+)([0-9]+)/.exec(o.a1.replace(/^.*!/, ''));
+    if (!m) continue;
+    let c = 0;
+    for (const ch of m[1]!.toUpperCase()) c = c * 26 + (ch.charCodeAt(0) - 64);
+    const r = parseInt(m[2]!, 10);
+    minC = Math.min(minC, c); maxC = Math.max(maxC, c); minR = Math.min(minR, r); maxR = Math.max(maxR, r);
+  }
+  if (!Number.isFinite(minC)) return null;
+  const col = (n: number): string => { let s = ''; let x = n; while (x > 0) { const r = (x - 1) % 26; s = String.fromCharCode(65 + r) + s; x = Math.floor((x - 1) / 26); } return s; };
+  return `${col(minC)}${minR}:${col(maxC)}${maxR}`;
 }
 const bandRect = (b: { x0: number; y0: number; x1: number; y1: number }): { x: number; y: number; w: number; h: number } => ({
   x: Math.min(b.x0, b.x1),
