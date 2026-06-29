@@ -316,6 +316,24 @@ svg { display: block; }
 .convo-bar .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .convo-new { font-size: 11.5px; color: var(--accent); background: transparent; border: 0; cursor: pointer; padding: 0; }
 .convo-new:hover { text-decoration: underline; }
+/* Agent 区 · 助手主页(空态) */
+.agent-home { padding: 2px 2px 6px; }
+.ai-intro { text-align: center; padding: 14px 8px 18px; }
+.ai-mark { width: 46px; height: 46px; border-radius: 12px; display: block; margin: 0 auto 10px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08); }
+.ai-title { font-size: 15px; font-weight: 650; color: var(--text); letter-spacing: -0.01em; }
+.ai-sub { font-size: 12.5px; color: var(--muted); margin: 6px auto 0; line-height: 1.55; max-width: 278px; }
+.qs-label { font-size: 11px; font-weight: 600; color: var(--faint); letter-spacing: 0.02em; margin: 14px 2px 8px; }
+.qs-list { display: flex; flex-direction: column; gap: 7px; }
+.qs { display: flex; align-items: center; gap: 9px; text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer; font-size: 13px; color: var(--text); transition: border-color 0.12s ease, background 0.12s ease; }
+.qs:hover { border-color: var(--accent); background: #f4f7fe; }
+.qs-tag { flex-shrink: 0; font-size: 10.5px; font-weight: 600; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; }
+.qs.do .qs-tag { color: var(--accent); background: #e8effe; }
+.qs.ask .qs-tag { color: #0d9488; background: #d7f1ec; }
+.qs-t { line-height: 1.3; }
+.recent-list { display: flex; flex-direction: column; gap: 3px; }
+.recent-list .recent { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: var(--muted); font-size: 12.5px; text-align: left; width: 100%; }
+.recent-list .recent:hover { background: var(--fill); color: var(--text-soft); }
+.recent-list .rt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* change cards */
 .change { border: 1px solid var(--line); border-radius: var(--r); margin-bottom: 8px; overflow: hidden; }
