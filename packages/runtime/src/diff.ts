@@ -81,6 +81,8 @@ function describe(op: EditOp): { badge: DiffBadge; label: string; after?: string
       return { badge: 'modify', label: `冻结 ${op.rows} 行 / ${op.cols} 列` };
     case 'autoFilter':
       return { badge: 'modify', label: '自动筛选' };
+    case 'insertChart':
+      return { badge: 'add', label: `插入${op.chartType === 'pie' ? '饼' : op.chartType === 'line' ? '折线' : '柱状'}图「${op.title}」(数据 ${op.range})` };
     case 'conditionalFormat':
       return { badge: 'modify', label: `条件格式 ${op.when}${op.style.bgColor ? ' → 填充 ' + op.style.bgColor : ''}${op.style.color ? ' 字色 ' + op.style.color : ''}` };
     case 'dataValidation':

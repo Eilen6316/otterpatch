@@ -25,6 +25,10 @@ import '@univerjs/preset-sheets-find-replace/lib/index.css';
 import { UniverSheetsDataValidationPreset } from '@univerjs/preset-sheets-data-validation';
 import dataValidationZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
 import '@univerjs/preset-sheets-data-validation/lib/index.css';
+// 浮动图片(图表自研落地处:Agent 渲染的 ECharts PNG 作为浮动图插入)
+import { UniverSheetsDrawingPreset } from '@univerjs/preset-sheets-drawing';
+import drawingZhCN from '@univerjs/preset-sheets-drawing/locales/zh-CN';
+import '@univerjs/preset-sheets-drawing/lib/index.css';
 
 // App 通过这个句柄"边画边改"地驱动 Univer 网格(Agent 操作可视化)。
 export interface SheetHandle {
@@ -50,6 +54,17 @@ export interface SheetHandle {
   conditionalFormat(a1: string, cond: { when: string; v1?: number | string; v2?: number }, fmt: { bgColor?: string; color?: string; bold?: boolean; italic?: boolean }): void;
   dataValidation(a1: string, rule: { kind: string; list?: string[]; min?: number; max?: number; v?: number }): void;
   createFilter(a1: string): void;
+  readGrid(a1: string): unknown[][];
+  insertChartImage(a1: string, dataUrl: string, width: number, height: number): void;
+}
+/** 浮动图片构建器(Univer FOverGridImageBuilder 的最小子集)。 */
+interface OverGridImageBuilder {
+  setSource(src: string, sourceType?: string): OverGridImageBuilder;
+  setColumn(c: number): OverGridImageBuilder;
+  setRow(r: number): OverGridImageBuilder;
+  setWidth(px: number): OverGridImageBuilder;
+  setHeight(px: number): OverGridImageBuilder;
+  buildAsync(): Promise<unknown>;
 }
 /** 条件格式规则构建器(Univer FConditionalFormattingBuilder 的最小子集)。 */
 interface CfBuilder {
@@ -104,6 +119,8 @@ interface FSheetOps {
   cancelFreeze(): void;
   newConditionalFormattingRule(): CfBuilder;
   addConditionalFormattingRule(rule: unknown): void;
+  newOverGridImage(): OverGridImageBuilder;
+  insertImages(images: unknown[]): void;
 }
 
 export interface UniSel {
@@ -333,6 +350,19 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
         if (r.getFilter()) r.getFilter()?.remove(); // 已有则先清,避免重复
         r.createFilter();
       }),
+      readGrid: (a1) => { let v: unknown[][] = []; safe(() => { v = (sheet()?.getRange(a1).getValues() as unknown[][]) ?? []; }); return v; },
+      insertChartImage: (a1, dataUrl, width, height) => {
+        // 异步:ECharts PNG → 浮动图片落到网格(builder 才能同时给位置+尺寸)
+        void (async () => {
+          try {
+            const s = sheet();
+            if (!s) return;
+            const { c, r } = parseStart(a1);
+            const img = await s.newOverGridImage().setSource(dataUrl, 'BASE64').setColumn(c).setRow(r).setWidth(width).setHeight(height).buildAsync();
+            s.insertImages([img]);
+          } catch { /* drawing 预设未就绪 */ }
+        })();
+      },
       getSheet: () => { try { return snap(apiRef.current?.getActiveWorkbook?.() as unknown as FWorkbookLike | null); } catch { return null; } },
     };
   }, []);
@@ -341,7 +371,7 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
     if (!hostRef.current) return;
     const { univer, univerAPI } = createUniver({
       locale: LocaleType.ZH_CN,
-      locales: { [LocaleType.ZH_CN]: merge({}, sheetsZhCN, filterZhCN, sortZhCN, condFmtZhCN, findReplaceZhCN, dataValidationZhCN) },
+      locales: { [LocaleType.ZH_CN]: merge({}, sheetsZhCN, filterZhCN, sortZhCN, condFmtZhCN, findReplaceZhCN, dataValidationZhCN, drawingZhCN) },
       theme: { ...defaultTheme, primary: BRAND_PRIMARY },
       // classic 带页签的功能区:常用功能(筛选/排序/条件格式/数据验证/冻结等)在 数据/开始/视图 页签里可发现
       presets: [
@@ -351,6 +381,7 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
         UniverSheetsConditionalFormattingPreset(),
         UniverSheetsFindReplacePreset(),
         UniverSheetsDataValidationPreset(),
+        UniverSheetsDrawingPreset(),
       ],
     });
     univerAPI.createWorkbook({ name: '月度销售表' });

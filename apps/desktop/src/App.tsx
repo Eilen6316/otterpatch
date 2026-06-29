@@ -11,6 +11,7 @@ import { LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
 import { Markdown } from './Markdown.js';
+import { chartToPngDataUrl, gridToChartSpec } from './chart.js';
 
 /** Agent 在网格上的一步操作(用于"边画边改"的可视化播放)。 */
 interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bold?: boolean; numFmt?: string; note: string; before?: unknown; editId?: string }
@@ -896,9 +897,10 @@ export function App() {
   };
   const applyExcelStructure = (cs: unknown): void => {
     const api = univerRef.current;
-    const c = cs as { edits?: Array<{ target: string; op: { kind?: string; count?: number; before?: boolean; rows?: number; cols?: number; by?: number; asc?: boolean; when?: string; v1?: number | string; v2?: number; rule?: string; list?: string[]; min?: number; max?: number; v?: number; style?: { bgColor?: string; color?: string; bold?: boolean; italic?: boolean } } }>; anchors?: Record<string, { portable?: { a1?: string } }> } | null;
+    const c = cs as { edits?: Array<{ target: string; op: { kind?: string; count?: number; before?: boolean; rows?: number; cols?: number; by?: number; asc?: boolean; when?: string; v1?: number | string; v2?: number; rule?: string; list?: string[]; min?: number; max?: number; v?: number; style?: { bgColor?: string; color?: string; bold?: boolean; italic?: boolean }; chartType?: 'bar' | 'line' | 'pie'; title?: string; range?: string } }>; anchors?: Record<string, { portable?: { a1?: string } }> } | null;
     if (!api || !c?.edits) return;
-    const ADV = new Set(['insertRows', 'deleteRows', 'insertCols', 'deleteCols', 'mergeCells', 'unmergeCells', 'freezePanes', 'sortRange', 'deleteRange', 'conditionalFormat', 'dataValidation', 'autoFilter']);
+    const colA = (n: number): string => { let s = ''; let x = n + 1; while (x > 0) { const r = (x - 1) % 26; s = String.fromCharCode(65 + r) + s; x = Math.floor((x - 1) / 26); } return s; };
+    const ADV = new Set(['insertRows', 'deleteRows', 'insertCols', 'deleteCols', 'mergeCells', 'unmergeCells', 'freezePanes', 'sortRange', 'deleteRange', 'conditionalFormat', 'dataValidation', 'autoFilter', 'insertChart']);
     for (const e of c.edits) {
       const k = e.op?.kind ?? '';
       if (!ADV.has(k)) continue;
@@ -917,6 +919,18 @@ export function App() {
       else if (k === 'conditionalFormat') api.conditionalFormat(a1, { when: e.op?.when ?? 'notEmpty', v1: e.op?.v1, v2: e.op?.v2 }, e.op?.style ?? {});
       else if (k === 'dataValidation') api.dataValidation(a1, { kind: e.op?.rule ?? 'list', list: e.op?.list, min: e.op?.min, max: e.op?.max, v: e.op?.v });
       else if (k === 'autoFilter') api.createFilter(a1);
+      else if (k === 'insertChart') {
+        const grid = api.readGrid(a1); // a1 = 含表头的数据范围
+        if (grid.length) {
+          const spec = gridToChartSpec(grid, e.op?.chartType ?? 'bar', e.op?.title ?? '图表');
+          const png = chartToPngDataUrl(spec);
+          // 放到数据范围右侧两列处
+          const end = (a1.split(':')[1] ?? a1.split(':')[0] ?? 'A1');
+          const ec = a1RowCol(end);
+          const place = colA(ec.col + 2) + (a1RowCol(a1.split(':')[0] ?? 'A1').row + 1);
+          api.insertChartImage(place, png, 640, 400);
+        }
+      }
     }
   };
   /** 把 Agent 返回的 diff 转成可播放的网格操作:setStyle→真实底色/字色/加粗;否则写值。 */

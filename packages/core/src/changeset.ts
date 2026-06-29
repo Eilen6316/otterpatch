@@ -67,6 +67,7 @@ export type EditOp =
   | { family: 'structure'; kind: 'unmergeCells' }
   | { family: 'structure'; kind: 'freezePanes'; rows: number; cols: number }
   | { family: 'structure'; kind: 'autoFilter' }
+  | { family: 'object'; kind: 'insertChart'; chartType: 'bar' | 'line' | 'pie'; range: string; title: string }
   | { family: 'style'; kind: 'conditionalFormat'; when: string; v1?: number | string; v2?: number; style: AbstractStyle }
   | { family: 'style'; kind: 'dataValidation'; rule: 'list' | 'numberBetween' | 'numberGreaterThan' | 'checkbox' | 'dateBetween'; list?: string[]; min?: number; max?: number; v?: number }
   // Word(flow)扩展

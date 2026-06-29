@@ -32,6 +32,7 @@ const RISK_BY_KIND: Record<EditOpKind, RiskLevel> = {
   autoFilter: 'safe',
   conditionalFormat: 'safe',
   dataValidation: 'safe',
+  insertChart: 'caution',
   addObject: 'caution',
   // 破坏性:删除数据 / 级联 / 不透明原生 op
   deleteRange: 'destructive',

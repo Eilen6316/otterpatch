@@ -40,7 +40,7 @@ export const EXCEL_OPS = [
   'setValue', 'setFormula', 'setStyle', 'setNumberFormat',
   'insertRows', 'deleteRows', 'insertCols', 'deleteCols',
   'merge', 'unmerge', 'freeze', 'clear', 'sort',
-  'condFormat', 'dataValidation', 'filter',
+  'condFormat', 'dataValidation', 'filter', 'chart',
 ] as const;
 export type ExcelOp = (typeof EXCEL_OPS)[number];
 export type CondWhen = 'greaterThan' | 'greaterThanOrEqual' | 'lessThan' | 'between' | 'equalTo' | 'textContains' | 'notEmpty' | 'formula';
@@ -68,6 +68,8 @@ export interface ExcelProposal {
     min?: number; // dataValidation numberBetween 下界
     max?: number; // dataValidation numberBetween 上界
     v?: number; // dataValidation numberGreaterThan 阈值
+    chartType?: 'bar' | 'line' | 'pie'; // chart 图表类型
+    title?: string; // chart 标题
   }>;
 }
 
@@ -105,6 +107,7 @@ function buildExcelChangeSet(req: ProposeRequest, p: ExcelProposal): ChangeSet {
       case 'condFormat': op = { family: 'style', kind: 'conditionalFormat', when: e.when ?? 'notEmpty', ...(e.v1 != null ? { v1: e.v1 } : {}), ...(e.v2 != null ? { v2: e.v2 } : {}), style: e.style ?? {} }; break;
       case 'dataValidation': op = { family: 'style', kind: 'dataValidation', rule: e.rule ?? 'list', ...(e.list ? { list: e.list } : {}), ...(e.min != null ? { min: e.min } : {}), ...(e.max != null ? { max: e.max } : {}), ...(e.v != null ? { v: e.v } : {}) }; break;
       case 'filter': op = { family: 'structure', kind: 'autoFilter' }; break;
+      case 'chart': op = { family: 'object', kind: 'insertChart', chartType: e.chartType ?? 'bar', range: e.cell, title: e.title ?? '图表' }; break;
       case 'clear': op = { family: 'value', kind: 'deleteRange' }; break;
       default: op = { family: 'value', kind: 'setValue', value: (e.value ?? null) as CellValue };
     }
@@ -157,6 +160,8 @@ export const excelDialect: HostDialect = {
             min: { type: 'number', description: 'dataValidation numberBetween 下界' },
             max: { type: 'number', description: 'dataValidation numberBetween 上界' },
             v: { type: 'number', description: 'dataValidation numberGreaterThan 阈值' },
+            chartType: { type: 'string', enum: ['bar', 'line', 'pie'], description: 'chart 图表类型' },
+            title: { type: 'string', description: 'chart 标题' },
           },
           required: ['cell', 'op'],
         },

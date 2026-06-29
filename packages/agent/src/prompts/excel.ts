@@ -13,8 +13,9 @@ export const EXCEL_SYSTEM =
   'sort(cell 给【不含表头】的数据范围如 A2:F6,by=范围内第几列从0起,asc 升降)、' +
   'condFormat(条件格式规则:cell 给范围,when 取 greaterThan/lessThan/between/equalTo/textContains/notEmpty/formula,v1(/v2)给阈值,style 给满足时的格式如 {bgColor:"#ffd6d6"})、' +
   'dataValidation(数据验证:cell 给范围,rule 取 list(配 list 选项做下拉)/numberBetween(min,max)/numberGreaterThan(v)/checkbox)、' +
-  'filter(对 cell 范围开启自动筛选);这些同样先审阅再落表。' +
-  '(图表需付费插件,暂不内置;需要"透视表/分组汇总"就用 aggregate 的 groupBy 算出各组结果,再用 setValue/setFormula 写成一张新汇总表 —— 即"计算型透视表"。)';
+  'filter(对 cell 范围开启自动筛选)、' +
+  'chart(插入图表:cell 给【含表头的数据范围】如 A1:C7(首列=类别,其余数值列=系列),chartType 取 bar/line/pie,title 给标题 —— 系统会渲染成图片浮在数据右侧);这些同样先审阅再落表。' +
+  '(图表用 ECharts 渲染成图片,非 Excel 原生图表但导出仍在;需要"透视表/分组汇总"就用 aggregate 的 groupBy 算出各组结果,再写成新汇总表 —— 计算型透视表。)';
 
 export const EXCEL_TOOL_DESC =
   '提出对所选单元格的修改建议(不直接执行,交用户审阅)。用 A1 引用;改内容用 setValue/setFormula,改格式(标红/加粗/字色/对齐)用 setStyle,数字格式用 setNumberFormat。';
