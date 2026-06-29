@@ -594,7 +594,7 @@ export function App() {
         const r = await fetch(ep + '/propose', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ format: fmt, intent: theIntent, context: ctx, provider, model, apiKey }),
+          body: JSON.stringify({ format: fmt, intent: theIntent, context: ctx, provider, model, apiKey, ...(isExcel && uniSel?.sheet ? { sheet: uniSel.sheet } : {}) }),
         });
         const data = (await r.json()) as { changeSet?: unknown; diff?: AgentDiff; answer?: string; error?: string };
         if (!r.ok) throw new Error(data.error ?? 'propose failed');

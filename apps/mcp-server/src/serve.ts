@@ -66,7 +66,15 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
           ...(a.model ? { model: a.model as string } : {}),
         });
         const r = await rt.respond(
-          { hostId: 'serve', format: String(a.format), intent: String(a.intent ?? ''), baseRev: 0 as DocRev, anchors: [], context: String(a.context ?? '') },
+          {
+            hostId: 'serve',
+            format: String(a.format),
+            intent: String(a.intent ?? ''),
+            baseRev: 0 as DocRev,
+            anchors: [],
+            context: String(a.context ?? ''),
+            ...(a.sheet ? { sheet: a.sheet as { a1: string; values: unknown[][] } } : {}),
+          },
           model,
         );
         if (r.kind === 'answer') send(res, 200, { answer: r.text });

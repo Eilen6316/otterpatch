@@ -53,7 +53,8 @@ export interface UniSel {
   a1: string;
   rows: number;
   cols: number;
-  text: string; // 喂给 Agent 的选区上下文(值表格 + 格式说明)
+  text: string; // 喂给模型 prompt 的全局概览 + 选区焦点(廉价)
+  sheet?: { a1: string; values: unknown[][] }; // 整表全量(本地传给 serve,供 read_range/aggregate 按需取数)
 }
 
 const HEADERS = ['日期', '产品', '销量', '单价', '金额', '毛利率'];
@@ -167,7 +168,7 @@ function snap(wb: FWorkbookLike | null | undefined): UniSel | null {
       `[整张表] 范围 ${sheetA1}(${R} 行 × ${C} 列)\n列概览: ${colLegend}\n数据(单元格=值):\n${dataBlock}\n` +
       `[当前焦点选区] ${a1}(${rows} 行 × ${cols} 列):用户圈选了这块,优先围绕它操作/回答——但你能看到整张表的全貌。` +
       (notes.length ? `\n焦点区已有格式: ${notes.join('; ')}` : '');
-    return { a1, rows, cols, text };
+    return { a1, rows, cols, text, sheet: { a1: sheetA1, values: sheetVals.slice(0, 3000) } };
   } catch {
     return null;
   }
