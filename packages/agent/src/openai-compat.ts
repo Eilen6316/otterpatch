@@ -89,6 +89,32 @@ export interface OpenAICompatOptions {
   forcedTool?: boolean;
 }
 
+/**
+ * 发送前归一化消息序列,防止前端 thread 被快速连发/请求失败等写坏后,触发 provider 的
+ * "roles must alternate" / "first message must be user" 400/500:
+ * - 丢弃空内容的非系统消息;
+ * - 合并相邻同角色消息(content 换行拼接);
+ * - system 之后首条若为 assistant 则丢弃(provider 要求 user 起头)。
+ */
+export function normalizeMessages(
+  msgs: OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+  const out: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
+  for (const m of msgs) {
+    const c = typeof m.content === 'string' ? m.content : '';
+    if (m.role !== 'system' && !c.trim()) continue;
+    const prev = out[out.length - 1];
+    if (prev && prev.role === m.role && (m.role === 'user' || m.role === 'assistant') && typeof prev.content === 'string') {
+      prev.content = `${prev.content}\n${c}`;
+    } else {
+      out.push({ ...m });
+    }
+  }
+  const sysCount = out[0]?.role === 'system' ? 1 : 0;
+  if (out[sysCount]?.role === 'assistant') out.splice(sysCount, 1);
+  return out;
+}
+
 export class OpenAICompatModelClient implements ModelClient {
   private readonly client: OpenAI;
   private readonly model: string;
@@ -152,12 +178,12 @@ export class OpenAICompatModelClient implements ModelClient {
 
   /** 智能路由 + 多步 loop:tool_choice:auto;模型可先调只读工具(read_range/aggregate)按需取数,再回答或改表。 */
   async respond(req: ProposeRequest, dialect: HostDialect): Promise<AgentResponse> {
-    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    const messages = normalizeMessages([
       { role: 'system', content: ROUTING_PREAMBLE + '\n\n' + dialect.systemPrompt + '\n\n当前表格/选区上下文:\n' + req.context },
       // 多轮:历史对话插在 system 之后、当前指令之前,让 Agent 关联上下文
       ...(req.history ?? []).slice(-12).map((m) => ({ role: m.role, content: m.content })),
       { role: 'user', content: req.intent },
-    ];
+    ]);
     const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       { type: 'function', function: { name: dialect.toolName, description: dialect.toolDescription, parameters: dialect.parameters } },
       {

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { DocRev } from '@otterpatch/core';
-import { Agent, ConventionStack, MockModelClient, conventionFromMarkdown, createModelClient, PROVIDERS, type Provider } from './index.js';
+import { Agent, ConventionStack, MockModelClient, conventionFromMarkdown, createModelClient, normalizeMessages, PROVIDERS, type Provider } from './index.js';
 import { defaultLibrary } from '@otterpatch/skills';
 
 test('Agent excel: 意图 + Mock → grid setValue ChangeSet', async () => {
@@ -126,4 +126,37 @@ test('createModelClient 覆盖 8 家厂商(9 个 provider key)', () => {
     assert.equal(typeof c.proposeChangeSet, 'function', p);
   }
   assert.equal(Object.keys(PROVIDERS).length, 9);
+});
+
+test('normalizeMessages: 合并相邻同角色,防 provider roles-must-alternate 500', () => {
+  // 快速连发/answer+diff 拆轮造成的背靠背 assistant → 合并成一条
+  const out = normalizeMessages([
+    { role: 'system', content: 'S' },
+    { role: 'user', content: '改X' },
+    { role: 'assistant', content: '好的' },
+    { role: 'assistant', content: '提出改动…' },
+    { role: 'user', content: '改Y' },
+  ]);
+  assert.deepEqual(out.map((m) => m.role), ['system', 'user', 'assistant', 'user']);
+  assert.equal(out[2]!.content, '好的\n提出改动…');
+});
+
+test('normalizeMessages: 丢空消息 + 合并背靠背 user(失败回滚/空指令兜底)', () => {
+  const out = normalizeMessages([
+    { role: 'system', content: 'S' },
+    { role: 'user', content: '悬挂的旧指令' },
+    { role: 'user', content: '' }, // 空 user 应被丢弃
+    { role: 'user', content: '当前指令' },
+  ]);
+  assert.deepEqual(out.map((m) => m.role), ['system', 'user']);
+  assert.equal(out[1]!.content, '悬挂的旧指令\n当前指令');
+});
+
+test('normalizeMessages: system 之后若以 assistant 起头则丢弃(provider 要求 user 起头)', () => {
+  const out = normalizeMessages([
+    { role: 'system', content: 'S' },
+    { role: 'assistant', content: '截断后悬出的 assistant' },
+    { role: 'user', content: '当前指令' },
+  ]);
+  assert.deepEqual(out.map((m) => m.role), ['system', 'user']);
 });

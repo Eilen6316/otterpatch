@@ -47,7 +47,10 @@ function buildHistory(thread: Turn[]): Array<{ role: 'user' | 'assistant'; conte
   if (proj.length <= KEEP) return proj;
   const dropped = proj.slice(0, proj.length - KEEP);
   const kept = proj.slice(-KEEP);
-  const gist = '[此前对话要点] ' + dropped.filter((m) => m.role === 'user').map((m) => m.content).slice(-6).join(' / ');
+  const userPts = dropped.filter((m) => m.role === 'user').map((m) => m.content).slice(-6);
+  // 关键:被裁掉回合里"已接受/已撤销"的净状态不能丢,否则模型会重复提已写入的改动或在已撤销的状态上续推
+  const outcomes = dropped.filter((m) => m.role === 'assistant' && /已接受并写入|已撤销/.test(m.content)).map((m) => m.content).slice(-6);
+  const gist = '[此前对话要点] ' + [...userPts, ...outcomes].join(' / ');
   const first = kept[0];
   if (first) kept[0] = { ...first, content: gist + '\n' + first.content };
   return kept;
@@ -456,6 +459,7 @@ export function App() {
   const [boardSel, setBoardSel] = useState<BoardSel | null>(null);
   const univerRef = useRef<SheetHandle>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
+  const sendingRef = useRef(false); // 同步重入锁:异步 busy state 拦不住同一帧内的连发
   const [playList, setPlayList] = useState<GridOp[]>([]);
   const [playIdx, setPlayIdx] = useState(-1);
   const [playing, setPlaying] = useState(false);
@@ -640,12 +644,15 @@ export function App() {
   };
   /** 配了 otterpatch-serve 端点 + API Key → 走真实 runtime(propose→diff);否则用内置演示。 */
   const send = async (intentOverride?: string): Promise<void> => {
-    const theIntent = intentOverride ?? intent;
+    if (sendingRef.current) return; // 同步拦截同一帧内的连发,避免把 thread 写成背靠背同角色
+    const theIntent = (intentOverride ?? intent).trim();
+    if (!theIntent) return; // 空指令不发(否则产生空 user 消息污染历史)
     if (intentOverride && intentOverride !== intent) setIntent(intentOverride);
     const ctx = isExcel ? (uniSel ? uniSel.text : '(用户未圈选具体区域,请基于整张表理解)') : fmt === 'drawio' && boardSel ? boardSel.context : selectionContext();
     setSendErr(null);
     const ep = server.trim().replace(/\/$/, '');
     if (ep && apiKey) {
+      sendingRef.current = true;
       setBusy(true);
       setSendErr(null);
       setThread((th) => [...th, { role: 'user', text: theIntent }]); // 用户气泡立刻进流
@@ -677,6 +684,9 @@ export function App() {
       } catch (e) {
         const m = e instanceof Error ? e.message : String(e);
         const refused = /failed to fetch|refused|ECONNREFUSED|networkerror|load failed/i.test(m);
+        // 回滚乐观追加的 user 气泡,避免 thread 以未被回复的 user 收尾(下次会拼成背靠背 user)
+        setThread((th) => (th[th.length - 1]?.role === 'user' ? th.slice(0, -1) : th));
+        setIntent(theIntent); // 把指令放回输入框,方便重试
         setSendErr(
           refused
             ? `连不上本机 Agent 服务(${ep})。桌面版会自动启动它;若在浏览器里测试,请先运行:node apps/mcp-server/dist/serve.js`
@@ -684,6 +694,7 @@ export function App() {
         );
       } finally {
         setBusy(false);
+        sendingRef.current = false;
       }
       return;
     }
