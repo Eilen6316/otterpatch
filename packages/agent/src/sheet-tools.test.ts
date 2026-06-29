@@ -31,6 +31,19 @@ test('aggregate:整列求和/计数跳过表头', () => {
   assert.equal(aggregate(SHEET, 'C', 'max'), '20');
 });
 
+test('aggregate:groupBy 透视/分组汇总', () => {
+  // 按 A 列(名称)分组,汇总 B 列(数量)—— 这里名称都唯一,各成一组
+  const g = aggregate(SHEET, 'B', 'sum', 'A');
+  assert.match(g, /甲: 2/);
+  assert.match(g, /乙: 3/);
+  assert.match(g, /丙: 5/);
+});
+
+test('aggregate:where 先筛选再聚合', () => {
+  // 只统计 单价(C)>10 的行的 数量(B):乙(3,单价20)+丙(5,单价0?) → 仅乙满足 → 3
+  assert.equal(aggregate(SHEET, 'B', 'sum', undefined, { col: 'C', op: '>', value: 10 }), '3');
+});
+
 test('execSheetTool:按工具名分发;无 sheet 或未知工具返回占位', () => {
   assert.match(execSheetTool('read_range', { a1: 'B2' }, SHEET), /B2=2/);
   assert.equal(execSheetTool('aggregate', { column: 'B', op: 'sum' }, SHEET), '10');

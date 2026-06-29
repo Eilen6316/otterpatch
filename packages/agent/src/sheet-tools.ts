@@ -40,8 +40,23 @@ export const READ_RANGE_DEF: ToolDef = {
 export const AGGREGATE_DEF: ToolDef = {
   name: 'aggregate',
   description: AGGREGATE_DESC,
-  parameters: { type: 'object', properties: { column: { type: 'string', description: '列字母,如 C' }, op: { type: 'string', enum: ['sum', 'avg', 'min', 'max', 'count'] } }, required: ['column', 'op'] },
+  parameters: {
+    type: 'object',
+    properties: {
+      column: { type: 'string', description: '要聚合的列字母,如 C' },
+      op: { type: 'string', enum: ['sum', 'avg', 'min', 'max', 'count'] },
+      groupBy: { type: 'string', description: '(可选)按此列分组,做透视/分组汇总,如按产品列 B 汇总销量 C' },
+      where: {
+        type: 'object',
+        description: '(可选)先按条件筛选行再聚合',
+        properties: { col: { type: 'string', description: '条件列字母' }, op: { type: 'string', enum: ['=', '!=', '>', '<', 'contains'] }, value: { description: '比较值' } },
+        required: ['col', 'op', 'value'],
+      },
+    },
+    required: ['column', 'op'],
+  },
 };
+export interface AggWhere { col: string; op: '=' | '!=' | '>' | '<' | 'contains'; value: string | number }
 
 /** 辅助工具菜单:answer_user 总在;有整表快照时再加 read_range/aggregate 取数工具。 */
 export function auxToolDefs(hasSheet: boolean): ToolDef[] {
@@ -100,29 +115,64 @@ export function readRange(sheet: SheetData, query: string): string {
   return lines.join('\n') || '(空)';
 }
 
-/** 对某列做聚合(跳过表头)。 */
-export function aggregate(sheet: SheetData, column: string, op: string): string {
-  const s = startOf(sheet.a1);
-  const ci = colIndex(column.replace(/[^A-Za-z]/g, '') || 'A') - s.c;
-  const nums: number[] = [];
-  for (let i = 1; i < sheet.values.length; i++) {
-    const v = sheet.values[i]?.[ci];
-    const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[,%¥$\s]/g, ''));
-    if (Number.isFinite(n)) nums.push(n);
-  }
-  if (!nums.length) return '该列无数值';
+const toNumber = (v: unknown): number => (typeof v === 'number' ? v : parseFloat(String(v).replace(/[,%¥$\s]/g, '')));
+function aggOf(nums: number[], op: string): string {
+  if (!nums.length) return '无数值';
   const sum = nums.reduce((p, q) => p + q, 0);
-  if (op === 'sum') return String(sum);
+  if (op === 'sum') return String(Math.round(sum * 1000) / 1000);
   if (op === 'avg') return String(Math.round((sum / nums.length) * 1000) / 1000);
   if (op === 'min') return String(Math.min(...nums));
   if (op === 'max') return String(Math.max(...nums));
   if (op === 'count') return String(nums.length);
-  return `sum=${sum} avg=${Math.round((sum / nums.length) * 100) / 100} min=${Math.min(...nums)} max=${Math.max(...nums)} count=${nums.length}`;
+  return `sum=${Math.round(sum * 1000) / 1000} avg=${Math.round((sum / nums.length) * 100) / 100} min=${Math.min(...nums)} max=${Math.max(...nums)} count=${nums.length}`;
+}
+
+/** 对某列做聚合(跳过表头);支持 where 先筛选、groupBy 分组(透视/分组汇总)。 */
+export function aggregate(sheet: SheetData, column: string, op: string, groupBy?: string, where?: AggWhere): string {
+  const s = startOf(sheet.a1);
+  const ci = colIndex(column.replace(/[^A-Za-z]/g, '') || 'A') - s.c;
+  const gi = groupBy ? colIndex(groupBy.replace(/[^A-Za-z]/g, '') || 'A') - s.c : -1;
+  const wi = where ? colIndex(where.col.replace(/[^A-Za-z]/g, '') || 'A') - s.c : -1;
+  const pass = (row: unknown[]): boolean => {
+    if (wi < 0 || !where) return true;
+    const cell = row[wi];
+    const a = toNumber(cell), b = toNumber(where.value);
+    const bothNum = Number.isFinite(a) && Number.isFinite(b);
+    switch (where.op) {
+      case '=': return String(cell ?? '') === String(where.value);
+      case '!=': return String(cell ?? '') !== String(where.value);
+      case '>': return bothNum && a > b;
+      case '<': return bothNum && a < b;
+      case 'contains': return String(cell ?? '').includes(String(where.value));
+      default: return true;
+    }
+  };
+  if (gi >= 0) {
+    const groups = new Map<string, number[]>();
+    for (let i = 1; i < sheet.values.length; i++) {
+      const row = sheet.values[i] ?? [];
+      if (!pass(row)) continue;
+      const g = String(row[gi] ?? '(空)');
+      const n = toNumber(row[ci]);
+      if (!groups.has(g)) groups.set(g, []);
+      if (Number.isFinite(n)) groups.get(g)!.push(n);
+    }
+    if (!groups.size) return '无数据';
+    return [...groups].map(([g, ns]) => `${g}: ${aggOf(ns, op)}`).join('\n');
+  }
+  const nums: number[] = [];
+  for (let i = 1; i < sheet.values.length; i++) {
+    const row = sheet.values[i] ?? [];
+    if (!pass(row)) continue;
+    const n = toNumber(row[ci]);
+    if (Number.isFinite(n)) nums.push(n);
+  }
+  return nums.length ? aggOf(nums, op) : '该列无数值';
 }
 
 /** 按工具名执行只读取数工具,返回回喂模型的文本。 */
-export function execSheetTool(name: string, args: { a1?: string; column?: string; op?: string }, sheet?: SheetData): string {
+export function execSheetTool(name: string, args: { a1?: string; column?: string; op?: string; groupBy?: string; where?: AggWhere }, sheet?: SheetData): string {
   if (name === 'read_range' && sheet) return readRange(sheet, String(args.a1 ?? ''));
-  if (name === 'aggregate' && sheet) return aggregate(sheet, String(args.column ?? ''), String(args.op ?? ''));
+  if (name === 'aggregate' && sheet) return aggregate(sheet, String(args.column ?? ''), String(args.op ?? ''), args.groupBy, args.where);
   return '(unknown tool)';
 }

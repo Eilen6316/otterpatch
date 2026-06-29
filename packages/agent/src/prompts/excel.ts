@@ -14,7 +14,7 @@ export const EXCEL_SYSTEM =
   'condFormat(条件格式规则:cell 给范围,when 取 greaterThan/lessThan/between/equalTo/textContains/notEmpty/formula,v1(/v2)给阈值,style 给满足时的格式如 {bgColor:"#ffd6d6"})、' +
   'dataValidation(数据验证:cell 给范围,rule 取 list(配 list 选项做下拉)/numberBetween(min,max)/numberGreaterThan(v)/checkbox)、' +
   'filter(对 cell 范围开启自动筛选);这些同样先审阅再落表。' +
-  '(图表/透视表需付费插件,暂不内置;需要"透视"就读数→分组聚合→用 setValue/setFormula 写一张新汇总表。)';
+  '(图表需付费插件,暂不内置;需要"透视表/分组汇总"就用 aggregate 的 groupBy 算出各组结果,再用 setValue/setFormula 写成一张新汇总表 —— 即"计算型透视表"。)';
 
 export const EXCEL_TOOL_DESC =
   '提出对所选单元格的修改建议(不直接执行,交用户审阅)。用 A1 引用;改内容用 setValue/setFormula,改格式(标红/加粗/字色/对齐)用 setStyle,数字格式用 setNumberFormat。';
