@@ -648,7 +648,9 @@ export function App() {
     const theIntent = (intentOverride ?? intent).trim();
     if (!theIntent) return; // 空指令不发(否则产生空 user 消息污染历史)
     if (intentOverride && intentOverride !== intent) setIntent(intentOverride);
-    const ctx = isExcel ? (uniSel ? uniSel.text : '(用户未圈选具体区域,请基于整张表理解)') : fmt === 'drawio' && boardSel ? boardSel.context : selectionContext();
+    // Excel:永远主动拉整张表(概览+数据+焦点),与是否圈选无关 —— 没圈选也能看全局、也有 read_range/aggregate 工具
+    const sheetSnap = isExcel ? (univerRef.current?.getSheet() ?? uniSel) : null;
+    const ctx = isExcel ? (sheetSnap?.text ?? '(表格为空)') : fmt === 'drawio' && boardSel ? boardSel.context : selectionContext();
     setSendErr(null);
     const ep = server.trim().replace(/\/$/, '');
     if (ep && apiKey) {
@@ -661,7 +663,7 @@ export function App() {
         const r = await fetch(ep + '/propose', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ format: fmt, intent: theIntent, context: ctx, provider, model, apiKey, ...(isExcel && uniSel?.sheet ? { sheet: uniSel.sheet } : {}), ...(thread.length ? { history: buildHistory(thread) } : {}) }),
+          body: JSON.stringify({ format: fmt, intent: theIntent, context: ctx, provider, model, apiKey, ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(thread.length ? { history: buildHistory(thread) } : {}) }),
         });
         const data = (await r.json()) as { changeSet?: unknown; diff?: AgentDiff; answer?: string; error?: string };
         if (!r.ok) throw new Error(data.error ?? 'propose failed');

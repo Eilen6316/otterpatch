@@ -35,6 +35,8 @@ export interface SheetHandle {
   setNumberFormat(a1: string, pattern: string): void;
   focus(a1: string): void;
   getValue(a1: string): unknown;
+  /** 整张表的全局快照(概览 + 数据 + 焦点),与是否圈选无关。 */
+  getSheet(): UniSel | null;
 }
 interface FRangeOps {
   setValue(v: unknown): void;
@@ -120,55 +122,60 @@ function colStat(colVals: unknown[]): string {
 // 让 Agent 像人一样"先扫一眼全表",再聚焦选区,而不是盲人摸象。
 function snap(wb: FWorkbookLike | null | undefined): UniSel | null {
   try {
-    const range = wb?.getActiveRange();
-    if (!range) return null;
-    const a1 = range.getA1Notation();
-    const selVals = range.getValues();
-    const styles = range.getCellStyles();
-    const rows = selVals.length;
-    const cols = selVals[0]?.length ?? 0;
-    const start = parseStart(a1);
-
-    // 整张表(used range)
+    const range = wb?.getActiveRange() ?? null;
+    // 整张表(used range)—— 与选区无关,始终构建,这样没圈选也能"看全局"
     const ws = (wb as unknown as { getActiveSheet?: () => { getDataRange?: () => { getA1Notation?: () => string; getValues?: () => unknown[][] } } | null } | null)?.getActiveSheet?.();
     const dr = ws?.getDataRange?.();
-    const sheetA1 = dr?.getA1Notation?.() ?? a1;
-    const sheetVals = (dr?.getValues?.() as unknown[][] | undefined) ?? selVals;
-    const R = sheetVals.length;
-    const C = sheetVals[0]?.length ?? cols;
-    const sStart = parseStart(sheetA1);
+    const sheetA1 = dr?.getA1Notation?.();
+    const sheetVals = dr?.getValues?.() as unknown[][] | undefined;
+    if ((!sheetA1 || !sheetVals || !sheetVals.length) && !range) return null; // 空表且无选区
+    const sA1 = sheetA1 ?? range!.getA1Notation();
+    const sVals = sheetVals && sheetVals.length ? sheetVals : range!.getValues();
+    const R = sVals.length;
+    const C = sVals[0]?.length ?? 0;
+    const sStart = parseStart(sA1);
     const sCols = Array.from({ length: C }, (_, i) => colName(sStart.c + i));
-    const header = (sheetVals[0] ?? []).map((v) => (v == null ? '' : String(v)));
-    const colLegend = sCols.map((L, i) => `${L}=${header[i] || '?'}(${colStat(sheetVals.map((row) => row[i]))})`).join(' | ');
+    const header = (sVals[0] ?? []).map((v) => (v == null ? '' : String(v)));
+    const colLegend = sCols.map((L, i) => `${L}=${header[i] || '?'}(${colStat(sVals.map((row) => row[i]))})`).join(' | ');
 
     const rowLine = (ri: number): string =>
-      `第${sStart.r + ri + 1}行: ` + (sheetVals[ri] ?? []).map((v, c) => `${sCols[c]}${sStart.r + ri + 1}=${v == null || v === '' ? '(空)' : String(v)}`).join('  ');
+      `第${sStart.r + ri + 1}行: ` + (sVals[ri] ?? []).map((v, c) => `${sCols[c]}${sStart.r + ri + 1}=${v == null || v === '' ? '(空)' : String(v)}`).join('  ');
     let dataBlock: string;
     if (R <= 40) {
-      dataBlock = sheetVals.map((_, r) => rowLine(r)).join('\n'); // 小表:全量
+      dataBlock = sVals.map((_, r) => rowLine(r)).join('\n'); // 小表:全量
     } else {
       const head = [0, 1, 2, 3].filter((r) => r < R).map(rowLine);
       const tail = [R - 2, R - 1].filter((r) => r >= 4).map(rowLine);
-      dataBlock = head.join('\n') + `\n…(中间省略 ${R - head.length - tail.length} 行,需要细节可按列名/统计判断或针对具体行作答)…\n` + tail.join('\n'); // 大表:采样
+      dataBlock = head.join('\n') + `\n…(中间省略 ${R - head.length - tail.length} 行,需要细节可调 read_range/aggregate 取)…\n` + tail.join('\n'); // 大表:采样
     }
 
-    const notes: string[] = [];
-    styles.forEach((row, r) =>
-      row.forEach((st, c) => {
-        if (!st) return;
-        const fmt: string[] = [];
-        if (st.bold) fmt.push('加粗');
-        if (st.italic) fmt.push('斜体');
-        if (st.fontSize) fmt.push(`${st.fontSize}px`);
-        if (fmt.length) notes.push(`${colName(start.c + c)}${start.r + r + 1}=${fmt.join('/')}`);
-      }),
-    );
+    // 焦点选区(可选):没圈选就明确告诉 Agent 基于整张表
+    let a1 = sA1;
+    let rows = R;
+    let cols = C;
+    let focusText = '\n[未圈选具体区域]:用户没有圈选,请直接基于上面整张表理解与作答/操作。';
+    if (range) {
+      a1 = range.getA1Notation();
+      const selVals = range.getValues();
+      rows = selVals.length;
+      cols = selVals[0]?.length ?? 0;
+      const start = parseStart(a1);
+      const notes: string[] = [];
+      range.getCellStyles().forEach((row, r) =>
+        row.forEach((st, c) => {
+          if (!st) return;
+          const fmt: string[] = [];
+          if (st.bold) fmt.push('加粗');
+          if (st.italic) fmt.push('斜体');
+          if (st.fontSize) fmt.push(`${st.fontSize}px`);
+          if (fmt.length) notes.push(`${colName(start.c + c)}${start.r + r + 1}=${fmt.join('/')}`);
+        }),
+      );
+      focusText = `\n[当前选区·仅供参考] ${a1}(${rows} 行 × ${cols} 列):用户此刻选中了这块,它【可能】与本次意图相关,也可能只是随手点选(误框)。请以用户这句话的真实意图为准,自行判断是否真的要围绕选区操作;若指令明显针对整张表或别处,就别被这个选区带偏。你始终能看到整张表的全貌。` + (notes.length ? `\n选区已有格式: ${notes.join('; ')}` : '');
+    }
 
-    const text =
-      `[整张表] 范围 ${sheetA1}(${R} 行 × ${C} 列)\n列概览: ${colLegend}\n数据(单元格=值):\n${dataBlock}\n` +
-      `[当前焦点选区] ${a1}(${rows} 行 × ${cols} 列):用户圈选了这块,优先围绕它操作/回答——但你能看到整张表的全貌。` +
-      (notes.length ? `\n焦点区已有格式: ${notes.join('; ')}` : '');
-    return { a1, rows, cols, text, sheet: { a1: sheetA1, values: sheetVals.slice(0, 3000) } };
+    const text = `[整张表] 范围 ${sA1}(${R} 行 × ${C} 列)\n列概览: ${colLegend}\n数据(单元格=值):\n${dataBlock}${focusText}`;
+    return { a1, rows, cols, text, sheet: { a1: sA1, values: sVals.slice(0, 3000) } };
   } catch {
     return null;
   }
@@ -211,6 +218,7 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
       setNumberFormat: (a1, p) => safe(() => sheet()?.getRange(a1).setNumberFormat(p)),
       focus: (a1) => safe(() => { const s = sheet(); if (s) s.setActiveRange(s.getRange(a1)); }),
       getValue: (a1) => { let v: unknown; safe(() => { v = sheet()?.getRange(a1).getValue(); }); return v; },
+      getSheet: () => { try { return snap(apiRef.current?.getActiveWorkbook?.() as unknown as FWorkbookLike | null); } catch { return null; } },
     };
   }, []);
 
