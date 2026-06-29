@@ -10,19 +10,10 @@ import {
 import { LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
+import { Markdown } from './Markdown.js';
 
 /** Agent 在网格上的一步操作(用于"边画边改"的可视化播放)。 */
 interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bold?: boolean; numFmt?: string; note: string; before?: unknown }
-
-/** 轻量渲染模型回答里的 **粗体** 与换行,免得满屏星号。 */
-function renderRich(text: string): ReactNode[] {
-  return text.split('\n').flatMap((line, li) => {
-    const parts = line.split(/(\*\*[^*]+\*\*)/g).map((seg, i) =>
-      seg.startsWith('**') && seg.endsWith('**') ? <strong key={`${li}-${i}`}>{seg.slice(2, -2)}</strong> : <span key={`${li}-${i}`}>{seg}</span>,
-    );
-    return li > 0 ? [<br key={`br-${li}`} />, ...parts] : parts;
-  });
-}
 
 /** 对话流里的一条消息(Cursor 式连续 thread)。 */
 type Turn =
@@ -1065,7 +1056,7 @@ export function App() {
                       return (
                         <div key={i} className="ai-msg">
                           <img className="ai-av" src="/favicon.png" alt="" />
-                          <div className="answer-bubble">{renderRich(turn.text)}</div>
+                          <div className="answer-bubble md"><Markdown text={turn.text} /></div>
                         </div>
                       );
                     const active = i === lastDiffIdx;
