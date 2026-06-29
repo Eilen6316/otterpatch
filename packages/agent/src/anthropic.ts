@@ -11,7 +11,7 @@ import type { ChangeSet } from '@otterpatch/core';
 import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
 import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, execSheetTool, recentHistory, respondSystem } from './sheet-tools.js';
 import { NUDGE_DIRECT, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
-import { salvageProposalArgs } from './json-salvage.js';
+import { salvageProposalArgs, salvageText } from './json-salvage.js';
 
 const safeJson = (s?: string): Record<string, unknown> => { try { return s ? (JSON.parse(s) as Record<string, unknown>) : {}; } catch { return {}; } };
 
@@ -180,7 +180,7 @@ export class AnthropicModelClient implements ModelClient {
       }
       const ans = toolUses.find((b) => b.name === 'answer_user');
       if (ans) {
-        const result: AgentResponse = { kind: 'answer', text: (ans.input as { text?: string }).text ?? text.trim() };
+        const result: AgentResponse = { kind: 'answer', text: salvageText(ans.json) || text.trim() };
         onEvent({ type: 'done', result });
         return result;
       }

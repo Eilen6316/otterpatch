@@ -11,7 +11,7 @@ import type { ChangeSet } from '@otterpatch/core';
 import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
 import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, execSheetTool, recentHistory, respondSystem } from './sheet-tools.js';
 import { NUDGE_DIRECT, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
-import { salvageProposalArgs } from './json-salvage.js';
+import { salvageProposalArgs, salvageText, safeParse } from './json-salvage.js';
 
 export interface OpenAICompatOptions {
   apiKey?: string;
@@ -106,7 +106,7 @@ export class OpenAICompatModelClient implements ModelClient {
     if (!call || call.type !== 'function') {
       throw new Error(`OpenAICompatModelClient: model did not call ${dialect.toolName}`);
     }
-    return dialect.buildChangeSet(req, JSON.parse(call.function.arguments));
+    return dialect.buildChangeSet(req, salvageProposalArgs(call.function.arguments));
   }
 
   /** 组装 system + 多轮历史 + 当前指令的消息,以及工具菜单(改表 / answer_user / 只读取数)。 */
@@ -158,12 +158,12 @@ export class OpenAICompatModelClient implements ModelClient {
         return { kind: 'changeset', changeSet: cs };
       }
       const ans = calls.find((c) => c.function.name === 'answer_user');
-      if (ans) return { kind: 'answer', text: (JSON.parse(ans.function.arguments) as { text?: string }).text ?? '' };
+      if (ans) return { kind: 'answer', text: salvageText(ans.function.arguments) || (msg.content ?? '').trim() };
 
       // 只读工具:执行 + 把结果回喂,继续 loop
       messages.push(msg);
       for (const c of calls) {
-        const args = JSON.parse(c.function.arguments) as { a1?: string; column?: string; op?: string };
+        const args = safeParse(c.function.arguments) as { a1?: string; column?: string; op?: string };
         messages.push({ role: 'tool', tool_call_id: c.id, content: execSheetTool(c.function.name, args, req.sheet) });
       }
     }
@@ -228,7 +228,7 @@ export class OpenAICompatModelClient implements ModelClient {
       }
       const ans = calls.find((c) => c.name === 'answer_user');
       if (ans) {
-        const result: AgentResponse = { kind: 'answer', text: (JSON.parse(ans.args || '{}') as { text?: string }).text ?? content.trim() };
+        const result: AgentResponse = { kind: 'answer', text: salvageText(ans.args) || content.trim() };
         onEvent({ type: 'done', result });
         return result;
       }
@@ -243,7 +243,7 @@ export class OpenAICompatModelClient implements ModelClient {
       messages.push({ role: 'assistant', content: content || null, tool_calls: calls.map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.args } })) });
       for (const c of calls) {
         onEvent({ type: 'tool', name: c.name });
-        const args = JSON.parse(c.args || '{}') as { a1?: string; column?: string; op?: string };
+        const args = safeParse(c.args || '{}') as { a1?: string; column?: string; op?: string };
         messages.push({ role: 'tool', tool_call_id: c.id, content: execSheetTool(c.name, args, req.sheet) });
       }
     }

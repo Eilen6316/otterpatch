@@ -37,6 +37,19 @@ function extractArrayItems(raw: string, key: string): unknown[] | undefined {
   return out.length ? out : undefined;
 }
 
+/** 安全解析任意工具入参:失败(含截断)返回 {},绝不抛。 */
+export function safeParse(raw: string): Record<string, unknown> {
+  try { return JSON.parse(raw || '{}') as Record<string, unknown>; } catch { return {}; }
+}
+
+/** 从(可能截断的)answer_user 入参里尽力取出 text,保住已生成的部分。 */
+export function salvageText(raw: string): string {
+  try { const o = JSON.parse(raw) as { text?: unknown }; if (o?.text != null) return String(o.text); } catch { /* 截断 → 正则兜底 */ }
+  const m = /"text"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(raw);
+  if (!m) return '';
+  try { return JSON.parse('"' + m[1] + '"') as string; } catch { return (m[1] ?? '').replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"'); }
+}
+
 export function salvageProposalArgs(raw: string): SalvagedProposal {
   try {
     const o = JSON.parse(raw) as Record<string, unknown>;
