@@ -14,6 +14,8 @@
     "dev": "npm run dev --workspace apps/desktop",
     "build": "npm run build --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
+    "test:ui": "node test/ui-smoke.mjs",
+    "test:agent": "node test/excel-agent.mjs",
     "smoke": "node scripts/real-smoke.mjs"
   },
   "devDependencies": {
