@@ -64,11 +64,21 @@ function describe(op: EditOp): { badge: DiffBadge; label: string; after?: string
     case 'setNumberFormat':
       return { badge: 'modify', label: '数字格式 ' + op.pattern, style: { numberFormat: op.pattern }, after: op.pattern };
     case 'insertRows':
-      return { badge: 'add', label: `insert ${op.count} row(s)` };
+      return { badge: 'add', label: `插入 ${op.count} 行` };
     case 'deleteRows':
-      return { badge: 'remove', label: 'delete rows' };
+      return { badge: 'remove', label: `删除 ${op.count ?? 1} 行` };
     case 'sortRange':
-      return { badge: 'modify', label: `sort by col ${op.by} ${op.asc ? 'asc' : 'desc'}` };
+      return { badge: 'modify', label: `按第 ${op.by + 1} 列${op.asc ? '升序' : '降序'}排序` };
+    case 'insertCols':
+      return { badge: 'add', label: `插入 ${op.count} 列` };
+    case 'deleteCols':
+      return { badge: 'remove', label: `删除 ${op.count ?? 1} 列` };
+    case 'mergeCells':
+      return { badge: 'modify', label: '合并单元格' };
+    case 'unmergeCells':
+      return { badge: 'modify', label: '取消合并' };
+    case 'freezePanes':
+      return { badge: 'modify', label: `冻结 ${op.rows} 行 / ${op.cols} 列` };
     case 'setMark':
       return { badge: 'modify', label: `mark ${op.mark.type}` };
     case 'setParagraphStyle':

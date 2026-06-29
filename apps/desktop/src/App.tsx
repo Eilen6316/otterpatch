@@ -759,6 +759,7 @@ export function App() {
                   }
                   setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], board: { byEdit: board.byEdit, objs: board.objs }, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                 } else {
+                  applyExcelStructure(cs); // 结构性操作(插删行列/合并/冻结/清空)先落,改变网格布局
                   const ops = diffToOps(diff);
                   const api = univerRef.current; // 采集改前值,供"撤销/拒绝"还原
                   if (api) for (const op of ops) { if (op.value !== undefined) op.before = api.getValue(op.a1); }
@@ -884,6 +885,33 @@ export function App() {
   const playBoard = async (nodes: BNode[], edges: BEdge[]): Promise<void> => {
     for (const n of nodes) { boardRef.current?.addObjects([n], []); await delay(75); }
     for (const ed of edges) { boardRef.current?.addObjects([], [ed]); await delay(45); }
+  };
+  /** 把结构性改动(插删行列/合并/冻结/清空)从 ChangeSet 直接落到真实 Univer 网格(不走单元格播放)。 */
+  const a1RowCol = (a1: string): { row: number; col: number } => {
+    const m = /([A-Za-z]+)([0-9]+)/.exec((a1.replace(/^.*!/, '').split(':')[0]) ?? 'A1');
+    let c = 0;
+    if (m) for (const ch of m[1]!.toUpperCase()) c = c * 26 + (ch.charCodeAt(0) - 64);
+    return { col: m ? c - 1 : 0, row: m ? parseInt(m[2]!, 10) - 1 : 0 };
+  };
+  const applyExcelStructure = (cs: unknown): void => {
+    const api = univerRef.current;
+    const c = cs as { edits?: Array<{ target: string; op: { family?: string; kind?: string; count?: number; before?: boolean; rows?: number; cols?: number } }>; anchors?: Record<string, { portable?: { a1?: string } }> } | null;
+    if (!api || !c?.edits) return;
+    for (const e of c.edits) {
+      const k = e.op?.kind;
+      if (e.op?.family !== 'structure' && k !== 'deleteRange') continue;
+      const a1 = (c.anchors?.[e.target]?.portable?.a1 ?? 'A1').replace(/^.*!/, '');
+      const { row, col } = a1RowCol(a1);
+      const n = e.op?.count ?? 1;
+      if (k === 'insertRows') api.insertRows(e.op?.before === false ? row + 1 : row, n);
+      else if (k === 'deleteRows') api.deleteRows(row, n);
+      else if (k === 'insertCols') api.insertCols(e.op?.before === false ? col + 1 : col, n);
+      else if (k === 'deleteCols') api.deleteCols(col, n);
+      else if (k === 'mergeCells') api.mergeRange(a1);
+      else if (k === 'unmergeCells') api.unmergeRange(a1);
+      else if (k === 'freezePanes') api.freeze(e.op?.rows ?? 0, e.op?.cols ?? 0);
+      else if (k === 'deleteRange') api.clearRange(a1);
+    }
   };
   /** 把 Agent 返回的 diff 转成可播放的网格操作:setStyle→真实底色/字色/加粗;否则写值。 */
   const diffToOps = (d: AgentDiff): GridOp[] =>

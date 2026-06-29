@@ -35,15 +35,25 @@ export interface ExcelStyle {
   bgColor?: string; // 填充/背景色(标红高亮即 bgColor)
   align?: 'left' | 'center' | 'right';
 }
+export type ExcelOp =
+  | 'setValue' | 'setFormula' | 'setStyle' | 'setNumberFormat'
+  | 'insertRows' | 'deleteRows' | 'insertCols' | 'deleteCols'
+  | 'merge' | 'unmerge' | 'freeze' | 'clear';
 export interface ExcelProposal {
   plan: string;
   edits: Array<{
     cell: string;
-    op: 'setValue' | 'setFormula' | 'setStyle' | 'setNumberFormat';
+    op: ExcelOp;
     value?: CellValue;
     formula?: string;
     style?: ExcelStyle;
     pattern?: string; // setNumberFormat 的数字格式,如 0% / "¥"#,##0.00
+    count?: number; // insert/delete 行列数
+    before?: boolean; // insert 在目标前
+    rows?: number; // freeze 冻结行数
+    cols?: number; // freeze 冻结列数
+    by?: number; // sort 依据列(范围内 0 基)
+    asc?: boolean; // sort 升序
   }>;
 }
 
@@ -65,14 +75,21 @@ function buildExcelChangeSet(req: ProposeRequest, p: ExcelProposal): ChangeSet {
       baseRev: req.baseRev,
       portable: { kind: 'grid', sheet: sheetOf(e.cell), a1: e.cell },
     };
-    const op: EditOp =
-      e.op === 'setFormula'
-        ? { family: 'value', kind: 'setFormula', formula: e.formula ?? '' }
-        : e.op === 'setStyle'
-          ? { family: 'style', kind: 'setStyle', style: e.style ?? {} }
-          : e.op === 'setNumberFormat'
-            ? { family: 'style', kind: 'setNumberFormat', pattern: e.pattern ?? 'General' }
-            : { family: 'value', kind: 'setValue', value: (e.value ?? null) as CellValue };
+    let op: EditOp;
+    switch (e.op) {
+      case 'setFormula': op = { family: 'value', kind: 'setFormula', formula: e.formula ?? '' }; break;
+      case 'setStyle': op = { family: 'style', kind: 'setStyle', style: e.style ?? {} }; break;
+      case 'setNumberFormat': op = { family: 'style', kind: 'setNumberFormat', pattern: e.pattern ?? 'General' }; break;
+      case 'insertRows': op = { family: 'structure', kind: 'insertRows', count: e.count ?? 1, before: e.before ?? true }; break;
+      case 'deleteRows': op = { family: 'structure', kind: 'deleteRows', count: e.count ?? 1 }; break;
+      case 'insertCols': op = { family: 'structure', kind: 'insertCols', count: e.count ?? 1, before: e.before ?? true }; break;
+      case 'deleteCols': op = { family: 'structure', kind: 'deleteCols', count: e.count ?? 1 }; break;
+      case 'merge': op = { family: 'structure', kind: 'mergeCells' }; break;
+      case 'unmerge': op = { family: 'structure', kind: 'unmergeCells' }; break;
+      case 'freeze': op = { family: 'structure', kind: 'freezePanes', rows: e.rows ?? 1, cols: e.cols ?? 0 }; break;
+      case 'clear': op = { family: 'value', kind: 'deleteRange' }; break;
+      default: op = { family: 'value', kind: 'setValue', value: (e.value ?? null) as CellValue };
+    }
     edits.push({ id: 'e' + i, target: aid, op });
   });
   return newChangeSet(req, p.plan, anchors, edits);
@@ -92,8 +109,8 @@ export const excelDialect: HostDialect = {
         items: {
           type: 'object',
           properties: {
-            cell: { type: 'string', description: 'A1 引用,如 Sheet1!B1' },
-            op: { type: 'string', enum: ['setValue', 'setFormula', 'setStyle', 'setNumberFormat'] },
+            cell: { type: 'string', description: 'A1 引用:单格如 B2;范围如 A1:C3(merge/clear/sort 用范围);插删行用该行任一格(如 A5),插删列用该列任一格(如 C1);freeze 用 A1' },
+            op: { type: 'string', enum: ['setValue', 'setFormula', 'setStyle', 'setNumberFormat', 'insertRows', 'deleteRows', 'insertCols', 'deleteCols', 'merge', 'unmerge', 'freeze', 'clear'] },
             value: { description: 'setValue 的新值(字符串/数字/布尔/空)' },
             formula: { type: 'string', description: 'setFormula 的公式,如 =C2*D2' },
             style: {
@@ -108,6 +125,12 @@ export const excelDialect: HostDialect = {
               },
             },
             pattern: { type: 'string', description: 'setNumberFormat 的数字格式,如 0% 或 "¥"#,##0.00' },
+            count: { type: 'number', description: 'insert/delete 行列的数量(默认 1)' },
+            before: { type: 'boolean', description: 'insertRows/insertCols 在目标行/列之前插入(默认 true)' },
+            rows: { type: 'number', description: 'freeze 冻结的行数' },
+            cols: { type: 'number', description: 'freeze 冻结的列数' },
+            by: { type: 'number', description: 'sort 排序依据列(范围内从 0 起)' },
+            asc: { type: 'boolean', description: 'sort 升序(默认 true)' },
           },
           required: ['cell', 'op'],
         },

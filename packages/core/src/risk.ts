@@ -24,11 +24,16 @@ const RISK_BY_KIND: Record<EditOpKind, RiskLevel> = {
   setObjectProps: 'safe',
   // 谨慎:结构性新增 / 重排,影响引用但不删数据
   insertRows: 'caution',
+  insertCols: 'caution',
   sortRange: 'caution',
+  mergeCells: 'caution',
+  unmergeCells: 'caution',
+  freezePanes: 'safe',
   addObject: 'caution',
   // 破坏性:删除数据 / 级联 / 不透明原生 op
   deleteRange: 'destructive',
   deleteRows: 'destructive',
+  deleteCols: 'destructive',
   deleteObject: 'destructive',
   rawHost: 'destructive',
 };

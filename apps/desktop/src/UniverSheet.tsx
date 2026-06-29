@@ -37,6 +37,15 @@ export interface SheetHandle {
   getValue(a1: string): unknown;
   /** 整张表的全局快照(概览 + 数据 + 焦点),与是否圈选无关。 */
   getSheet(): UniSel | null;
+  // 结构性操作(Agent 赋能:插删行列 / 合并 / 冻结 / 清空)——驱动真实 Univer 网格
+  insertRows(row: number, count: number): void;
+  deleteRows(row: number, count: number): void;
+  insertCols(col: number, count: number): void;
+  deleteCols(col: number, count: number): void;
+  mergeRange(a1: string): void;
+  unmergeRange(a1: string): void;
+  freeze(rows: number, cols: number): void;
+  clearRange(a1: string): void;
 }
 interface FRangeOps {
   setValue(v: unknown): void;
@@ -45,10 +54,19 @@ interface FRangeOps {
   setFontWeight(w: string): void;
   setNumberFormat(p: string): void;
   getValue(): unknown;
+  merge(): void;
+  breakApart(): void;
+  clearContent(): void;
 }
 interface FSheetOps {
   getRange(a1: string): FRangeOps;
   setActiveRange(r: FRangeOps): void;
+  insertRows(rowIndex: number, numRows?: number): void;
+  deleteRows(rowPosition: number, howMany: number): void;
+  insertColumns(columnIndex: number, numColumns?: number): void;
+  deleteColumns(columnPosition: number, howMany: number): void;
+  setFreeze(f: { startRow: number; startColumn: number; xSplit: number; ySplit: number }): void;
+  cancelFreeze(): void;
 }
 
 export interface UniSel {
@@ -218,6 +236,14 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
       setNumberFormat: (a1, p) => safe(() => sheet()?.getRange(a1).setNumberFormat(p)),
       focus: (a1) => safe(() => { const s = sheet(); if (s) s.setActiveRange(s.getRange(a1)); }),
       getValue: (a1) => { let v: unknown; safe(() => { v = sheet()?.getRange(a1).getValue(); }); return v; },
+      insertRows: (row, count) => safe(() => sheet()?.insertRows(row, count)),
+      deleteRows: (row, count) => safe(() => sheet()?.deleteRows(row, count)),
+      insertCols: (col, count) => safe(() => sheet()?.insertColumns(col, count)),
+      deleteCols: (col, count) => safe(() => sheet()?.deleteColumns(col, count)),
+      mergeRange: (a1) => safe(() => sheet()?.getRange(a1).merge()),
+      unmergeRange: (a1) => safe(() => sheet()?.getRange(a1).breakApart()),
+      freeze: (rows, cols) => safe(() => { const s = sheet(); if (!s) return; if (rows > 0 || cols > 0) s.setFreeze({ startRow: rows, startColumn: cols, xSplit: cols, ySplit: rows }); else s.cancelFreeze(); }),
+      clearRange: (a1) => safe(() => sheet()?.getRange(a1).clearContent()),
       getSheet: () => { try { return snap(apiRef.current?.getActiveWorkbook?.() as unknown as FWorkbookLike | null); } catch { return null; } },
     };
   }, []);

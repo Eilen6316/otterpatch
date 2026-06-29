@@ -59,8 +59,13 @@ export type EditOp =
   | { family: 'value'; kind: 'setFormula'; formula: string }
   | { family: 'style'; kind: 'setNumberFormat'; pattern: string }
   | { family: 'structure'; kind: 'insertRows'; count: number; before: boolean }
-  | { family: 'structure'; kind: 'deleteRows' }
+  | { family: 'structure'; kind: 'deleteRows'; count?: number }
   | { family: 'structure'; kind: 'sortRange'; by: number; asc: boolean }
+  | { family: 'structure'; kind: 'insertCols'; count: number; before: boolean }
+  | { family: 'structure'; kind: 'deleteCols'; count?: number }
+  | { family: 'structure'; kind: 'mergeCells' }
+  | { family: 'structure'; kind: 'unmergeCells' }
+  | { family: 'structure'; kind: 'freezePanes'; rows: number; cols: number }
   // Word(flow)扩展
   | { family: 'style'; kind: 'setMark'; mark: MarkSpec }
   | { family: 'style'; kind: 'setParagraphStyle'; styleName: string }
