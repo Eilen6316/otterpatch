@@ -11,7 +11,7 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
-import { createModelClient, type Provider } from '@otterpatch/agent';
+import { createModelClient, EXCEL_OPS, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
 import { OtterPatchRuntime } from '@otterpatch/runtime';
 
@@ -56,7 +56,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       }
       const url = (req.url ?? '').split('?')[0];
       if (req.method === 'GET' && url === '/health') {
-        send(res, 200, { ok: true, formats: rt.formats(), skills: BUILTIN_SKILLS.map((s) => s.name) });
+        send(res, 200, { ok: true, formats: rt.formats(), skills: BUILTIN_SKILLS.map((s) => s.name), excelOps: EXCEL_OPS });
         return;
       }
       if (req.method === 'POST' && url === '/propose') {
@@ -138,4 +138,9 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
   })();
 });
 
-server.listen(PORT, () => process.stderr.write(`[otterpatch] HTTP bridge on http://localhost:${PORT}  (GET /health, POST /propose, POST /commit)\n`));
+server.listen(PORT, () => {
+  // 启动横幅:打印已加载的 Excel 能力,便于核对 serve 是不是最新代码(避免"改了但 serve 还是旧的")
+  process.stderr.write(`\n[otterpatch] serve on http://localhost:${PORT}\n`);
+  process.stderr.write(`[otterpatch] Excel 能力(${EXCEL_OPS.length}): ${EXCEL_OPS.join(', ')}\n`);
+  process.stderr.write(`[otterpatch] 看到上面这行=已是最新;若缺 insertRows/merge/freeze/sort 等,说明 serve 仍是旧进程,请重启 npm run serve\n\n`);
+});

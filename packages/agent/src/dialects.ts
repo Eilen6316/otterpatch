@@ -35,10 +35,13 @@ export interface ExcelStyle {
   bgColor?: string; // 填充/背景色(标红高亮即 bgColor)
   align?: 'left' | 'center' | 'right';
 }
-export type ExcelOp =
-  | 'setValue' | 'setFormula' | 'setStyle' | 'setNumberFormat'
-  | 'insertRows' | 'deleteRows' | 'insertCols' | 'deleteCols'
-  | 'merge' | 'unmerge' | 'freeze' | 'clear' | 'sort';
+/** Excel 支持的操作(单一事实源:schema 与 serve 启动横幅都用它,便于核对 serve 是否最新)。 */
+export const EXCEL_OPS = [
+  'setValue', 'setFormula', 'setStyle', 'setNumberFormat',
+  'insertRows', 'deleteRows', 'insertCols', 'deleteCols',
+  'merge', 'unmerge', 'freeze', 'clear', 'sort',
+] as const;
+export type ExcelOp = (typeof EXCEL_OPS)[number];
 export interface ExcelProposal {
   plan: string;
   edits: Array<{
@@ -111,7 +114,7 @@ export const excelDialect: HostDialect = {
           type: 'object',
           properties: {
             cell: { type: 'string', description: 'A1 引用:单格如 B2;范围如 A1:C3(merge/clear/sort 用范围);插删行用该行任一格(如 A5),插删列用该列任一格(如 C1);freeze 用 A1' },
-            op: { type: 'string', enum: ['setValue', 'setFormula', 'setStyle', 'setNumberFormat', 'insertRows', 'deleteRows', 'insertCols', 'deleteCols', 'merge', 'unmerge', 'freeze', 'clear', 'sort'] },
+            op: { type: 'string', enum: [...EXCEL_OPS] },
             value: { description: 'setValue 的新值(字符串/数字/布尔/空)' },
             formula: { type: 'string', description: 'setFormula 的公式,如 =C2*D2' },
             style: {
