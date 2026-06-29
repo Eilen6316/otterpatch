@@ -982,7 +982,10 @@ export function App() {
                   <div className="diff-head">
                     <button className="back-btn" onClick={resetDiff}>← {t('新指令')}</button>
                   </div>
-                  <div className="answer-bubble">{answer}</div>
+                  <div className="ai-msg">
+                    <img className="ai-av" src="/favicon.png" alt="" />
+                    <div className="answer-bubble">{answer}</div>
+                  </div>
                 </Section>
               ) : (
                 <Section label={t('本次改动') + (realDiff ? ' · ' + realDiff.items.length : '')}>
@@ -1112,9 +1115,13 @@ export function App() {
                 <div className="selchip">
                   <span className="dot" />{' '}
                   {isExcel ? (
-                    <>
-                      {t('已选')} <b>{uniSel?.a1 ?? '—'}</b>{uniSel ? ` · ${uniSel.rows}×${uniSel.cols}` : ''}
-                    </>
+                    uniSel ? (
+                      <>
+                        {t('已选')} <b>{uniSel.a1}</b> · {uniSel.rows}×{uniSel.cols}
+                      </>
+                    ) : (
+                      <span className="muted">{t('未选区域 · 将基于整张表理解')}</span>
+                    )
                   ) : fmt === 'drawio' && boardSel ? (
                     <>{boardSel.chip}</>
                   ) : (
@@ -1122,7 +1129,6 @@ export function App() {
                       {t('当前')} <b>{t(curFmt.label)}</b> {t('工作区')}
                     </>
                   )}
-                  {t(',发送时随选区一并给 Agent')}
                 </div>
                 <textarea
                   value={intent}
