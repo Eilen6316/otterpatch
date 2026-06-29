@@ -336,6 +336,13 @@ svg { display: block; }
 .recent-list .recent { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: var(--muted); font-size: 12.5px; text-align: left; width: 100%; }
 .recent-list .recent:hover { background: var(--fill); color: var(--text-soft); }
 .recent-list .rt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Cursor 式连续对话流 */
+.chat-thread { display: flex; flex-direction: column; gap: 13px; padding: 2px; }
+.chat-thread .convo-bar { margin-bottom: 2px; }
+.msg-user { align-self: flex-end; max-width: 86%; background: var(--accent); color: #fff; padding: 9px 13px; border-radius: 13px 13px 4px 13px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; box-shadow: 0 1px 3px rgba(37, 99, 235, 0.22); }
+.diff-turn { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.thinking { flex: 1; display: flex; align-items: center; gap: 8px; background: var(--fill); border: 1px solid var(--line); border-radius: 12px 12px 12px 4px; padding: 11px 14px; font-size: 12.5px; color: var(--muted); }
+.reverted-tag { font-size: 11.5px; color: var(--faint); }
 
 /* change cards */
 .change { border: 1px solid var(--line); border-radius: var(--r); margin-bottom: 8px; overflow: hidden; }

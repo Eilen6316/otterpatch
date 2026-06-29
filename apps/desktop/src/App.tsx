@@ -12,7 +12,23 @@ import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
 
 /** Agent 在网格上的一步操作(用于"边画边改"的可视化播放)。 */
-interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bold?: boolean; numFmt?: string; note: string }
+interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bold?: boolean; numFmt?: string; note: string; before?: unknown }
+
+/** 轻量渲染模型回答里的 **粗体** 与换行,免得满屏星号。 */
+function renderRich(text: string): ReactNode[] {
+  return text.split('\n').flatMap((line, li) => {
+    const parts = line.split(/(\*\*[^*]+\*\*)/g).map((seg, i) =>
+      seg.startsWith('**') && seg.endsWith('**') ? <strong key={`${li}-${i}`}>{seg.slice(2, -2)}</strong> : <span key={`${li}-${i}`}>{seg}</span>,
+    );
+    return li > 0 ? [<br key={`br-${li}`} />, ...parts] : parts;
+  });
+}
+
+/** 对话流里的一条消息(Cursor 式连续 thread)。 */
+type Turn =
+  | { role: 'user'; text: string }
+  | { role: 'assistant'; kind: 'answer'; text: string }
+  | { role: 'assistant'; kind: 'diff'; diff: AgentDiff; ops: GridOp[]; reverted?: boolean };
 
 /** 真 Univer 表格(体积大 → 懒加载,仅 Excel 用)。 */
 const UniverSheet = lazy(() => import('./UniverSheet.js'));
@@ -416,12 +432,16 @@ export function App() {
   const [uniSel, setUniSel] = useState<UniSel | null>(null);
   const [boardSel, setBoardSel] = useState<BoardSel | null>(null);
   const univerRef = useRef<SheetHandle>(null);
+  const threadEndRef = useRef<HTMLDivElement>(null);
   const [playList, setPlayList] = useState<GridOp[]>([]);
   const [playIdx, setPlayIdx] = useState(-1);
   const [playing, setPlaying] = useState(false);
   const [sendErr, setSendErr] = useState<string | null>(null);
   const [answer, setAnswer] = useState<string | null>(null);
-  const [conversation, setConversation] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  const lsJson = <T,>(k: string, fb: T): T => { try { const v = JSON.parse(localStorage.getItem(k) ?? 'null'); return v == null ? fb : (v as T); } catch { return fb; } };
+  // Cursor 式连续对话流 + 模型历史,持久化到当前工作区(localStorage)
+  const [thread, setThread] = useState<Turn[]>(() => lsJson<Turn[]>('oa.thread', []));
+  const [conversation, setConversation] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>(() => lsJson('oa.conversation', []));
   const [recent, setRecent] = useState<{ t: string; time: string }[]>([]);
   const [realDiff, setRealDiff] = useState<AgentDiff | null>(null);
   const [realCs, setRealCs] = useState<unknown>(null);
@@ -458,6 +478,19 @@ export function App() {
     window.addEventListener('mouseup', up);
     return () => window.removeEventListener('mouseup', up);
   }, []);
+  // 对话历史持久化到当前工作区
+  useEffect(() => {
+    try {
+      localStorage.setItem('oa.thread', JSON.stringify(thread));
+      localStorage.setItem('oa.conversation', JSON.stringify(conversation));
+    } catch {
+      /* 配额满时忽略 */
+    }
+  }, [thread, conversation]);
+  // 新消息时滚到底部(Cursor 式)
+  useEffect(() => {
+    threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [thread, busy]);
 
   const r1 = Math.min(sel.ar, sel.br);
   const r2 = Math.max(sel.ar, sel.br);
@@ -593,6 +626,9 @@ export function App() {
     const ep = server.trim().replace(/\/$/, '');
     if (ep && apiKey) {
       setBusy(true);
+      setSendErr(null);
+      setThread((th) => [...th, { role: 'user', text: theIntent }]); // 用户气泡立刻进流
+      setIntent('');
       try {
         const r = await fetch(ep + '/propose', {
           method: 'POST',
@@ -602,24 +638,23 @@ export function App() {
         const data = (await r.json()) as { changeSet?: unknown; diff?: AgentDiff; answer?: string; error?: string };
         if (!r.ok) throw new Error(data.error ?? 'propose failed');
         if (theIntent.trim()) setRecent((rr) => [{ t: theIntent.trim(), time: t('刚刚') }, ...rr.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
+        setSent(true);
         // 路由:Agent 选择了"回答问题" → 聊天气泡,不改表
         if (data.answer != null) {
-          setAnswer(data.answer);
-          setRealDiff(null);
-          setPlayList([]);
-          setSent(true);
+          setThread((th) => [...th, { role: 'assistant', kind: 'answer', text: data.answer! }]);
           setConversation((c) => [...c, { role: 'user' as const, content: theIntent }, { role: 'assistant' as const, content: data.answer! }].slice(-20));
           return;
         }
         if (!data.diff) throw new Error(data.error ?? 'propose failed');
-        setAnswer(null);
+        const ops = diffToOps(data.diff);
+        const api = univerRef.current; // 采集改前值,供"撤销改动"还原
+        if (api) for (const op of ops) { if (op.value !== undefined) op.before = api.getValue(op.a1); }
+        setThread((th) => [...th, { role: 'assistant', kind: 'diff', diff: data.diff!, ops }]);
         setRealCs(data.changeSet ?? null);
         setRealDiff(data.diff);
         setAccepted(new Set(data.diff.items.map((it) => it.editId)));
         setConversation((c) => [...c, { role: 'user' as const, content: theIntent || '(操作)' }, { role: 'assistant' as const, content: '已提出改动: ' + data.diff!.items.map((it) => `${it.ref} ${it.label}`).join('; ') }].slice(-20));
-        const ops = diffToOps(data.diff);
         if (ops.length) void playOps(ops); // 把 Agent 的改动逐格"画"到网格上
-        else setSent(true);
       } catch (e) {
         const m = e instanceof Error ? e.message : String(e);
         const refused = /failed to fetch|refused|ECONNREFUSED|networkerror|load failed/i.test(m);
@@ -650,8 +685,24 @@ export function App() {
   /** 开启新对话:清空多轮历史 + 当前视图。 */
   const newConversation = (): void => {
     setConversation([]);
+    setThread([]);
     resetDiff();
     setSendErr(null);
+  };
+  /** 撤销某条改动:把该回合写过的格子还原到改前值,并清掉它加的底色。 */
+  const revertTurn = (idx: number): void => {
+    const turn = thread[idx];
+    if (!turn || turn.role !== 'assistant' || turn.kind !== 'diff') return;
+    const api = univerRef.current;
+    if (api) {
+      for (const op of turn.ops) {
+        if (op.value !== undefined) api.setCell(op.a1, op.before ?? '');
+        if (op.bg) api.setBackground(op.a1, null);
+        if (op.color) api.setFontColor(op.a1, '#1f2937');
+      }
+    }
+    setThread((th) => th.map((tt, i) => (i === idx ? ({ ...tt, reverted: true } as Turn) : tt)));
+    notify(t('已撤销该回合改动'));
   };
 
   // ── Agent「边画边改」可视化:把操作逐步播放到 Univer 网格,用户看着它一格格地改 ──
@@ -805,6 +856,16 @@ export function App() {
     setDrop(null);
   };
 
+  // 对话流里最后一条改动(仅它可交互:接受/提交);更早的改动转为只读 + 可撤销
+  let lastDiffIdx = -1;
+  for (let i = thread.length - 1; i >= 0; i--) {
+    const tt = thread[i];
+    if (tt && tt.role === 'assistant' && tt.kind === 'diff') {
+      lastDiffIdx = i;
+      break;
+    }
+  }
+
   return (
     <TContext.Provider value={t}>
       <div className="app">
@@ -924,30 +985,7 @@ export function App() {
             </div>
 
             <div className="rail-body">
-              {conversation.length > 0 && (
-                <div className="convo-bar">
-                  <span className="dot" /> {t('对话进行中')} · {Math.ceil(conversation.length / 2)} {t('轮')}
-                  <span className="grow" />
-                  <button className="convo-new" onClick={newConversation}>{t('新对话')}</button>
-                </div>
-              )}
-              {busy ? (
-                <div className="agent-busy">
-                  <span className="spin" />
-                  <div className="ab-t">{t('Agent 正在分析…')}</div>
-                  <div className="ab-d">{uniSel ? uniSel.a1 : t('整张表')}</div>
-                </div>
-              ) : sendErr ? (
-                <div className="agent-err">
-                  <div className="ae-i"><IconX size={18} /></div>
-                  <div className="ae-t">{t('Agent 调用失败')}</div>
-                  <div className="ae-m">{sendErr}</div>
-                  <div className="ae-acts">
-                    <button className="btn solid" onClick={() => void send()}>{t('重试')}</button>
-                    <button className="btn" onClick={() => setSendErr(null)}>{t('返回')}</button>
-                  </div>
-                </div>
-              ) : !sent ? (
+              {thread.length === 0 && !busy && !sendErr ? (
                 <div className="agent-home">
                   <div className="ai-intro">
                     <img className="ai-mark" src="/favicon.png" alt="" />
@@ -977,88 +1015,95 @@ export function App() {
                     </>
                   )}
                 </div>
-              ) : answer ? (
-                <Section label={t('Agent 回答')}>
-                  <div className="diff-head">
-                    <button className="back-btn" onClick={resetDiff}>← {t('新指令')}</button>
-                  </div>
-                  <div className="ai-msg">
-                    <img className="ai-av" src="/favicon.png" alt="" />
-                    <div className="answer-bubble">{answer}</div>
-                  </div>
-                </Section>
               ) : (
-                <Section label={t('本次改动') + (realDiff ? ' · ' + realDiff.items.length : '')}>
-                  <div className="diff-head">
-                    <button className="back-btn" onClick={resetDiff} disabled={playing}>← {t('新指令')}</button>
-                  </div>
-                  {playList.length > 0 && (
-                    <div className="oplist">
-                      <div className="opbar">
-                        <span className={'oplbl' + (playing ? ' live' : '')}>{playing ? t('Agent 正在操作网格') : t('Agent 操作完成')}</span>
-                        <span className="grow" />
-                        <span className="opcount">{Math.min(playIdx + 1, playList.length)}/{playList.length}</span>
-                      </div>
-                      <div className="opprog"><div className="opprog-fill" style={{ width: `${(Math.min(Math.max(playIdx + 1, 0), playList.length) / playList.length) * 100}%` }} /></div>
-                      {playList.map((op, i) => (
-                        <div key={i} className={'opitem' + (i < playIdx ? ' done' : i === playIdx ? ' cur' : '')}>
-                          <span className="opdot" />
-                          <span className="opa1">{op.a1}</span>
-                          <span className="opnote">{op.note}</span>
-                        </div>
-                      ))}
+                <div className="chat-thread">
+                  {thread.length > 0 && (
+                    <div className="convo-bar">
+                      <span className="dot" /> {t('对话')} · {thread.filter((x) => x.role === 'user').length} {t('轮')}
+                      <span className="grow" />
+                      <button className="convo-new" onClick={newConversation}>{t('新对话')}</button>
                     </div>
                   )}
-                  {realDiff ? (
-                    <>
-                      <div className="summary">{realDiff.intent}</div>
-                      {realDiff.items.map((it) => {
-                        const on = accepted.has(it.editId);
-                        return (
-                          <div className={'change' + (on ? '' : ' rejected')} key={it.editId}>
-                            <div className="head">
-                              <span className="tag">{it.badge}</span>
-                              <span className="ttl">{it.ref}</span>
+                  {thread.map((turn, i) => {
+                    if (turn.role === 'user') return <div key={i} className="msg-user">{turn.text}</div>;
+                    if (turn.kind === 'answer')
+                      return (
+                        <div key={i} className="ai-msg">
+                          <img className="ai-av" src="/favicon.png" alt="" />
+                          <div className="answer-bubble">{renderRich(turn.text)}</div>
+                        </div>
+                      );
+                    const active = i === lastDiffIdx;
+                    const d = turn.diff;
+                    return (
+                      <div key={i} className="ai-msg">
+                        <img className="ai-av" src="/favicon.png" alt="" />
+                        <div className="diff-turn">
+                          {active && playList.length > 0 && (
+                            <div className="oplist">
+                              <div className="opbar">
+                                <span className={'oplbl' + (playing ? ' live' : '')}>{playing ? t('Agent 正在操作网格') : t('Agent 操作完成')}</span>
+                                <span className="grow" />
+                                <span className="opcount">{Math.min(playIdx + 1, playList.length)}/{playList.length}</span>
+                              </div>
+                              <div className="opprog"><div className="opprog-fill" style={{ width: `${(Math.min(Math.max(playIdx + 1, 0), playList.length) / playList.length) * 100}%` }} /></div>
                             </div>
-                            <div className="body2">
-                              {it.after ? (
-                                <div className="ba">
-                                  <span className="after">{it.after}</span>
+                          )}
+                          <div className="summary">{d.intent}</div>
+                          {d.items.map((it) => {
+                            const on = active ? accepted.has(it.editId) : !turn.reverted;
+                            return (
+                              <div className={'change' + (on ? '' : ' rejected')} key={it.editId}>
+                                <div className="head">
+                                  <span className="tag">{it.badge}</span>
+                                  <span className="ttl">{it.ref}</span>
                                 </div>
-                              ) : null}
-                              <div className="why">{it.label}</div>
+                                <div className="body2">
+                                  {it.after ? <div className="ba"><span className="after">{it.after}</span></div> : null}
+                                  <div className="why">{it.label}</div>
+                                </div>
+                                {active && (
+                                  <div className="acts">
+                                    <button className={'btn' + (on ? ' ok' : '')} onClick={() => toggleAccept(it.editId, true)}><IconCheck size={14} /> {t('接受')}</button>
+                                    <button className={'btn' + (!on ? ' no' : '')} onClick={() => toggleAccept(it.editId, false)}><IconX size={14} /> {t('拒绝')}</button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {d.items.length === 0 && <div className="te-d">{t('Agent 未提出改动')}</div>}
+                          {active && d.items.length > 0 ? (
+                            <div className="bulk">
+                              <button className="btn ok" disabled={busy || playing} onClick={() => { const all = d.items.map((x) => x.editId); setAccepted(new Set(all)); void doCommit(all); }}><IconCheck size={14} /> {t('全部接受')}</button>
+                              <button className="btn" disabled={busy || playing} onClick={() => void doCommit([...accepted])}>{t('部分接受')}</button>
                             </div>
-                            <div className="acts">
-                              <button className={'btn' + (on ? ' ok' : '')} onClick={() => toggleAccept(it.editId, true)}><IconCheck size={14} /> {t('接受')}</button>
-                              <button className={'btn' + (!on ? ' no' : '')} onClick={() => toggleAccept(it.editId, false)}><IconX size={14} /> {t('拒绝')}</button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {realDiff.items.length === 0 && <div className="te-d">{t('Agent 未提出改动')}</div>}
-                    </>
-                  ) : null}
-
-                  <div className="bulk">
-                    {realDiff ? (
-                      <>
-                        <button
-                          className="btn ok"
-                          disabled={busy}
-                          onClick={() => {
-                            const all = realDiff.items.map((i) => i.editId);
-                            setAccepted(new Set(all));
-                            void doCommit(all);
-                          }}
-                        >
-                          <IconCheck size={14} /> {t('全部接受')}
-                        </button>
-                        <button className="btn" disabled={busy} onClick={() => void doCommit([...accepted])}>{t('部分接受')}</button>
-                        <button className="btn no" onClick={() => setAccepted(new Set())}><IconX size={14} /> {t('拒绝')}</button>
-                      </>
-                    ) : null}
-                  </div>
-                </Section>
+                          ) : turn.reverted ? (
+                            <div className="reverted-tag">↩ {t('已撤销')}</div>
+                          ) : d.items.length > 0 ? (
+                            <div className="bulk"><button className="btn" onClick={() => revertTurn(i)}>↩ {t('撤销改动')}</button></div>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {busy && (
+                    <div className="ai-msg">
+                      <img className="ai-av" src="/favicon.png" alt="" />
+                      <div className="thinking"><span className="spin" /> {t('Agent 正在分析…')}</div>
+                    </div>
+                  )}
+                  {sendErr && (
+                    <div className="agent-err">
+                      <div className="ae-i"><IconX size={18} /></div>
+                      <div className="ae-t">{t('Agent 调用失败')}</div>
+                      <div className="ae-m">{sendErr}</div>
+                      <div className="ae-acts">
+                        <button className="btn solid" onClick={() => setSendErr(null)}>{t('返回')}</button>
+                      </div>
+                    </div>
+                  )}
+                  <div ref={threadEndRef} />
+                </div>
               )}
             </div>
 
