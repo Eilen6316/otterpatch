@@ -184,7 +184,11 @@ export class OpenAICompatModelClient implements ModelClient {
           const acc = (toolAcc[idx] ??= { id: '', name: '', args: '' });
           if (tc.id) acc.id = tc.id;
           if (tc.function?.name) acc.name = tc.function.name;
-          if (tc.function?.arguments) acc.args += tc.function.arguments;
+          if (tc.function?.arguments) {
+            acc.args += tc.function.arguments;
+            // drawio:把改表提案的入参增量吐出,前端可边生成边在画板画出对应图形
+            if (dialect.format === 'drawio' && acc.name === dialect.toolName) onEvent({ type: 'draft', delta: tc.function.arguments });
+          }
         }
       }
       const calls = Object.values(toolAcc).filter((c) => c.name);

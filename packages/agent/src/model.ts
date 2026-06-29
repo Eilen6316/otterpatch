@@ -35,10 +35,11 @@ export type AgentResponse =
   | { kind: 'answer'; text: string }
   | { kind: 'changeset'; changeSet: ChangeSet };
 
-/** 流式增量事件:思考过程(reasoning)、回答正文(answer)、调了只读/校验工具、收尾。 */
+/** 流式增量事件:思考过程(reasoning)、回答正文(answer)、改表工具入参增量(draft,供"边生成边画")、调了只读/校验工具、收尾。 */
 export type StreamEvent =
   | { type: 'reasoning'; delta: string }
   | { type: 'answer'; delta: string }
+  | { type: 'draft'; delta: string }
   | { type: 'tool'; name: string }
   | { type: 'done'; result: AgentResponse };
 

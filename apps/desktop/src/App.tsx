@@ -472,6 +472,12 @@ export function App() {
   const univerRef = useRef<SheetHandle>(null);
   const boardRef = useRef<BoardHandle>(null);
   const applySeqRef = useRef(0);
+  // drawio「边生成边画」流式状态
+  const draftBufRef = useRef('');
+  const drawnOpsRef = useRef(0);
+  const streamConvRef = useRef<ReturnType<typeof makeRawBoardConv> | null>(null);
+  const streamObjsRef = useRef<Array<{ editId: string; node?: BNode; edge?: BEdge }>>([]);
+  const streamByEditRef = useRef<Record<string, string>>({});
   const [reviewIdx, setReviewIdx] = useState(0);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false); // 同步重入锁:异步 busy state 拦不住同一帧内的连发
@@ -690,6 +696,12 @@ export function App() {
         const dec = new TextDecoder();
         let buf = '';
         let finished = false;
+        // 重置「边生成边画」流式状态
+        draftBufRef.current = '';
+        drawnOpsRef.current = 0;
+        streamConvRef.current = null;
+        streamObjsRef.current = [];
+        streamByEditRef.current = {};
         while (!finished) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -704,6 +716,20 @@ export function App() {
             if (e.type === 'reasoning') upd((tt) => (tt.kind === 'answer' ? { ...tt, reasoning: (tt.reasoning ?? '') + (e.delta ?? '') } : tt));
             else if (e.type === 'answer') upd((tt) => (tt.kind === 'answer' ? { ...tt, text: (tt.text ?? '') + (e.delta ?? '') } : tt));
             else if (e.type === 'tool') upd((tt) => (tt.kind === 'answer' ? { ...tt, reasoning: (tt.reasoning ?? '') + `\n〔查表 ${e.name}〕\n` } : tt));
+            else if (e.type === 'draft' && fmt === 'drawio') {
+              // 边生成边画:每到一段 propose 入参,抽出已闭合的 op 即时画到左侧画板
+              draftBufRef.current += e.delta ?? '';
+              const conv = streamConvRef.current ?? (streamConvRef.current = makeRawBoardConv(++applySeqRef.current));
+              const ops = extractDrawioOps(draftBufRef.current);
+              for (let k = drawnOpsRef.current; k < ops.length; k++) {
+                const r = conv(ops[k]!, k);
+                if (!r) continue;
+                boardRef.current?.addObjects(r.node ? [r.node] : [], r.edge ? [r.edge] : []);
+                streamObjsRef.current.push({ editId: r.editId, ...(r.node ? { node: r.node } : {}), ...(r.edge ? { edge: r.edge } : {}) });
+                streamByEditRef.current[r.editId] = r.boardId;
+              }
+              drawnOpsRef.current = ops.length;
+            }
             else if (e.type === 'error') throw new Error(e.message ?? 'stream error');
             else if (e.type === 'done') {
               finished = true;
@@ -715,9 +741,15 @@ export function App() {
                 setAccepted(new Set(diff.items.map((it) => it.editId)));
                 setReviewIdx(0);
                 if (fmt === 'drawio') {
-                  // drawio:把提案的节点/连线落到左侧画板(立刻可见),审阅逐条高亮/可移除
-                  const board = drawioCsToBoard(cs);
-                  boardRef.current?.addObjects(board.nodes, board.edges);
+                  // drawio:优先复用「边生成边画」已落到画板的对象;若未流式(某些通道不流入参)则一次性补画
+                  let board: { byEdit: Record<string, string>; objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> };
+                  if (streamObjsRef.current.length) {
+                    board = { byEdit: streamByEditRef.current, objs: streamObjsRef.current };
+                  } else {
+                    const b = drawioCsToBoard(cs);
+                    boardRef.current?.addObjects(b.nodes, b.edges);
+                    board = { byEdit: b.byEdit, objs: b.objs };
+                  }
                   setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], board: { byEdit: board.byEdit, objs: board.objs }, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                 } else {
                   const ops = diffToOps(diff);
@@ -1757,6 +1789,51 @@ function parseDrawioStyle(style?: string): { fill?: string; stroke?: string; fon
     ...(fs && Number.isFinite(parseFloat(fs)) ? { fontSize: Math.round(parseFloat(fs)) } : {}),
     ...(fontStyle && (parseInt(fontStyle, 10) & 1) ? { bold: true } : {}),
     ...(isText ? { text: true } : {}),
+  };
+}
+interface RawDrawioOp { op?: string; cellId?: string; value?: string; style?: string; edge?: boolean; source?: string; target?: string; x?: number; y?: number; width?: number; height?: number }
+/** 从【流式中的】propose 入参里抽出已闭合的 op 对象(容忍尾部未完成的 JSON),供"边生成边画"。 */
+function extractDrawioOps(buf: string): RawDrawioOp[] {
+  const m = /"ops"\s*:\s*\[/.exec(buf);
+  if (!m) return [];
+  let i = m.index + m[0].length;
+  const out: RawDrawioOp[] = [];
+  while (i < buf.length) {
+    while (i < buf.length && /[\s,]/.test(buf[i]!)) i++;
+    if (i >= buf.length || buf[i] !== '{') break;
+    let depth = 0, inStr = false, esc = false, j = i, closed = false;
+    for (; j < buf.length; j++) {
+      const c = buf[j]!;
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) { j++; closed = true; break; } }
+    }
+    if (!closed) break;
+    try { out.push(JSON.parse(buf.slice(i, j)) as RawDrawioOp); } catch { break; }
+    i = j;
+  }
+  return out;
+}
+/** 流式画板转换器:把【原始 proposal op】逐个转成画板节点/连线(editId 'e'+index 与 buildChangeSet 对齐)。 */
+function makeRawBoardConv(seq: number): (op: RawDrawioOp, index: number) => { editId: string; boardId: string; node?: BNode; edge?: BEdge } | null {
+  const idMap = new Map<string, string>();
+  const bid = (orig?: string): string => { const k = orig ?? ('?' + idMap.size); let v = idMap.get(k); if (!v) { v = `g${seq}_${idMap.size + 1}`; idMap.set(k, v); } return v; };
+  let stackY = 60;
+  return (op, index) => {
+    if (op.op !== 'add') return null;
+    if (op.edge || (op.source && op.target)) {
+      const id = bid(op.cellId ?? 'e_' + index);
+      return { editId: 'e' + index, boardId: id, edge: { id, from: bid(op.source), to: bid(op.target), arrow: 'classic', style: 'ortho' } };
+    }
+    const id = bid(op.cellId ?? 'n_' + index);
+    const w = op.width ?? 160; const h = op.height ?? 48;
+    const x = op.x ?? 60; const y = op.y ?? stackY; stackY = Math.max(stackY, y) + h + 40;
+    const st = parseDrawioStyle(op.style);
+    const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(op.style), label: String(op.value ?? ''), kind: st.text ? 'text' : 'agent', ...st };
+    return { editId: 'e' + index, boardId: id, node };
   };
 }
 const bandRect = (b: { x0: number; y0: number; x1: number; y1: number }): { x: number; y: number; w: number; h: number } => ({

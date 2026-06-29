@@ -133,7 +133,10 @@ export class AnthropicModelClient implements ModelClient {
             onEvent({ type: 'answer', delta: d.text });
           } else if (d.type === 'input_json_delta') {
             const a = acc[ev.index];
-            if (a) a.json += d.partial_json;
+            if (a) {
+              a.json += d.partial_json;
+              if (dialect.format === 'drawio' && a.name === dialect.toolName) onEvent({ type: 'draft', delta: d.partial_json });
+            }
           } else if (d.type === 'thinking_delta') {
             onEvent({ type: 'reasoning', delta: d.thinking });
           }
