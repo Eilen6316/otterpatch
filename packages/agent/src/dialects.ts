@@ -38,7 +38,7 @@ export interface ExcelStyle {
 export type ExcelOp =
   | 'setValue' | 'setFormula' | 'setStyle' | 'setNumberFormat'
   | 'insertRows' | 'deleteRows' | 'insertCols' | 'deleteCols'
-  | 'merge' | 'unmerge' | 'freeze' | 'clear';
+  | 'merge' | 'unmerge' | 'freeze' | 'clear' | 'sort';
 export interface ExcelProposal {
   plan: string;
   edits: Array<{
@@ -87,6 +87,7 @@ function buildExcelChangeSet(req: ProposeRequest, p: ExcelProposal): ChangeSet {
       case 'merge': op = { family: 'structure', kind: 'mergeCells' }; break;
       case 'unmerge': op = { family: 'structure', kind: 'unmergeCells' }; break;
       case 'freeze': op = { family: 'structure', kind: 'freezePanes', rows: e.rows ?? 1, cols: e.cols ?? 0 }; break;
+      case 'sort': op = { family: 'structure', kind: 'sortRange', by: e.by ?? 0, asc: e.asc ?? true }; break;
       case 'clear': op = { family: 'value', kind: 'deleteRange' }; break;
       default: op = { family: 'value', kind: 'setValue', value: (e.value ?? null) as CellValue };
     }
@@ -110,7 +111,7 @@ export const excelDialect: HostDialect = {
           type: 'object',
           properties: {
             cell: { type: 'string', description: 'A1 引用:单格如 B2;范围如 A1:C3(merge/clear/sort 用范围);插删行用该行任一格(如 A5),插删列用该列任一格(如 C1);freeze 用 A1' },
-            op: { type: 'string', enum: ['setValue', 'setFormula', 'setStyle', 'setNumberFormat', 'insertRows', 'deleteRows', 'insertCols', 'deleteCols', 'merge', 'unmerge', 'freeze', 'clear'] },
+            op: { type: 'string', enum: ['setValue', 'setFormula', 'setStyle', 'setNumberFormat', 'insertRows', 'deleteRows', 'insertCols', 'deleteCols', 'merge', 'unmerge', 'freeze', 'clear', 'sort'] },
             value: { description: 'setValue 的新值(字符串/数字/布尔/空)' },
             formula: { type: 'string', description: 'setFormula 的公式,如 =C2*D2' },
             style: {

@@ -9,8 +9,9 @@ export const EXCEL_SYSTEM =
   '⑥ 生成大量数据(如 mock N 行)时,单元格值尽量简短,且优先逐行连续填(A2、B2…),避免一次产出过长被截断;量很大时主动分批并在 plan 里说明;' +
   '⑦ 还能做结构性操作(op 取这些值,cell 给定位):insertRows/deleteRows(cell 给目标行任一格如 A5,count 行数,before 是否在前)、' +
   'insertCols/deleteCols(cell 给目标列任一格如 C1,count、before)、merge/unmerge(cell 给范围如 A1:C1)、' +
-  'freeze(cell=A1,rows/cols 冻结行列数)、clear(cell 给范围,清空内容);这些同样先审阅再落表。' +
-  '(排序/筛选/条件格式/数据验证等可让用户用表格自带工具栏;图表/透视表暂不支持。)';
+  'freeze(cell=A1,rows/cols 冻结行列数)、clear(cell 给范围,清空内容)、' +
+  'sort(cell 给【不含表头】的数据范围如 A2:F6,by=范围内第几列从0起,asc 升降);这些同样先审阅再落表。' +
+  '(筛选/条件格式规则/数据验证可让用户用表格自带工具栏;图表/透视表需付费插件,暂不支持。)';
 
 export const EXCEL_TOOL_DESC =
   '提出对所选单元格的修改建议(不直接执行,交用户审阅)。用 A1 引用;改内容用 setValue/setFormula,改格式(标红/加粗/字色/对齐)用 setStyle,数字格式用 setNumberFormat。';

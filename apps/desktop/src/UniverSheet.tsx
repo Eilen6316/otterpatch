@@ -46,6 +46,7 @@ export interface SheetHandle {
   unmergeRange(a1: string): void;
   freeze(rows: number, cols: number): void;
   clearRange(a1: string): void;
+  sortRange(a1: string, by: number, asc: boolean): void;
 }
 interface FRangeOps {
   setValue(v: unknown): void;
@@ -54,6 +55,8 @@ interface FRangeOps {
   setFontWeight(w: string): void;
   setNumberFormat(p: string): void;
   getValue(): unknown;
+  getValues(): unknown[][];
+  setValues(v: unknown[][]): void;
   merge(): void;
   breakApart(): void;
   clearContent(): void;
@@ -244,6 +247,18 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
       unmergeRange: (a1) => safe(() => sheet()?.getRange(a1).breakApart()),
       freeze: (rows, cols) => safe(() => { const s = sheet(); if (!s) return; if (rows > 0 || cols > 0) s.setFreeze({ startRow: rows, startColumn: cols, xSplit: cols, ySplit: rows }); else s.cancelFreeze(); }),
       clearRange: (a1) => safe(() => sheet()?.getRange(a1).clearContent()),
+      sortRange: (a1, by, asc) => safe(() => {
+        const r = sheet()?.getRange(a1);
+        if (!r) return;
+        const num = (v: unknown): number => (typeof v === 'number' ? v : parseFloat(String(v).replace(/[,%¥$\s]/g, '')));
+        const sorted = [...r.getValues()].sort((x, y) => {
+          const a = x[by]; const b = y[by];
+          const na = num(a); const nb = num(b);
+          const c = Number.isFinite(na) && Number.isFinite(nb) ? na - nb : String(a ?? '').localeCompare(String(b ?? ''));
+          return asc ? c : -c;
+        });
+        r.setValues(sorted);
+      }),
       getSheet: () => { try { return snap(apiRef.current?.getActiveWorkbook?.() as unknown as FWorkbookLike | null); } catch { return null; } },
     };
   }, []);

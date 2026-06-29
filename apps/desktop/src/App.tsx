@@ -786,7 +786,7 @@ export function App() {
         setIntent(theIntent); // 把指令放回输入框,方便重试
         setSendErr(
           refused
-            ? `连不上本机 Agent 服务(${ep})。桌面版会自动启动它;若在浏览器里测试,请先运行:node apps/mcp-server/dist/serve.js`
+            ? `连不上本机 Agent 服务(${ep})。改了代码后请在项目根目录跑 npm run serve 重启它(会先重新构建再启动,确保用上最新能力)。`
             : 'Agent · ' + m,
         );
       } finally {
@@ -895,7 +895,7 @@ export function App() {
   };
   const applyExcelStructure = (cs: unknown): void => {
     const api = univerRef.current;
-    const c = cs as { edits?: Array<{ target: string; op: { family?: string; kind?: string; count?: number; before?: boolean; rows?: number; cols?: number } }>; anchors?: Record<string, { portable?: { a1?: string } }> } | null;
+    const c = cs as { edits?: Array<{ target: string; op: { family?: string; kind?: string; count?: number; before?: boolean; rows?: number; cols?: number; by?: number; asc?: boolean } }>; anchors?: Record<string, { portable?: { a1?: string } }> } | null;
     if (!api || !c?.edits) return;
     for (const e of c.edits) {
       const k = e.op?.kind;
@@ -910,6 +910,7 @@ export function App() {
       else if (k === 'mergeCells') api.mergeRange(a1);
       else if (k === 'unmergeCells') api.unmergeRange(a1);
       else if (k === 'freezePanes') api.freeze(e.op?.rows ?? 0, e.op?.cols ?? 0);
+      else if (k === 'sortRange') api.sortRange(a1, e.op?.by ?? 0, e.op?.asc ?? true);
       else if (k === 'deleteRange') api.clearRange(a1);
     }
   };

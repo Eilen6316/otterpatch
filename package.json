@@ -12,6 +12,7 @@
   "scripts": {
     "typecheck": "tsc -b",
     "dev": "npm run dev --workspace apps/desktop",
+    "serve": "tsc -b && npm run serve --workspace apps/mcp-server",
     "build": "npm run build --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
     "test:ui": "node test/ui-smoke.mjs",
