@@ -47,6 +47,33 @@ export interface SheetHandle {
   freeze(rows: number, cols: number): void;
   clearRange(a1: string): void;
   sortRange(a1: string, by: number, asc: boolean): void;
+  conditionalFormat(a1: string, cond: { when: string; v1?: number | string; v2?: number }, fmt: { bgColor?: string; color?: string; bold?: boolean; italic?: boolean }): void;
+  dataValidation(a1: string, rule: { kind: string; list?: string[]; min?: number; max?: number; v?: number }): void;
+}
+/** 条件格式规则构建器(Univer FConditionalFormattingBuilder 的最小子集)。 */
+interface CfBuilder {
+  whenNumberGreaterThan(n: number): CfBuilder;
+  whenNumberGreaterThanOrEqualTo(n: number): CfBuilder;
+  whenNumberLessThan(n: number): CfBuilder;
+  whenNumberBetween(a: number, b: number): CfBuilder;
+  whenNumberEqualTo(n: number): CfBuilder;
+  whenTextContains(s: string): CfBuilder;
+  whenCellNotEmpty(): CfBuilder;
+  whenFormulaSatisfied(f: string): CfBuilder;
+  setBackground(c: string): CfBuilder;
+  setFontColor(c: string): CfBuilder;
+  setBold(b: boolean): CfBuilder;
+  setItalic(b: boolean): CfBuilder;
+  setRanges(r: unknown[]): CfBuilder;
+  build(): unknown;
+}
+/** 数据验证构建器(Univer FDataValidationBuilder 的最小子集)。 */
+interface DvBuilder {
+  requireValueInList(list: string[]): DvBuilder;
+  requireNumberBetween(a: number, b: number): DvBuilder;
+  requireNumberGreaterThan(n: number): DvBuilder;
+  requireCheckbox(): DvBuilder;
+  build(): unknown;
 }
 interface FRangeOps {
   setValue(v: unknown): void;
@@ -57,6 +84,8 @@ interface FRangeOps {
   getValue(): unknown;
   getValues(): unknown[][];
   setValues(v: unknown[][]): void;
+  getRange(): unknown;
+  setDataValidation(rule: unknown): void;
   merge(): void;
   breakApart(): void;
   clearContent(): void;
@@ -70,6 +99,8 @@ interface FSheetOps {
   deleteColumns(columnPosition: number, howMany: number): void;
   setFreeze(f: { startRow: number; startColumn: number; xSplit: number; ySplit: number }): void;
   cancelFreeze(): void;
+  newConditionalFormattingRule(): CfBuilder;
+  addConditionalFormattingRule(rule: unknown): void;
 }
 
 export interface UniSel {
@@ -211,7 +242,7 @@ const BRAND_PRIMARY = {
 
 const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) => void }>(function UniverSheet({ onSelection }, ref) {
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const apiRef = useRef<{ getActiveWorkbook?: () => { getActiveSheet?: () => FSheetOps } } | null>(null);
+  const apiRef = useRef<{ getActiveWorkbook?: () => { getActiveSheet?: () => FSheetOps }; newDataValidation?: () => DvBuilder } | null>(null);
   const cb = useRef(onSelection);
   cb.current = onSelection;
 
@@ -258,6 +289,40 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
           return asc ? c : -c;
         });
         r.setValues(sorted);
+      }),
+      conditionalFormat: (a1, cond, fmt) => safe(() => {
+        const s = sheet();
+        if (!s) return;
+        let b = s.newConditionalFormattingRule();
+        const n1 = Number(cond.v1);
+        switch (cond.when) {
+          case 'greaterThan': b = b.whenNumberGreaterThan(n1); break;
+          case 'greaterThanOrEqual': b = b.whenNumberGreaterThanOrEqualTo(n1); break;
+          case 'lessThan': b = b.whenNumberLessThan(n1); break;
+          case 'between': b = b.whenNumberBetween(n1, Number(cond.v2)); break;
+          case 'equalTo': b = b.whenNumberEqualTo(n1); break;
+          case 'textContains': b = b.whenTextContains(String(cond.v1 ?? '')); break;
+          case 'formula': b = b.whenFormulaSatisfied(String(cond.v1 ?? '')); break;
+          default: b = b.whenCellNotEmpty();
+        }
+        if (fmt.bgColor) b = b.setBackground(fmt.bgColor);
+        if (fmt.color) b = b.setFontColor(fmt.color);
+        if (fmt.bold) b = b.setBold(true);
+        if (fmt.italic) b = b.setItalic(true);
+        s.addConditionalFormattingRule(b.setRanges([s.getRange(a1).getRange()]).build());
+      }),
+      dataValidation: (a1, rule) => safe(() => {
+        const dv = apiRef.current?.newDataValidation?.();
+        const s = sheet();
+        if (!dv || !s) return;
+        let b: DvBuilder;
+        switch (rule.kind) {
+          case 'numberBetween': b = dv.requireNumberBetween(rule.min ?? 0, rule.max ?? 0); break;
+          case 'numberGreaterThan': b = dv.requireNumberGreaterThan(rule.v ?? 0); break;
+          case 'checkbox': b = dv.requireCheckbox(); break;
+          default: b = dv.requireValueInList(rule.list ?? []);
+        }
+        s.getRange(a1).setDataValidation(b.build());
       }),
       getSheet: () => { try { return snap(apiRef.current?.getActiveWorkbook?.() as unknown as FWorkbookLike | null); } catch { return null; } },
     };

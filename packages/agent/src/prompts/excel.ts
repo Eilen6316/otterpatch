@@ -10,8 +10,10 @@ export const EXCEL_SYSTEM =
   '⑦ 还能做结构性操作(op 取这些值,cell 给定位):insertRows/deleteRows(cell 给目标行任一格如 A5,count 行数,before 是否在前)、' +
   'insertCols/deleteCols(cell 给目标列任一格如 C1,count、before)、merge/unmerge(cell 给范围如 A1:C1)、' +
   'freeze(cell=A1,rows/cols 冻结行列数)、clear(cell 给范围,清空内容)、' +
-  'sort(cell 给【不含表头】的数据范围如 A2:F6,by=范围内第几列从0起,asc 升降);这些同样先审阅再落表。' +
-  '(筛选/条件格式规则/数据验证可让用户用表格自带工具栏;图表/透视表需付费插件,暂不支持。)';
+  'sort(cell 给【不含表头】的数据范围如 A2:F6,by=范围内第几列从0起,asc 升降)、' +
+  'condFormat(条件格式规则:cell 给范围,when 取 greaterThan/lessThan/between/equalTo/textContains/notEmpty/formula,v1(/v2)给阈值,style 给满足时的格式如 {bgColor:"#ffd6d6"})、' +
+  'dataValidation(数据验证:cell 给范围,rule 取 list(配 list 选项做下拉)/numberBetween(min,max)/numberGreaterThan(v)/checkbox);这些同样先审阅再落表。' +
+  '(图表/透视表需付费插件,暂不内置;需要"透视"就读数→分组聚合→用 setValue/setFormula 写一张新汇总表。)';
 
 export const EXCEL_TOOL_DESC =
   '提出对所选单元格的修改建议(不直接执行,交用户审阅)。用 A1 引用;改内容用 setValue/setFormula,改格式(标红/加粗/字色/对齐)用 setStyle,数字格式用 setNumberFormat。';

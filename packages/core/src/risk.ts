@@ -29,6 +29,8 @@ const RISK_BY_KIND: Record<EditOpKind, RiskLevel> = {
   mergeCells: 'caution',
   unmergeCells: 'caution',
   freezePanes: 'safe',
+  conditionalFormat: 'safe',
+  dataValidation: 'safe',
   addObject: 'caution',
   // 破坏性:删除数据 / 级联 / 不透明原生 op
   deleteRange: 'destructive',

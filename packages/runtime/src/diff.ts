@@ -79,6 +79,10 @@ function describe(op: EditOp): { badge: DiffBadge; label: string; after?: string
       return { badge: 'modify', label: '取消合并' };
     case 'freezePanes':
       return { badge: 'modify', label: `冻结 ${op.rows} 行 / ${op.cols} 列` };
+    case 'conditionalFormat':
+      return { badge: 'modify', label: `条件格式 ${op.when}${op.style.bgColor ? ' → 填充 ' + op.style.bgColor : ''}${op.style.color ? ' 字色 ' + op.style.color : ''}` };
+    case 'dataValidation':
+      return { badge: 'modify', label: `数据验证 ${op.rule}` };
     case 'setMark':
       return { badge: 'modify', label: `mark ${op.mark.type}` };
     case 'setParagraphStyle':

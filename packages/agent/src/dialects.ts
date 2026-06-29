@@ -40,8 +40,11 @@ export const EXCEL_OPS = [
   'setValue', 'setFormula', 'setStyle', 'setNumberFormat',
   'insertRows', 'deleteRows', 'insertCols', 'deleteCols',
   'merge', 'unmerge', 'freeze', 'clear', 'sort',
+  'condFormat', 'dataValidation',
 ] as const;
 export type ExcelOp = (typeof EXCEL_OPS)[number];
+export type CondWhen = 'greaterThan' | 'greaterThanOrEqual' | 'lessThan' | 'between' | 'equalTo' | 'textContains' | 'notEmpty' | 'formula';
+export type DvKind = 'list' | 'numberBetween' | 'numberGreaterThan' | 'checkbox' | 'dateBetween';
 export interface ExcelProposal {
   plan: string;
   edits: Array<{
@@ -57,6 +60,14 @@ export interface ExcelProposal {
     cols?: number; // freeze 冻结列数
     by?: number; // sort 依据列(范围内 0 基)
     asc?: boolean; // sort 升序
+    when?: CondWhen; // condFormat 条件
+    v1?: number | string; // condFormat 操作数1 / between 下界
+    v2?: number; // condFormat between 上界
+    rule?: DvKind; // dataValidation 类型
+    list?: string[]; // dataValidation 下拉选项
+    min?: number; // dataValidation numberBetween 下界
+    max?: number; // dataValidation numberBetween 上界
+    v?: number; // dataValidation numberGreaterThan 阈值
   }>;
 }
 
@@ -91,6 +102,8 @@ function buildExcelChangeSet(req: ProposeRequest, p: ExcelProposal): ChangeSet {
       case 'unmerge': op = { family: 'structure', kind: 'unmergeCells' }; break;
       case 'freeze': op = { family: 'structure', kind: 'freezePanes', rows: e.rows ?? 1, cols: e.cols ?? 0 }; break;
       case 'sort': op = { family: 'structure', kind: 'sortRange', by: e.by ?? 0, asc: e.asc ?? true }; break;
+      case 'condFormat': op = { family: 'style', kind: 'conditionalFormat', when: e.when ?? 'notEmpty', ...(e.v1 != null ? { v1: e.v1 } : {}), ...(e.v2 != null ? { v2: e.v2 } : {}), style: e.style ?? {} }; break;
+      case 'dataValidation': op = { family: 'style', kind: 'dataValidation', rule: e.rule ?? 'list', ...(e.list ? { list: e.list } : {}), ...(e.min != null ? { min: e.min } : {}), ...(e.max != null ? { max: e.max } : {}), ...(e.v != null ? { v: e.v } : {}) }; break;
       case 'clear': op = { family: 'value', kind: 'deleteRange' }; break;
       default: op = { family: 'value', kind: 'setValue', value: (e.value ?? null) as CellValue };
     }
@@ -135,6 +148,14 @@ export const excelDialect: HostDialect = {
             cols: { type: 'number', description: 'freeze 冻结的列数' },
             by: { type: 'number', description: 'sort 排序依据列(范围内从 0 起)' },
             asc: { type: 'boolean', description: 'sort 升序(默认 true)' },
+            when: { type: 'string', enum: ['greaterThan', 'greaterThanOrEqual', 'lessThan', 'between', 'equalTo', 'textContains', 'notEmpty', 'formula'], description: 'condFormat 条件;配合 style 给满足条件的格式' },
+            v1: { description: 'condFormat 操作数(>、<、=、between 下界、textContains 文本、formula 公式)' },
+            v2: { type: 'number', description: 'condFormat between 的上界' },
+            rule: { type: 'string', enum: ['list', 'numberBetween', 'numberGreaterThan', 'checkbox', 'dateBetween'], description: 'dataValidation 类型' },
+            list: { type: 'array', items: { type: 'string' }, description: 'dataValidation=list 的下拉选项' },
+            min: { type: 'number', description: 'dataValidation numberBetween 下界' },
+            max: { type: 'number', description: 'dataValidation numberBetween 上界' },
+            v: { type: 'number', description: 'dataValidation numberGreaterThan 阈值' },
           },
           required: ['cell', 'op'],
         },
