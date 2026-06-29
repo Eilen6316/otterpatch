@@ -1,8 +1,8 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent, ReactNode } from 'react';
 import {
   IconSelect, IconArrow, IconStrike, IconPencil, IconHelp,
-  IconFilter, IconFlag, IconSigma, IconPaperclip, IconImage, IconClock,
+  IconFilter, IconFlag, IconSigma, IconClock,
   IconSend, IconChevron, IconSearch, IconDots, IconUndo, IconCheck, IconX,
   IconDoc, IconPlus,
   FUNC_ICONS,
@@ -13,13 +13,16 @@ import type { UniSel, SheetHandle } from './UniverSheet.js';
 import { Markdown } from './Markdown.js';
 
 /** Agent 在网格上的一步操作(用于"边画边改"的可视化播放)。 */
-interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bold?: boolean; numFmt?: string; note: string; before?: unknown }
+interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bold?: boolean; numFmt?: string; note: string; before?: unknown; editId?: string }
 
 /** 对话流里的一条消息(Cursor 式连续 thread)。 */
 type Turn =
   | { role: 'user'; text: string }
   | { role: 'assistant'; kind: 'answer'; text: string; reasoning?: string; streaming?: boolean }
-  | { role: 'assistant'; kind: 'diff'; diff: AgentDiff; ops: GridOp[]; reasoning?: string; reverted?: boolean; committed?: boolean; committedCount?: number };
+  | { role: 'assistant'; kind: 'diff'; diff: AgentDiff; ops: GridOp[]; board?: BoardPatch; reasoning?: string; reverted?: boolean; committed?: boolean; committedCount?: number };
+
+/** drawio 改动落到画板的句柄:editId→画板对象 id 映射 + 可重放的节点/连线(供逐条接受/拒绝)。 */
+interface BoardPatch { byEdit: Record<string, string>; objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> }
 
 /**
  * 把对话流投影成模型历史(Pi 的 projection 模式:thread 是单一数据源)。
@@ -467,6 +470,9 @@ export function App() {
   const [uniSel, setUniSel] = useState<UniSel | null>(null);
   const [boardSel, setBoardSel] = useState<BoardSel | null>(null);
   const univerRef = useRef<SheetHandle>(null);
+  const boardRef = useRef<BoardHandle>(null);
+  const applySeqRef = useRef(0);
+  const [reviewIdx, setReviewIdx] = useState(0);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false); // 同步重入锁:异步 busy state 拦不住同一帧内的连发
   const [playList, setPlayList] = useState<GridOp[]>([]);
@@ -702,16 +708,24 @@ export function App() {
             else if (e.type === 'done') {
               finished = true;
               if (e.kind === 'changeset' && e.diff) {
-                const ops = diffToOps(e.diff);
-                const api = univerRef.current; // 采集改前值,供"撤销改动"还原
-                if (api) for (const op of ops) { if (op.value !== undefined) op.before = api.getValue(op.a1); }
                 const diff = e.diff;
                 const cs = e.changeSet ?? null;
-                setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                 setRealCs(cs);
                 setRealDiff(diff);
                 setAccepted(new Set(diff.items.map((it) => it.editId)));
-                if (ops.length) void playOps(ops); // 边画边改
+                setReviewIdx(0);
+                if (fmt === 'drawio') {
+                  // drawio:把提案的节点/连线落到左侧画板(立刻可见),审阅逐条高亮/可移除
+                  const board = drawioCsToBoard(cs);
+                  boardRef.current?.addObjects(board.nodes, board.edges);
+                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], board: { byEdit: board.byEdit, objs: board.objs }, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                } else {
+                  const ops = diffToOps(diff);
+                  const api = univerRef.current; // 采集改前值,供"撤销/拒绝"还原
+                  if (api) for (const op of ops) { if (op.value !== undefined) op.before = api.getValue(op.a1); }
+                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                  if (ops.length) void playOps(ops); // 边画边改
+                }
               } else {
                 upd((tt) => (tt.kind === 'answer' ? { ...tt, text: e.text ?? tt.text, streaming: false } : tt));
               }
@@ -765,12 +779,16 @@ export function App() {
   const revertTurn = (idx: number): void => {
     const turn = thread[idx];
     if (!turn || turn.role !== 'assistant' || turn.kind !== 'diff') return;
-    const api = univerRef.current;
-    if (api) {
-      for (const op of turn.ops) {
-        if (op.value !== undefined) api.setCell(op.a1, op.before ?? '');
-        if (op.bg) api.setBackground(op.a1, null);
-        if (op.color) api.setFontColor(op.a1, '#1f2937');
+    if (turn.board) {
+      boardRef.current?.removeObjects(Object.values(turn.board.byEdit)); // drawio:从画板移除该回合对象
+    } else {
+      const api = univerRef.current;
+      if (api) {
+        for (const op of turn.ops) {
+          if (op.value !== undefined) api.setCell(op.a1, op.before ?? '');
+          if (op.bg) api.setBackground(op.a1, null);
+          if (op.color) api.setFontColor(op.a1, '#1f2937');
+        }
       }
     }
     setThread((th) => th.map((tt, i) => (i === idx ? ({ ...tt, reverted: true } as Turn) : tt)));
@@ -816,7 +834,7 @@ export function App() {
         const s = it.style;
         // 数字格式:只改格式、绝不写值(否则会把 "0%" 当文本覆盖数据)
         if (s?.numberFormat) {
-          return { a1, numFmt: s.numberFormat, note: it.label ?? it.badge };
+          return { a1, numFmt: s.numberFormat, note: it.label ?? it.badge, editId: it.editId };
         }
         if (s && (s.bgColor || s.color || s.bold)) {
           return {
@@ -825,10 +843,89 @@ export function App() {
             ...(s.color ? { color: s.color } : {}),
             ...(s.bold ? { bold: true } : {}),
             note: it.label ?? it.badge,
+            editId: it.editId,
           };
         }
-        return { a1, ...(it.after != null ? { value: it.after } : {}), note: it.label ?? it.badge };
+        return { a1, ...(it.after != null ? { value: it.after } : {}), note: it.label ?? it.badge, editId: it.editId };
       });
+  /** drawio:把 Agent 的 ChangeSet 转成画板节点/连线(画板内唯一 id,保持 source/target 一致映射)。 */
+  const drawioCsToBoard = (cs: unknown): { nodes: BNode[]; edges: BEdge[]; byEdit: Record<string, string>; objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> } => {
+    const seq = ++applySeqRef.current;
+    const edits = (cs as { edits?: Array<{ id: string; op: { kind: string; payload?: unknown } }> } | null)?.edits ?? [];
+    const idMap = new Map<string, string>();
+    const bid = (orig?: string): string => { const k = orig ?? ('?' + idMap.size); let v = idMap.get(k); if (!v) { v = `g${seq}_${idMap.size + 1}`; idMap.set(k, v); } return v; };
+    const nodes: BNode[] = []; const edges: BEdge[] = []; const byEdit: Record<string, string> = {}; const objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> = [];
+    let stackY = 60;
+    for (const e of edits) {
+      if (e.op?.kind !== 'addObject') continue;
+      const p = (e.op.payload ?? {}) as { id?: string; value?: string; style?: string; edge?: boolean; source?: string; target?: string; geometry?: { x?: number; y?: number; width?: number; height?: number } };
+      if (p.edge || (p.source && p.target)) {
+        const id = bid(p.id ?? 'e_' + e.id);
+        const edge: BEdge = { id, from: bid(p.source), to: bid(p.target), arrow: 'classic', style: 'ortho' };
+        edges.push(edge); byEdit[e.id] = id; objs.push({ editId: e.id, edge });
+      } else {
+        const id = bid(p.id ?? 'n_' + e.id);
+        const g = p.geometry ?? {};
+        const w = g.width ?? 160; const h = g.height ?? 48;
+        const x = g.x ?? 60; const y = g.y ?? stackY; stackY = Math.max(stackY, y) + h + 40;
+        const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(p.style), label: String(p.value ?? ''), kind: 'agent' };
+        nodes.push(node); byEdit[e.id] = id; objs.push({ editId: e.id, node });
+      }
+    }
+    return { nodes, edges, byEdit, objs };
+  };
+  // ── 逐条审阅:把单条改动应用/还原到左侧工作区(Excel 网格 / drawio 画板)+ 高亮当前条 ──
+  const applyGridOp = (op: GridOp): void => {
+    const api = univerRef.current; if (!api) return;
+    if (op.value !== undefined) api.setCell(op.a1, op.value);
+    if (op.bold) api.setBold(op.a1);
+    if (op.color) api.setFontColor(op.a1, op.color);
+    if (op.numFmt) api.setNumberFormat(op.a1, op.numFmt);
+    api.setBackground(op.a1, op.bg ?? null);
+  };
+  const revertGridOp = (op: GridOp): void => {
+    const api = univerRef.current; if (!api) return;
+    if (op.value !== undefined) api.setCell(op.a1, op.before ?? '');
+    if (op.bg) api.setBackground(op.a1, null);
+    if (op.color) api.setFontColor(op.a1, '#1f2937');
+  };
+  const reapplyBoardObj = (o: { node?: BNode; edge?: BEdge }): void =>
+    boardRef.current?.addObjects(o.node ? [o.node] : [], o.edge ? [o.edge] : []);
+  /** 高亮当前审阅的改动:Excel 聚焦该格、drawio 高亮该对象。 */
+  const highlightItem = (turn: Extract<Turn, { kind: 'diff' }>, item: AgentDiffItem | undefined): void => {
+    if (!item) return;
+    if (isExcel) univerRef.current?.focus(item.ref.replace(/^.*!/, ''));
+    else if (fmt === 'drawio') { const id = turn.board?.byEdit[item.editId]; if (id) boardRef.current?.highlight(id); }
+  };
+  const acceptItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number): void => {
+    const it = turn.diff.items[idx]; if (!it) return;
+    if (!accepted.has(it.editId)) { // 之前被拒 → 重新落回工作区
+      if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
+      else { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
+      toggleAccept(it.editId, true);
+    }
+    setReviewIdx(idx + 1);
+  };
+  const rejectItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number): void => {
+    const it = turn.diff.items[idx]; if (!it) return;
+    if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) revertGridOp(op); }
+    else { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); }
+    toggleAccept(it.editId, false);
+    setReviewIdx(idx + 1);
+  };
+  const acceptAll = (turn: Extract<Turn, { kind: 'diff' }>, ti: number): void => {
+    for (const it of turn.diff.items) {
+      if (accepted.has(it.editId)) continue;
+      if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
+      else { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
+    }
+    const all = turn.diff.items.map((x) => x.editId);
+    setAccepted(new Set(all));
+    setReviewIdx(all.length);
+    markCommitted(ti, all.length);
+    if (isExcel && fileB64) void doCommit(all); // 有上传文件 → 外科写回并下载
+    else notify((fmt === 'drawio' ? t('已采纳到画板') : t('已采纳到表格')) + ' · ' + all.length + ' ' + t('处'));
+  };
   /** 读入要写回的真实文件(.xlsx/.docx/.pdf/.drawio)为 base64。 */
   const onFile = (f: File | undefined): void => {
     if (!f) return;
@@ -948,6 +1045,18 @@ export function App() {
     }
   }
 
+  // 审阅当前条 → 在左侧工作区高亮它(Excel 聚焦该格 / drawio 高亮该对象),逐条引导
+  useEffect(() => {
+    let li = -1;
+    for (let i = thread.length - 1; i >= 0; i--) { const tt = thread[i]; if (tt && tt.role === 'assistant' && tt.kind === 'diff') { li = i; break; } }
+    if (li < 0) return;
+    const turn = thread[li];
+    if (!turn || turn.role !== 'assistant' || turn.kind !== 'diff' || turn.committed || turn.reverted) return;
+    if (reviewIdx >= turn.diff.items.length) return;
+    highlightItem(turn, turn.diff.items[reviewIdx]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewIdx, lastDiffIdx, thread.length, fmt]);
+
   return (
     <TContext.Provider value={t}>
       <div className="app">
@@ -1045,7 +1154,7 @@ export function App() {
                   <UniverSheet ref={univerRef} onSelection={setUniSel} />
                 </Suspense>
               ) : fmt === 'drawio' ? (
-                <DrawioBoard onBoardSel={setBoardSel} />
+                <DrawioBoard ref={boardRef} onBoardSel={setBoardSel} />
               ) : (
                 <div className="doc-page">
                   <div className="canvas-ph">
@@ -1119,59 +1228,60 @@ export function App() {
                           </div>
                         </div>
                       );
-                    const active = i === lastDiffIdx;
+                    const active = i === lastDiffIdx && !turn.committed && !turn.reverted;
                     const d = turn.diff;
+                    const total = d.items.length;
+                    const ridx = Math.min(reviewIdx, total);
+                    const cur = active && ridx < total ? d.items[ridx] : undefined;
+                    const badgeText = (b: string): string => (b === 'add' ? t('新增') : b === 'remove' ? t('删除') : b === 'move' ? t('移动') : t('修改'));
                     return (
                       <div key={i} className="ai-msg">
                         <img className="ai-av" src="/favicon.png" alt="" />
                         <div className="ai-stack">
                           {turn.reasoning ? <ThinkingPanel reasoning={turn.reasoning} /> : null}
-                          <div className="diff-turn">
-                          {active && playList.length > 0 && (
-                            <div className="oplist">
-                              <div className="opbar">
-                                <span className={'oplbl' + (playing ? ' live' : '')}>{playing ? t('Agent 正在操作网格') : t('Agent 操作完成')}</span>
-                                <span className="grow" />
-                                <span className="opcount">{Math.min(playIdx + 1, playList.length)}/{playList.length}</span>
-                              </div>
-                              <div className="opprog"><div className="opprog-fill" style={{ width: `${(Math.min(Math.max(playIdx + 1, 0), playList.length) / playList.length) * 100}%` }} /></div>
+                          <div className="reviewbox">
+                            <div className="rv-top">
+                              <span className="rv-title"><IconSelect size={13} /> {t('审阅改动')}</span>
+                              {d.intent ? <span className="rv-intent">{d.intent}</span> : null}
+                              <span className="grow" />
+                              {total > 0 && active && <span className="rv-count">{Math.min(ridx + (cur ? 1 : 0), total)}<i>/</i>{total}</span>}
                             </div>
-                          )}
-                          <div className="summary">{d.intent}</div>
-                          {d.items.map((it) => {
-                            const on = active ? accepted.has(it.editId) : !turn.reverted;
-                            return (
-                              <div className={'change' + (on ? '' : ' rejected')} key={it.editId}>
-                                <div className="head">
-                                  <span className="tag">{it.badge}</span>
-                                  <span className="ttl">{it.ref}</span>
-                                </div>
-                                <div className="body2">
-                                  {it.after ? <div className="ba"><span className="after">{it.after}</span></div> : null}
-                                  <div className="why">{it.label}</div>
-                                </div>
-                                {active && !turn.committed && (
-                                  <div className="acts">
-                                    <button className={'btn' + (on ? ' ok' : '')} onClick={() => toggleAccept(it.editId, true)}><IconCheck size={14} /> {t('接受')}</button>
-                                    <button className={'btn' + (!on ? ' no' : '')} onClick={() => toggleAccept(it.editId, false)}><IconX size={14} /> {t('拒绝')}</button>
+                            {total > 0 && active && <div className="rv-prog"><div className="rv-prog-fill" style={{ width: `${(ridx / total) * 100}%` }} /></div>}
+
+                            {total === 0 ? (
+                              <div className="rv-empty">{t('Agent 未提出改动')}</div>
+                            ) : turn.committed ? (
+                              <div className="rv-final ok"><IconCheck size={15} /> {t('已采纳')}{turn.committedCount ? ` · ${turn.committedCount} ${t('处')}` : ''}<span className="grow" /><button className="link-btn" onClick={() => revertTurn(i)}>{t('撤销')}</button></div>
+                            ) : turn.reverted ? (
+                              <div className="rv-final dim">↩ {t('已撤销')}</div>
+                            ) : cur ? (
+                              <>
+                                <div className={'rv-card' + (accepted.has(cur.editId) ? '' : ' rejected')}>
+                                  <div className="rv-card-h">
+                                    <span className={'rv-badge ' + cur.badge}>{badgeText(cur.badge)}</span>
+                                    <span className="rv-ref">{cur.ref}</span>
                                   </div>
-                                )}
+                                  {cur.after ? <div className="rv-after">{cur.after}</div> : null}
+                                  <div className="rv-why">{cur.label}</div>
+                                </div>
+                                <div className="rv-acts">
+                                  <button className="rv-step" disabled={ridx <= 0} onClick={() => setReviewIdx(Math.max(0, ridx - 1))} title={t('上一处')}><IconChevron size={14} /></button>
+                                  <button className="btn no" onClick={() => rejectItem(turn, ridx)}><IconX size={14} /> {t('拒绝')}</button>
+                                  <button className="btn ok" onClick={() => acceptItem(turn, ridx)}><IconCheck size={14} /> {t('接受')}</button>
+                                  <span className="grow" />
+                                  <button className="btn solid" onClick={() => acceptAll(turn, i)}>{t('全部接受')}{total > 1 ? ` · ${total}` : ''}</button>
+                                </div>
+                              </>
+                            ) : active ? (
+                              <div className="rv-acts done">
+                                <span className="rv-donen">{t('已逐条过完')} · {accepted.size}/{total}</span>
+                                <span className="grow" />
+                                <button className="rv-step" onClick={() => setReviewIdx(0)} title={t('重看')}><IconUndo size={14} /></button>
+                                <button className="btn solid" onClick={() => acceptAll(turn, i)}><IconCheck size={14} /> {t('全部接受')}</button>
                               </div>
-                            );
-                          })}
-                          {d.items.length === 0 && <div className="te-d">{t('Agent 未提出改动')}</div>}
-                          {turn.committed ? (
-                            <div className="committed-tag">✓ {t('已接受')}{turn.committedCount ? ` · ${turn.committedCount} ${t('处')}` : ''} <button className="link-btn" onClick={() => revertTurn(i)}>{t('撤销')}</button></div>
-                          ) : turn.reverted ? (
-                            <div className="reverted-tag">↩ {t('已撤销')}</div>
-                          ) : active && d.items.length > 0 ? (
-                            <div className="bulk">
-                              <button className="btn ok" disabled={busy || playing} onClick={() => { const all = d.items.map((x) => x.editId); setAccepted(new Set(all)); markCommitted(i, all.length); void doCommit(all); }}><IconCheck size={14} /> {t('全部接受')}</button>
-                              <button className="btn" disabled={busy || playing} onClick={() => { markCommitted(i, accepted.size); void doCommit([...accepted]); }}>{t('部分接受')}</button>
-                            </div>
-                          ) : d.items.length > 0 ? (
-                            <div className="bulk"><button className="btn" onClick={() => revertTurn(i)}>↩ {t('撤销改动')}</button></div>
-                          ) : null}
+                            ) : (
+                              <div className="rv-final dim">{total} {t('处改动')}<span className="grow" /><button className="link-btn" onClick={() => revertTurn(i)}>↩ {t('撤销改动')}</button></div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1280,9 +1390,7 @@ export function App() {
                     style={{ display: 'none' }}
                     onChange={(e) => onFile(e.target.files?.[0] ?? undefined)}
                   />
-                  <button className={'iconbtn' + (fileName ? ' on' : '')} title={fileName || t('附件')} onClick={() => fileRef.current?.click()}><IconPaperclip size={17} /></button>
-                  <button className="iconbtn" title={t('图片')}><IconImage size={17} /></button>
-                  <button className="iconbtn" title={t('历史')}><IconClock size={17} /></button>
+                  <button className={'iconbtn plus' + (fileName ? ' on' : '')} title={fileName || t('附件')} onClick={() => fileRef.current?.click()}><IconPlus size={16} /></button>
                   <span className="grow" />
                   <button className={'model' + (cfgOpen ? ' on' : '')} onClick={() => setCfgOpen((v) => !v)}>
                     {curProvider.label} <IconChevron size={13} />
@@ -1612,6 +1720,22 @@ function roundedPath(pts: XY[], r = 8): string {
   return d + ` L ${last.x} ${last.y}`;
 }
 export interface BoardSel { count: number; chip: string; context: string }
+/** App ↔ DrawioBoard 命令式句柄:把 Agent 提案的节点/连线落到画板、移除、或高亮某个对象供审阅。 */
+export interface BoardHandle {
+  addObjects(nodes: BNode[], edges: BEdge[]): void;
+  removeObjects(ids: string[]): void;
+  highlight(id: string): void;
+}
+/** drawio style 串 → 画板节点的线稿 inner SVG(覆盖常见形状,默认矩形)。 */
+function innerForStyle(style?: string): string {
+  const s = (style ?? '').toLowerCase();
+  if (s.includes('ellipse')) return '<ellipse cx="20" cy="15" rx="16" ry="11"/>';
+  if (s.includes('rhombus')) return '<polygon points="20,3 37,15 20,27 3,15"/>';
+  if (s.includes('hexagon')) return '<polygon points="11,5 29,5 37,15 29,25 11,25 3,15"/>';
+  if (s.includes('cylinder')) return '<ellipse cx="20" cy="7" rx="13" ry="3.5"/><line x1="7" y1="7" x2="7" y2="23"/><line x1="33" y1="7" x2="33" y2="23"/><path d="M7 23 A13 3.5 0 0 0 33 23"/>';
+  if (s.includes('rounded=1') || s.includes('rounded')) return '<rect x="4" y="5" width="32" height="20" rx="4" ry="4"/>';
+  return '<rect x="4" y="5" width="32" height="20"/>';
+}
 const bandRect = (b: { x0: number; y0: number; x1: number; y1: number }): { x: number; y: number; w: number; h: number } => ({
   x: Math.min(b.x0, b.x1),
   y: Math.min(b.y0, b.y1),
@@ -1655,13 +1779,29 @@ const HANDLES: { k: string; fx: number; fy: number }[] = [
 const PORTS: XY[] = [{ x: 0.5, y: 0 }, { x: 1, y: 0.5 }, { x: 0.5, y: 1 }, { x: 0, y: 0.5 }];
 
 /** 高度复刻 drawio 的交互画板:周界正交圆角连线、悬停连接点拖拽连线(绿色目标高亮)、8 缩放手柄、网格吸附、改名、删边删点、双击空白建节点。 */
-function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void }) {
+const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel | null) => void }>(function DrawioBoard({ onBoardSel }, apiRef) {
   const t = useT();
   const [nodes, setNodes] = useState<BNode[]>([]);
   const [edges, setEdges] = useState<BEdge[]>([]);
   const [selIds, setSelIds] = useState<Set<string>>(new Set());
   const [selEdge, setSelEdge] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
+  const [hi, setHi] = useState<string | null>(null);
+  useImperativeHandle(apiRef, () => ({
+    addObjects: (nn, ee) => {
+      if (nn.length || ee.length) commit();
+      if (nn.length) setNodes((ns) => [...ns, ...nn]);
+      if (ee.length) setEdges((es) => [...es, ...ee]);
+      setSelIds(new Set(nn.map((n) => n.id)));
+      setSelEdge(null);
+    },
+    removeObjects: (ids) => {
+      const s = new Set(ids);
+      setNodes((ns) => ns.filter((n) => !s.has(n.id)));
+      setEdges((es) => es.filter((ed) => !s.has(ed.id) && !s.has(ed.from) && !s.has(ed.to)));
+    },
+    highlight: (id) => { setHi(id); setSelIds(new Set([id])); setSelEdge(null); },
+  }));
   const [editing, setEditing] = useState<string | null>(null);
   const [drag, setDrag] = useState<{ sx: number; sy: number; origins: Record<string, XY> } | null>(null);
   const [resize, setResize] = useState<{ id: string; k: string; box: BNode; sx: number; sy: number } | null>(null);
@@ -2114,7 +2254,7 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
         return (
           <div
             key={n.id}
-            className={'bnode' + (isSel ? ' sel' : '') + (isHover && !isSel ? ' hover' : '') + (isTgt ? ' tgt' : '')}
+            className={'bnode' + (isSel ? ' sel' : '') + (isHover && !isSel ? ' hover' : '') + (isTgt ? ' tgt' : '') + (n.id === hi ? ' hi' : '')}
             style={{ left: n.x, top: n.y, width: n.w, height: n.h, ...(n.rot ? { transform: `rotate(${n.rot}deg)` } : {}) }}
             onPointerEnter={() => setHover(n.id)}
             onPointerLeave={() => setHover((h) => (h === n.id ? null : h))}
@@ -2326,4 +2466,4 @@ function DrawioBoard({ onBoardSel }: { onBoardSel?: (s: BoardSel | null) => void
       <div className="board-zoom">{Math.round(zoom * 100)}%</div>
     </div>
   );
-}
+});

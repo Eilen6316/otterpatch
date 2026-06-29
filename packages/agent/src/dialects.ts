@@ -156,7 +156,7 @@ function buildDrawioChangeSet(req: ProposeRequest, p: DrawioProposal): ChangeSet
     switch (o.op) {
       case 'add': {
         const parent = o.parent ?? '1';
-        elementId = parent;
+        elementId = o.cellId ?? 'add' + i; // 锚点指向【新建对象】本身(diff/审阅更清晰);父容器由 payload.parent 携带
         op = {
           family: 'object',
           kind: 'addObject',
@@ -205,9 +205,17 @@ function buildDrawioChangeSet(req: ProposeRequest, p: DrawioProposal): ChangeSet
 export const drawioDialect: HostDialect = {
   format: 'drawio',
   systemPrompt:
-    '你是一个 drawio 流程图编辑 Agent。用户在图里圈选了节点/连线,把意图转成一组按 mxCell id 的操作,' +
-    '只能通过 propose_changeset 工具提交。op:add(新增节点/边,给 cellId 作新 id、style、parent、source/target、x/y/width/height)、' +
-    'update(改 value/style)、delete(删,自动级联删相关边)、move(改 x/y/width/height)。' +
+    '你是一个 drawio 流程图编辑 Agent。把用户意图转成一组按 mxCell id 的操作,只能通过 propose_changeset 工具提交。' +
+    'op:add(新增节点/边)、update(改 value/style)、delete(删,自动级联删边)、move(改 x/y/width/height)。\n' +
+    '【画图要点 —— 务必产出一张真正可用的图,而不是几个空盒子】:\n' +
+    '① 每个节点都要给 cellId(唯一,如 n1/n2…)、value(节点上显示的文字,必填,别留空)、vertex:true、以及 x/y/width/height;\n' +
+    '② 坐标系:画布左上为原点,x 向右、y 向下,单位 px。节点【不要重叠】:同一列纵向叠放时,相邻节点 y 间隔 ≥ height+40;典型节点 width 160、height 48;"在左边" → x 取 40~120;\n' +
+    '③ 连接关系用 add + edge:true + source/target(两端节点的 cellId)表达,把流程/层级真正连起来;\n' +
+    '④ 文字用 value 字段(中文直接写),形状用 style(如 rounded=1;fillColor=#dae8fc; 或 ellipse; / rhombus;)。\n' +
+    '示例(竖直叠放两层并连线):ops=[' +
+    '{op:"add",cellId:"n1",value:"应用层",vertex:true,x:60,y:40,width:160,height:48,style:"rounded=1;fillColor=#dae8fc;"},' +
+    '{op:"add",cellId:"n2",value:"表示层",vertex:true,x:60,y:128,width:160,height:48,style:"rounded=1;fillColor=#dae8fc;"},' +
+    '{op:"add",cellId:"e1",edge:true,source:"n1",target:"n2"}]。\n' +
     '不直接执行,改动交用户逐条审阅。先给一句话 plan,再给 ops。',
   toolName: 'propose_changeset',
   toolDescription: '提出对所选 drawio 节点/连线的修改建议(不直接执行,交用户审阅)。按 mxCell id 操作。',

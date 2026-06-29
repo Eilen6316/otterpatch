@@ -44,7 +44,7 @@ export class AnthropicModelClient implements ModelClient {
   constructor(opts: AnthropicOptions = {}) {
     this.client = new Anthropic({ apiKey: opts.apiKey, baseURL: opts.baseURL });
     this.model = opts.model ?? 'claude-opus-4-8';
-    this.maxTokens = opts.maxTokens ?? 4096;
+    this.maxTokens = opts.maxTokens ?? 8192;
   }
 
   private toolset(req: ProposeRequest, dialect: HostDialect): Anthropic.Tool[] {

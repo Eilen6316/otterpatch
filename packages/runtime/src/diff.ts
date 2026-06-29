@@ -77,8 +77,11 @@ function describe(op: EditOp): { badge: DiffBadge; label: string; after?: string
       return { badge: 'move', label: 'move object' };
     case 'setObjectProps':
       return { badge: 'modify', label: 'set props', after: JSON.stringify(op.props) };
-    case 'addObject':
-      return { badge: 'add', label: 'add object' };
+    case 'addObject': {
+      const p = (op.payload ?? {}) as { value?: string; edge?: boolean; source?: string; target?: string };
+      if (p.edge || (p.source && p.target)) return { badge: 'add', label: `连线 ${p.source ?? '?'} → ${p.target ?? '?'}` };
+      return p.value ? { badge: 'add', label: `新增节点「${p.value}」`, after: String(p.value) } : { badge: 'add', label: '新增节点' };
+    }
     case 'deleteObject':
       return { badge: 'remove', label: 'delete object' };
     case 'rawHost':

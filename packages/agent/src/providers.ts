@@ -58,7 +58,7 @@ export interface CreateModelOptions {
 export function createModelClient(provider: Provider, opts: CreateModelOptions = {}): ModelClient {
   const p = PROVIDERS[provider];
   const model = opts.model ?? p.defaultModel;
-  const maxTokens = opts.maxTokens ?? 4096;
+  const maxTokens = opts.maxTokens ?? 8192;
   if (p.kind === 'anthropic') {
     return new AnthropicModelClient({ apiKey: opts.apiKey, model, baseURL: opts.baseURL, maxTokens });
   }

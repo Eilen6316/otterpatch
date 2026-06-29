@@ -55,7 +55,7 @@ export class OpenAICompatModelClient implements ModelClient {
   constructor(opts: OpenAICompatOptions) {
     this.client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL });
     this.model = opts.model;
-    this.maxTokens = opts.maxTokens ?? 4096;
+    this.maxTokens = opts.maxTokens ?? 8192;
     this.forcedTool = opts.forcedTool ?? true;
   }
 
