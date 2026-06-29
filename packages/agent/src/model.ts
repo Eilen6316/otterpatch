@@ -35,12 +35,21 @@ export type AgentResponse =
   | { kind: 'answer'; text: string }
   | { kind: 'changeset'; changeSet: ChangeSet };
 
+/** 流式增量事件:思考过程(reasoning)、回答正文(answer)、调了只读工具、收尾。 */
+export type StreamEvent =
+  | { type: 'reasoning'; delta: string }
+  | { type: 'answer'; delta: string }
+  | { type: 'tool'; name: string }
+  | { type: 'done'; result: AgentResponse };
+
 /** 任何模型实现(真实 Claude / OpenAI 兼容 / Mock)。 */
 export interface ModelClient {
   /** 仅产 ChangeSet(强制执行路径,保留给确定要改表的场景/测试)。 */
   proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet>;
   /** 智能路由:模型自行决定『回答问题』还是『提出改动』(tool_choice:auto)。可选;无则回退到 proposeChangeSet。 */
   respond?(req: ProposeRequest, dialect: HostDialect): Promise<AgentResponse>;
+  /** 流式版:边生成边回调 reasoning/answer 增量,最终返回与 respond 相同的结果。可选。 */
+  respondStream?(req: ProposeRequest, dialect: HostDialect, onEvent: (e: StreamEvent) => void): Promise<AgentResponse>;
 }
 
 /** 测试/离线用:给定 (req → 原始提案) 函数,交 dialect 确定性构造 ChangeSet。 */

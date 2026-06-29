@@ -8,7 +8,7 @@
  */
 import OpenAI from 'openai';
 import type { ChangeSet } from '@otterpatch/core';
-import type { AgentResponse, HostDialect, ModelClient, ProposeRequest } from './model.js';
+import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, StreamEvent } from './model.js';
 
 /** 路由前导:让模型自己判断『回答问题』还是『提出改动』(配合 tool_choice:auto)。 */
 const ROUTING_PREAMBLE =
@@ -176,11 +176,10 @@ export class OpenAICompatModelClient implements ModelClient {
     return dialect.buildChangeSet(req, JSON.parse(call.function.arguments));
   }
 
-  /** 智能路由 + 多步 loop:tool_choice:auto;模型可先调只读工具(read_range/aggregate)按需取数,再回答或改表。 */
-  async respond(req: ProposeRequest, dialect: HostDialect): Promise<AgentResponse> {
+  /** 组装 system + 多轮历史 + 当前指令的消息,以及工具菜单(改表 / answer_user / 只读取数)。 */
+  private buildCtx(req: ProposeRequest, dialect: HostDialect): { messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[]; tools: OpenAI.Chat.Completions.ChatCompletionTool[] } {
     const messages = normalizeMessages([
       { role: 'system', content: ROUTING_PREAMBLE + '\n\n' + dialect.systemPrompt + '\n\n当前表格/选区上下文:\n' + req.context },
-      // 多轮:历史对话插在 system 之后、当前指令之前,让 Agent 关联上下文
       ...(req.history ?? []).slice(-12).map((m) => ({ role: m.role, content: m.content })),
       { role: 'user', content: req.intent },
     ]);
@@ -201,6 +200,12 @@ export class OpenAICompatModelClient implements ModelClient {
         { type: 'function', function: { name: 'aggregate', description: '对某一整列做聚合统计(自动跳过表头行)。', parameters: { type: 'object', properties: { column: { type: 'string', description: '列字母,如 C' }, op: { type: 'string', enum: ['sum', 'avg', 'min', 'max', 'count'] } }, required: ['column', 'op'] } } },
       );
     }
+    return { messages, tools };
+  }
+
+  /** 智能路由 + 多步 loop:tool_choice:auto;模型可先调只读工具(read_range/aggregate)按需取数,再回答或改表。 */
+  async respond(req: ProposeRequest, dialect: HostDialect): Promise<AgentResponse> {
+    const { messages, tools } = this.buildCtx(req, dialect);
 
     for (let step = 0; step < 6; step++) {
       const res = await this.client.chat.completions.create({ model: this.model, max_tokens: this.maxTokens, messages, tools, tool_choice: 'auto' });
@@ -225,5 +230,66 @@ export class OpenAICompatModelClient implements ModelClient {
       }
     }
     return { kind: 'answer', text: '处理步数过多,请缩小问题范围或把指令说得更具体。' };
+  }
+
+  /** 流式版 respond:边生成边回调 reasoning(思考)/answer(正文)增量。多步 loop 同 respond。 */
+  async respondStream(req: ProposeRequest, dialect: HostDialect, onEvent: (e: StreamEvent) => void): Promise<AgentResponse> {
+    const { messages, tools } = this.buildCtx(req, dialect);
+
+    for (let step = 0; step < 6; step++) {
+      const stream = await this.client.chat.completions.create({ model: this.model, max_tokens: this.maxTokens, messages, tools, tool_choice: 'auto', stream: true });
+      let content = '';
+      const toolAcc: Record<number, { id: string; name: string; args: string }> = {};
+      for await (const chunk of stream) {
+        const d = chunk.choices[0]?.delta;
+        if (!d) continue;
+        const rc = (d as { reasoning_content?: string }).reasoning_content; // DeepSeek 等思考模型的思维链增量
+        if (rc) onEvent({ type: 'reasoning', delta: rc });
+        if (d.content) {
+          content += d.content;
+          onEvent({ type: 'answer', delta: d.content });
+        }
+        for (const tc of d.tool_calls ?? []) {
+          const idx = tc.index ?? 0;
+          const acc = (toolAcc[idx] ??= { id: '', name: '', args: '' });
+          if (tc.id) acc.id = tc.id;
+          if (tc.function?.name) acc.name = tc.function.name;
+          if (tc.function?.arguments) acc.args += tc.function.arguments;
+        }
+      }
+      const calls = Object.values(toolAcc).filter((c) => c.name);
+
+      const propose = calls.find((c) => c.name === dialect.toolName);
+      if (propose) {
+        const result: AgentResponse = { kind: 'changeset', changeSet: dialect.buildChangeSet(req, JSON.parse(propose.args || '{}')) };
+        onEvent({ type: 'done', result });
+        return result;
+      }
+      const ans = calls.find((c) => c.name === 'answer_user');
+      if (ans) {
+        const result: AgentResponse = { kind: 'answer', text: (JSON.parse(ans.args || '{}') as { text?: string }).text ?? content.trim() };
+        onEvent({ type: 'done', result });
+        return result;
+      }
+      if (!calls.length) {
+        const result: AgentResponse = { kind: 'answer', text: content.trim() || '(模型未返回内容)' };
+        onEvent({ type: 'done', result });
+        return result;
+      }
+
+      // 只读工具:执行 + 回喂,继续 loop
+      messages.push({ role: 'assistant', content: content || null, tool_calls: calls.map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.args } })) });
+      for (const c of calls) {
+        onEvent({ type: 'tool', name: c.name });
+        const args = JSON.parse(c.args || '{}') as { a1?: string; column?: string; op?: string };
+        let result = '(unknown tool)';
+        if (c.name === 'read_range' && req.sheet) result = readRange(req.sheet, String(args.a1 ?? ''));
+        else if (c.name === 'aggregate' && req.sheet) result = aggregate(req.sheet, String(args.column ?? ''), String(args.op ?? ''));
+        messages.push({ role: 'tool', tool_call_id: c.id, content: result });
+      }
+    }
+    const result: AgentResponse = { kind: 'answer', text: '处理步数过多,请缩小问题范围或把指令说得更具体。' };
+    onEvent({ type: 'done', result });
+    return result;
   }
 }

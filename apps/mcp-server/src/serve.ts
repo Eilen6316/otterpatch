@@ -82,6 +82,43 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         else send(res, 200, { changeSet: r.changeSet, diff: rt.diff(r.changeSet) });
         return;
       }
+      if (req.method === 'POST' && url === '/propose-stream') {
+        const a = await readBody(req);
+        const model = createModelClient((a.provider as Provider) || 'claude', {
+          apiKey: a.apiKey as string | undefined,
+          ...(a.model ? { model: a.model as string } : {}),
+        });
+        cors(res);
+        res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+        const sse = (e: unknown): void => { res.write(`data: ${JSON.stringify(e)}\n\n`); };
+        try {
+          await rt.respondStream(
+            {
+              hostId: 'serve',
+              format: String(a.format),
+              intent: String(a.intent ?? ''),
+              baseRev: 0 as DocRev,
+              anchors: [],
+              context: String(a.context ?? ''),
+              ...(a.sheet ? { sheet: a.sheet as { a1: string; values: unknown[][] } } : {}),
+              ...(Array.isArray(a.history) ? { history: a.history as Array<{ role: 'user' | 'assistant'; content: string }> } : {}),
+            },
+            model,
+            (e) => {
+              if (e.type === 'done') {
+                if (e.result.kind === 'changeset') sse({ type: 'done', kind: 'changeset', changeSet: e.result.changeSet, diff: rt.diff(e.result.changeSet) });
+                else sse({ type: 'done', kind: 'answer', text: e.result.text });
+              } else {
+                sse(e);
+              }
+            },
+          );
+        } catch (err) {
+          sse({ type: 'error', message: emsg(err) });
+        }
+        res.end();
+        return;
+      }
       if (req.method === 'POST' && url === '/commit') {
         const a = await readBody(req);
         const bytes = new Uint8Array(Buffer.from(String(a.fileBase64 ?? ''), 'base64'));

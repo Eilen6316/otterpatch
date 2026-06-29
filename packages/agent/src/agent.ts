@@ -8,7 +8,7 @@ import type { ChangeSet } from '@otterpatch/core';
 import type { SkillLibrary } from '@otterpatch/skills';
 import type { ConventionStack } from './conventions.js';
 import { DIALECTS } from './dialects.js';
-import type { AgentResponse, HostDialect, ModelClient, ProposeRequest } from './model.js';
+import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, StreamEvent } from './model.js';
 
 export interface ChangeSetValidation {
   ok: boolean;
@@ -49,6 +49,16 @@ export class Agent {
     const d = this.dialectFor(req);
     if (this.model.respond) return this.model.respond(req, d);
     return { kind: 'changeset', changeSet: await this.model.proposeChangeSet(req, d) };
+  }
+
+  /** 流式路由:有 respondStream 则透传;否则回退到一次性结果并补发增量/done。 */
+  async respondStream(req: ProposeRequest, onEvent: (e: StreamEvent) => void): Promise<AgentResponse> {
+    const d = this.dialectFor(req);
+    if (this.model.respondStream) return this.model.respondStream(req, d, onEvent);
+    const r = this.model.respond ? await this.model.respond(req, d) : { kind: 'changeset' as const, changeSet: await this.model.proposeChangeSet(req, d) };
+    if (r.kind === 'answer') onEvent({ type: 'answer', delta: r.text });
+    onEvent({ type: 'done', result: r });
+    return r;
   }
 
   async propose(req: ProposeRequest): Promise<ChangeSet> {

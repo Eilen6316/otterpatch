@@ -18,8 +18,8 @@ interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bol
 /** 对话流里的一条消息(Cursor 式连续 thread)。 */
 type Turn =
   | { role: 'user'; text: string }
-  | { role: 'assistant'; kind: 'answer'; text: string }
-  | { role: 'assistant'; kind: 'diff'; diff: AgentDiff; ops: GridOp[]; reverted?: boolean; committed?: boolean; committedCount?: number };
+  | { role: 'assistant'; kind: 'answer'; text: string; reasoning?: string; streaming?: boolean }
+  | { role: 'assistant'; kind: 'diff'; diff: AgentDiff; ops: GridOp[]; reasoning?: string; reverted?: boolean; committed?: boolean; committedCount?: number };
 
 /**
  * 把对话流投影成模型历史(Pi 的 projection 模式:thread 是单一数据源)。
@@ -45,6 +45,24 @@ function buildHistory(thread: Turn[]): Array<{ role: 'user' | 'assistant'; conte
   const first = kept[0];
   if (first) kept[0] = { ...first, content: gist + '\n' + first.content };
   return kept;
+}
+
+/** DeepSeek 式可折叠"思考过程":流式期间默认展开看它边想,结束后可折叠。 */
+function ThinkingPanel({ reasoning, streaming }: { reasoning: string; streaming?: boolean }): ReactNode {
+  const t = useT();
+  const [open, setOpen] = useState<boolean | null>(null);
+  const expanded = open ?? !!streaming;
+  return (
+    <div className={'thinking-panel' + (streaming ? ' live' : '')}>
+      <button className="tp-head" onClick={() => setOpen(!expanded)}>
+        <span className="tp-ico">{streaming ? <span className="spin sm" /> : '💭'}</span>
+        <span>{streaming ? t('正在思考…') : t('思考过程')}</span>
+        <span className="grow" />
+        <span className="tp-chev">{expanded ? '▾' : '▸'}</span>
+      </button>
+      {expanded && <div className="tp-body">{reasoning || t('(无)')}</div>}
+    </div>
+  );
 }
 
 /** 真 Univer 表格(体积大 → 懒加载,仅 Excel 用)。 */
@@ -651,34 +669,66 @@ export function App() {
       setThread((th) => [...th, { role: 'user', text: theIntent }]); // 用户气泡立刻进流
       setIntent('');
       try {
-        const r = await fetch(ep + '/propose', {
+        const resp = await fetch(ep + '/propose-stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ format: fmt, intent: theIntent, context: ctx, provider, model, apiKey, ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(thread.length ? { history: buildHistory(thread) } : {}) }),
         });
-        const data = (await r.json()) as { changeSet?: unknown; diff?: AgentDiff; answer?: string; error?: string };
-        if (!r.ok) throw new Error(data.error ?? 'propose failed');
+        if (!resp.ok || !resp.body) throw new Error('propose failed (' + resp.status + ')');
         if (theIntent.trim()) setRecent((rr) => [{ t: theIntent.trim(), time: t('刚刚') }, ...rr.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
         setSent(true);
-        // 路由:Agent 选择了"回答问题" → 聊天气泡,不改表
-        if (data.answer != null) {
-          setThread((th) => [...th, { role: 'assistant', kind: 'answer', text: data.answer! }]);
-          return;
+        // 占位的流式回答气泡(reasoning + 正文边到边渲染)
+        setThread((th) => [...th, { role: 'assistant', kind: 'answer', text: '', reasoning: '', streaming: true }]);
+        const upd = (fn: (t: Extract<Turn, { role: 'assistant' }>) => Turn): void => setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? fn(tt) : tt)));
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        let finished = false;
+        while (!finished) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const chunks = buf.split('\n\n');
+          buf = chunks.pop() ?? '';
+          for (const c of chunks) {
+            const line = c.split('\n').find((l) => l.startsWith('data: '));
+            if (!line) continue;
+            let e: { type: string; delta?: string; name?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; message?: string };
+            try { e = JSON.parse(line.slice(6)); } catch { continue; }
+            if (e.type === 'reasoning') upd((tt) => (tt.kind === 'answer' ? { ...tt, reasoning: (tt.reasoning ?? '') + (e.delta ?? '') } : tt));
+            else if (e.type === 'answer') upd((tt) => (tt.kind === 'answer' ? { ...tt, text: (tt.text ?? '') + (e.delta ?? '') } : tt));
+            else if (e.type === 'tool') upd((tt) => (tt.kind === 'answer' ? { ...tt, reasoning: (tt.reasoning ?? '') + `\n〔查表 ${e.name}〕\n` } : tt));
+            else if (e.type === 'error') throw new Error(e.message ?? 'stream error');
+            else if (e.type === 'done') {
+              finished = true;
+              if (e.kind === 'changeset' && e.diff) {
+                const ops = diffToOps(e.diff);
+                const api = univerRef.current; // 采集改前值,供"撤销改动"还原
+                if (api) for (const op of ops) { if (op.value !== undefined) op.before = api.getValue(op.a1); }
+                const diff = e.diff;
+                const cs = e.changeSet ?? null;
+                setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                setRealCs(cs);
+                setRealDiff(diff);
+                setAccepted(new Set(diff.items.map((it) => it.editId)));
+                if (ops.length) void playOps(ops); // 边画边改
+              } else {
+                upd((tt) => (tt.kind === 'answer' ? { ...tt, text: e.text ?? tt.text, streaming: false } : tt));
+              }
+            }
+          }
         }
-        if (!data.diff) throw new Error(data.error ?? 'propose failed');
-        const ops = diffToOps(data.diff);
-        const api = univerRef.current; // 采集改前值,供"撤销改动"还原
-        if (api) for (const op of ops) { if (op.value !== undefined) op.before = api.getValue(op.a1); }
-        setThread((th) => [...th, { role: 'assistant', kind: 'diff', diff: data.diff!, ops }]);
-        setRealCs(data.changeSet ?? null);
-        setRealDiff(data.diff);
-        setAccepted(new Set(data.diff.items.map((it) => it.editId)));
-        if (ops.length) void playOps(ops); // 把 Agent 的改动逐格"画"到网格上
       } catch (e) {
         const m = e instanceof Error ? e.message : String(e);
         const refused = /failed to fetch|refused|ECONNREFUSED|networkerror|load failed/i.test(m);
-        // 回滚乐观追加的 user 气泡,避免 thread 以未被回复的 user 收尾(下次会拼成背靠背 user)
-        setThread((th) => (th[th.length - 1]?.role === 'user' ? th.slice(0, -1) : th));
+        // 回滚乐观追加的占位气泡 + user 气泡,避免 thread 残留(下次会拼成背靠背)
+        setThread((th) => {
+          let r = th;
+          const last = r[r.length - 1];
+          if (last?.role === 'assistant' && last.kind === 'answer' && last.streaming) r = r.slice(0, -1);
+          if (r[r.length - 1]?.role === 'user') r = r.slice(0, -1);
+          return r;
+        });
         setIntent(theIntent); // 把指令放回输入框,方便重试
         setSendErr(
           refused
@@ -1056,7 +1106,11 @@ export function App() {
                       return (
                         <div key={i} className="ai-msg">
                           <img className="ai-av" src="/favicon.png" alt="" />
-                          <div className="answer-bubble md"><Markdown text={turn.text} /></div>
+                          <div className="ai-stack">
+                            {turn.reasoning ? <ThinkingPanel reasoning={turn.reasoning} streaming={turn.streaming} /> : null}
+                            {(turn.text || !turn.streaming) && <div className="answer-bubble md">{turn.text ? <Markdown text={turn.text} /> : <span className="dim">{t('(无内容)')}</span>}</div>}
+                            {turn.streaming && !turn.text && !turn.reasoning && <div className="thinking"><span className="spin" /> {t('Agent 正在分析…')}</div>}
+                          </div>
                         </div>
                       );
                     const active = i === lastDiffIdx;
@@ -1064,7 +1118,9 @@ export function App() {
                     return (
                       <div key={i} className="ai-msg">
                         <img className="ai-av" src="/favicon.png" alt="" />
-                        <div className="diff-turn">
+                        <div className="ai-stack">
+                          {turn.reasoning ? <ThinkingPanel reasoning={turn.reasoning} /> : null}
+                          <div className="diff-turn">
                           {active && playList.length > 0 && (
                             <div className="oplist">
                               <div className="opbar">
@@ -1110,16 +1166,11 @@ export function App() {
                           ) : d.items.length > 0 ? (
                             <div className="bulk"><button className="btn" onClick={() => revertTurn(i)}>↩ {t('撤销改动')}</button></div>
                           ) : null}
+                          </div>
                         </div>
                       </div>
                     );
                   })}
-                  {busy && (
-                    <div className="ai-msg">
-                      <img className="ai-av" src="/favicon.png" alt="" />
-                      <div className="thinking"><span className="spin" /> {t('Agent 正在分析…')}</div>
-                    </div>
-                  )}
                   {sendErr && (
                     <div className="agent-err">
                       <div className="ae-i"><IconX size={18} /></div>

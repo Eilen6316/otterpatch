@@ -359,6 +359,17 @@ svg { display: block; }
 .msg-user { align-self: flex-end; max-width: 86%; background: var(--accent); color: #fff; padding: 9px 13px; border-radius: 13px 13px 4px 13px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; box-shadow: 0 1px 3px rgba(37, 99, 235, 0.22); }
 .diff-turn { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .thinking { flex: 1; display: flex; align-items: center; gap: 8px; background: var(--fill); border: 1px solid var(--line); border-radius: 12px 12px 12px 4px; padding: 11px 14px; font-size: 12.5px; color: var(--muted); }
+/* 助手消息列 + DeepSeek 式可折叠思考面板 */
+.ai-stack { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.thinking-panel { border: 1px solid var(--line); border-radius: 9px; background: var(--surface); overflow: hidden; }
+.thinking-panel.live { border-color: #c7d8fb; }
+.tp-head { display: flex; align-items: center; gap: 7px; width: 100%; padding: 7px 11px; background: transparent; border: 0; cursor: pointer; font-size: 12px; color: var(--muted); text-align: left; }
+.tp-head:hover { background: var(--fill); }
+.tp-ico { display: inline-flex; align-items: center; }
+.tp-chev { font-size: 10px; color: var(--faint); }
+.tp-body { padding: 8px 12px 10px; font-size: 11.5px; line-height: 1.55; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow-y: auto; border-top: 1px solid var(--line); background: rgba(15, 23, 42, 0.015); }
+.spin.sm { width: 11px; height: 11px; border-width: 1.5px; }
+.dim { color: var(--faint); font-size: 12.5px; }
 .reverted-tag { font-size: 11.5px; color: var(--faint); }
 .committed-tag { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: #0d9488; font-weight: 500; }
 .link-btn { background: transparent; border: 0; color: var(--muted); font-size: 11.5px; cursor: pointer; padding: 0; text-decoration: underline; }
