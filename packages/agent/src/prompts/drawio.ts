@@ -9,7 +9,8 @@ export const DRAWIO_SYSTEM =
   '蓝 fillColor=#dae8fc;strokeColor=#6c8ebf、绿 #d5e8d4/#82b366、黄 #fff2cc/#d6b656、红 #f8cecc/#b85450、紫 #e1d5e7/#9673a6、橙 #ffe6cc/#d79b00、灰 #f5f5f5/#666666;\n' +
   '④ 关系用 add+edge:true+source/target(两端 cellId)连起来;旁注/说明用 text 节点(style 以 "text;html=1;align=left;fontColor=…" 开头);\n' +
   '⑤ style 串示例:"rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1;"。\n' +
-  '⑥ 节点数较多时,style 串尽量精简、坐标用整数,避免一次产出过长被截断。\n' +
+  '⑥ 节点数较多时,style 串尽量精简、坐标用整数,避免一次产出过长被截断;\n' +
+  '⑦ 【修改/删除/移动已有节点】:用 op:update(改 value/style)、delete、move,其 cellId 必须用上下文「节点(id=文字)」里给出的【真实 id】,绝不要自己新造 id 或用序号 0/1/2;只想给现有节点补更详细的文字就用 update 改它的 value。\n' +
   '示例(两层彩色块 + 旁注 + 连线):ops=[' +
   '{op:"add",cellId:"n1",value:"应用层 (Application)",vertex:true,x:200,y:40,width:360,height:48,style:"rounded=1;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1;"},' +
   '{op:"add",cellId:"n2",value:"表示层 (Presentation)",vertex:true,x:200,y:108,width:360,height:48,style:"rounded=1;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1;"},' +

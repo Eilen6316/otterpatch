@@ -748,14 +748,15 @@ export function App() {
                 setAccepted(new Set(diff.items.map((it) => it.editId)));
                 setReviewIdx(0);
                 if (fmt === 'drawio') {
-                  // drawio:优先复用「边生成边画」已落到画板的对象;若未流式(某些通道不流入参)则一次性补画
+                  // drawio:先把【改/删/移动现有节点】落到画板;新增节点则复用流式已画的、或一次性补画
+                  const mutBy = applyDrawioMutations(cs);
                   let board: { byEdit: Record<string, string>; objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> };
                   if (streamObjsRef.current.length) {
-                    board = { byEdit: streamByEditRef.current, objs: streamObjsRef.current };
+                    board = { byEdit: { ...streamByEditRef.current, ...mutBy }, objs: streamObjsRef.current };
                   } else {
                     const b = drawioCsToBoard(cs);
-                    board = { byEdit: b.byEdit, objs: b.objs };
-                    void playBoard(b.nodes, b.edges); // 兜底:逐个补图,保留"边画"观感
+                    board = { byEdit: { ...b.byEdit, ...mutBy }, objs: b.objs };
+                    if (b.nodes.length || b.edges.length) void playBoard(b.nodes, b.edges); // 兜底:逐个补图
                   }
                   setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], board: { byEdit: board.byEdit, objs: board.objs }, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                 } else {
@@ -963,6 +964,23 @@ export function App() {
       }
     }
     return { nodes, edges, byEdit, objs };
+  };
+  /** drawio:把【改/删/移动现有节点】op 落到画板(用上下文给 Agent 的真实节点 id 定位),返回 editId→节点id 供审阅高亮。 */
+  const applyDrawioMutations = (cs: unknown): Record<string, string> => {
+    const c = cs as { edits?: Array<{ id: string; target: string; op: { kind?: string; props?: { value?: unknown; style?: unknown }; box?: { left?: number; top?: number; width?: number; height?: number } } }>; anchors?: Record<string, { portable?: { elementId?: string } }> } | null;
+    const byEdit: Record<string, string> = {};
+    if (!c?.edits) return byEdit;
+    for (const e of c.edits) {
+      const k = e.op?.kind;
+      if (k !== 'setObjectProps' && k !== 'deleteObject' && k !== 'moveObject') continue;
+      const id = c.anchors?.[e.target]?.portable?.elementId;
+      if (!id) continue;
+      byEdit[e.id] = id;
+      if (k === 'setObjectProps') boardRef.current?.updateObject(id, { value: e.op.props?.value as string | undefined, style: e.op.props?.style as string | undefined });
+      else if (k === 'deleteObject') boardRef.current?.removeObjects([id]);
+      else if (k === 'moveObject') boardRef.current?.moveObject(id, { x: e.op.box?.left, y: e.op.box?.top, w: e.op.box?.width, h: e.op.box?.height });
+    }
+    return byEdit;
   };
   // ── 逐条审阅:把单条改动应用/还原到左侧工作区(Excel 网格 / drawio 画板)+ 高亮当前条 ──
   const applyGridOp = (op: GridOp): void => {
@@ -1821,6 +1839,8 @@ export interface BoardSel { count: number; chip: string; context: string }
 export interface BoardHandle {
   addObjects(nodes: BNode[], edges: BEdge[]): void;
   removeObjects(ids: string[]): void;
+  updateObject(id: string, patch: { value?: string; style?: string }): void;
+  moveObject(id: string, box: { x?: number; y?: number; w?: number; h?: number }): void;
   highlight(id: string): void;
 }
 /** drawio style 串 → 画板节点的线稿 inner SVG(覆盖常见形状,默认矩形)。 */
@@ -1973,6 +1993,14 @@ const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel | null) 
       setNodes((ns) => ns.filter((n) => !s.has(n.id)));
       setEdges((es) => es.filter((ed) => !s.has(ed.id) && !s.has(ed.from) && !s.has(ed.to)));
     },
+    updateObject: (id, patch) => {
+      commit();
+      setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...(patch.value != null ? { label: String(patch.value) } : {}), ...(patch.style ? parseDrawioStyle(patch.style) : {}) } : n)));
+    },
+    moveObject: (id, box) => {
+      commit();
+      setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...(box.x != null ? { x: snap(box.x) } : {}), ...(box.y != null ? { y: snap(box.y) } : {}), ...(box.w != null ? { w: box.w } : {}), ...(box.h != null ? { h: box.h } : {}) } : n)));
+    },
     highlight: (id) => { setHi(id); setSelIds(new Set([id])); setSelEdge(null); },
   }));
   const [editing, setEditing] = useState<string | null>(null);
@@ -2007,18 +2035,15 @@ const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel | null) 
       return;
     }
     const nm = (n: BNode): string => n.label || n.kind || '形状';
-    const lab = (id: string): string => {
-      const n = nodes.find((x) => x.id === id);
-      return n ? nm(n) : id;
-    };
     const sn = nodes.filter((n) => selIds.has(n.id));
-    const ctx: string[] = [`[流程图] ${nodes.length} 个节点、${edges.length} 条连线。`];
-    if (nodes.length) ctx.push('节点: ' + nodes.map((n) => nm(n)).join('、'));
-    if (edges.length) ctx.push('连接关系: ' + edges.map((e) => `${lab(e.from)} → ${lab(e.to)}`).join(';'));
-    if (sn.length) ctx.push('当前选中: ' + sn.map((n) => nm(n)).join('、'));
+    // 关键:把【节点 id】明确给 Agent —— 改/删/移动现有节点时必须用这些 id(否则它会瞎猜 id,改不到)
+    const ctx: string[] = [`[流程图] ${nodes.length} 个节点、${edges.length} 条连线。改/删/移动现有节点时,update/delete/move 的 cellId 必须用下面给出的真实 id。`];
+    if (nodes.length) ctx.push('节点(id=文字): ' + nodes.map((n) => `${n.id}=${nm(n)}`).join('、'));
+    if (edges.length) ctx.push('连接关系(按 id): ' + edges.map((e) => `${e.from}→${e.to}`).join(';'));
+    if (sn.length) ctx.push('当前选中节点 id: ' + sn.map((n) => n.id).join('、') + '(即 ' + sn.map((n) => nm(n)).join('、') + '),用户多半是想改这些。');
     else if (selEdge) {
       const e = edges.find((x) => x.id === selEdge);
-      if (e) ctx.push(`当前选中连线: ${lab(e.from)} → ${lab(e.to)}`);
+      if (e) ctx.push(`当前选中连线: ${e.from}→${e.to}`);
     }
     const chip = sn.length
       ? `画板选中 ${sn.length} 个节点: ${sn.map((n) => nm(n)).join('、')}`
