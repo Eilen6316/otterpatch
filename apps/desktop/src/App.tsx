@@ -868,7 +868,8 @@ export function App() {
         const g = p.geometry ?? {};
         const w = g.width ?? 160; const h = g.height ?? 48;
         const x = g.x ?? 60; const y = g.y ?? stackY; stackY = Math.max(stackY, y) + h + 40;
-        const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(p.style), label: String(p.value ?? ''), kind: 'agent' };
+        const st = parseDrawioStyle(p.style);
+        const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(p.style), label: String(p.value ?? ''), kind: st.text ? 'text' : 'agent', ...st };
         nodes.push(node); byEdit[e.id] = id; objs.push({ editId: e.id, node });
       }
     }
@@ -1241,11 +1242,17 @@ export function App() {
                           {turn.reasoning ? <ThinkingPanel reasoning={turn.reasoning} /> : null}
                           <div className="reviewbox">
                             <div className="rv-top">
-                              <span className="rv-title"><IconSelect size={13} /> {t('审阅改动')}</span>
+                              <span className="rv-title"><IconSelect size={13} /> {turn.board ? t('已绘制图表') : t('审阅改动')}</span>
                               {d.intent ? <span className="rv-intent">{d.intent}</span> : null}
                               <span className="grow" />
                               {total > 0 && active && <span className="rv-count">{Math.min(ridx + (cur ? 1 : 0), total)}<i>/</i>{total}</span>}
                             </div>
+                            {turn.board && total > 0 ? (
+                              <details className="rv-code">
+                                <summary>{t('查看绘制代码')} · {total} {t('个对象')}</summary>
+                                <pre>{d.items.map((it) => `${it.ref}${it.after ? '  ' + it.after : ''}  · ${it.label}`).join('\n')}</pre>
+                              </details>
+                            ) : null}
                             {total > 0 && active && <div className="rv-prog"><div className="rv-prog-fill" style={{ width: `${(ridx / total) * 100}%` }} /></div>}
 
                             {total === 0 ? (
@@ -1607,7 +1614,7 @@ function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
 }
 
 interface XY { x: number; y: number }
-interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string; kind?: string; rot?: number }
+interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string; kind?: string; rot?: number; fill?: string; stroke?: string; fontColor?: string; fontSize?: number; bold?: boolean; text?: boolean }
 type ArrowKind = 'classic' | 'open' | 'diamond' | 'circle' | 'none';
 type EdgeStyle = 'ortho' | 'straight';
 interface BEdge { id: string; from: string; to: string; arrow?: ArrowKind; style?: EdgeStyle; points?: XY[] }
@@ -1735,6 +1742,22 @@ function innerForStyle(style?: string): string {
   if (s.includes('cylinder')) return '<ellipse cx="20" cy="7" rx="13" ry="3.5"/><line x1="7" y1="7" x2="7" y2="23"/><line x1="33" y1="7" x2="33" y2="23"/><path d="M7 23 A13 3.5 0 0 0 33 23"/>';
   if (s.includes('rounded=1') || s.includes('rounded')) return '<rect x="4" y="5" width="32" height="20" rx="4" ry="4"/>';
   return '<rect x="4" y="5" width="32" height="20"/>';
+}
+/** 解析 drawio style 串 → 画板节点的填充/描边/字体(借鉴 Next AI Drawio 的彩色渲染)。 */
+function parseDrawioStyle(style?: string): { fill?: string; stroke?: string; fontColor?: string; fontSize?: number; bold?: boolean; text?: boolean } {
+  const s = style ?? '';
+  const get = (k: string): string | undefined => new RegExp(k + '=([^;]+)').exec(s)?.[1]?.trim();
+  const fill = get('fillColor'); const stroke = get('strokeColor'); const fontColor = get('fontColor');
+  const fs = get('fontSize'); const fontStyle = get('fontStyle');
+  const isText = /(?:^|;)\s*text(?:;|$)/.test(s) || s.includes('text;html');
+  return {
+    ...(fill && fill !== 'none' ? { fill } : {}),
+    ...(stroke && stroke !== 'none' ? { stroke } : {}),
+    ...(fontColor ? { fontColor } : {}),
+    ...(fs && Number.isFinite(parseFloat(fs)) ? { fontSize: Math.round(parseFloat(fs)) } : {}),
+    ...(fontStyle && (parseInt(fontStyle, 10) & 1) ? { bold: true } : {}),
+    ...(isText ? { text: true } : {}),
+  };
 }
 const bandRect = (b: { x0: number; y0: number; x1: number; y1: number }): { x: number; y: number; w: number; h: number } => ({
   x: Math.min(b.x0, b.x1),
@@ -2277,7 +2300,11 @@ const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel | null) 
               setEditing(n.id);
             }}
           >
-            <svg viewBox="3 3 34 24" preserveAspectRatio="none" fill="none" stroke="#3a3f4b" strokeWidth={0.9} dangerouslySetInnerHTML={{ __html: n.inner }} />
+            {n.text ? null : n.fill || n.stroke || n.kind === 'agent' ? (
+              <div className="bnode-box" style={{ background: n.fill ?? '#ffffff', borderColor: n.stroke ?? '#9aa3b2' }} />
+            ) : (
+              <svg viewBox="3 3 34 24" preserveAspectRatio="none" fill="none" stroke="#3a3f4b" strokeWidth={0.9} dangerouslySetInnerHTML={{ __html: n.inner }} />
+            )}
             {editing === n.id ? (
               <input
                 className="bnode-edit"
@@ -2294,7 +2321,7 @@ const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel | null) 
                 onPointerDown={(e) => e.stopPropagation()}
               />
             ) : (
-              <span className="bnode-label">{n.label}</span>
+              <span className={'bnode-label' + (n.text ? ' txt' : '')} style={{ ...(n.fontColor ? { color: n.fontColor } : {}), ...(n.fontSize ? { fontSize: n.fontSize } : {}), ...(n.bold ? { fontWeight: 700 } : {}) }}>{n.label}</span>
             )}
             {(isHover || isSel) && !drag && !resize
               ? PORTS.map((p, i) => (
