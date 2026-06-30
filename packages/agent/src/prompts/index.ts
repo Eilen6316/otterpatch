@@ -3,6 +3,7 @@
  * 调提示/加场景只动这里;dialects 与对话循环从这里 import,绝不在逻辑代码里写死字符串。
  */
 export * from './agent-loop.js';
+export * from './sheet.js';
 export * from './excel.js';
 export * from './drawio.js';
 export * from './word.js';
