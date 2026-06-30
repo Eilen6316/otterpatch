@@ -10,7 +10,7 @@ import {
 import { LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
-import type { DocHandle, DocFmt } from './UniverDoc.js';
+import type { RichDocHandle, DocFmt } from './RichDoc.js';
 import { Markdown } from './Markdown.js';
 import { chartToPngDataUrl, gridToChartSpec, buildChartGrid, specFromInline } from './chart.js';
 
@@ -31,8 +31,8 @@ type Turn =
 /** drawio 改动落到画板的句柄:editId→画板对象 id 映射 + 可重放的节点/连线(供逐条接受/拒绝)。 */
 interface BoardPatch { byEdit: Record<string, string>; objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> }
 
-/** Word 一条改动:文本改写(replacement)或格式改动(style);priorFmt 为格式改动的改前样式,供拒绝还原。 */
-interface WordEdit { editId: string; quote: string; replacement?: string; style?: DocFmt; priorFmt?: DocFmt }
+/** Word 一条改动:文本改写(replacement)或格式改动(style);还原信息由编辑器按 editId 内部保存。 */
+interface WordEdit { editId: string; quote: string; replacement?: string; style?: DocFmt }
 
 /**
  * 把对话流投影成模型历史(Pi 的 projection 模式:thread 是单一数据源)。
@@ -149,8 +149,8 @@ function ClarifyCard({ questions, answered, answerText, onSubmit }: { questions:
 
 /** 真 Univer 表格(体积大 → 懒加载,仅 Excel 用)。 */
 const UniverSheet = lazy(() => import('./UniverSheet.js'));
-/** Word 文档工作区:真 Univer Docs(懒加载,仅 Word 用)。 */
-const UniverDoc = lazy(() => import('./UniverDoc.js'));
+/** Word 文档工作区:自控富文本编辑器(懒加载,仅 Word 用)。 */
+const RichDoc = lazy(() => import('./RichDoc.js'));
 
 /** 渐进披露驾驶舱。风格参照 Next AI Drawio:纯白、分区块、线性图标、无 emoji。五语 i18n(t 包裹显示文案)。 */
 
@@ -555,7 +555,7 @@ export function App() {
   const [boardSel, setBoardSel] = useState<BoardSel | null>(null);
   const univerRef = useRef<SheetHandle>(null);
   const boardRef = useRef<BoardHandle>(null);
-  const wordRef = useRef<DocHandle>(null);
+  const wordRef = useRef<RichDocHandle>(null);
   const applySeqRef = useRef(0);
   // drawio「边生成边画」流式状态
   const draftBufRef = useRef('');
@@ -847,15 +847,11 @@ export function App() {
                     if (rec?.op?.kind === 'setStyle') return { editId: it.editId, quote, style: rec.op.style ?? {} };
                     return { editId: it.editId, quote, replacement: rec?.op?.text ?? (it.after ?? '') };
                   });
-                  // 乐观落入文档(与 Excel playOps 一致);格式改动同时记下改前样式,供拒绝时还原
-                  for (const w of wordEdits) {
-                    if (w.style) w.priorFmt = wordRef.current?.applyFormat(w.quote || null, w.style) ?? undefined;
-                    else wordRef.current?.applyReplace(w.quote, w.replacement ?? '');
-                  }
+                  // 乐观落入文档(与 Excel playOps 一致);编辑器按 editId 包裹,拒绝可精确还原
+                  for (const w of wordEdits) wordRef.current?.applyEdit(w.editId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' });
                   setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], word: wordEdits, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                   setReviewIdx(0);
-                  const first = wordEdits[0];
-                  if (first && (first.replacement || first.quote)) wordRef.current?.highlight(first.replacement ?? first.quote); // 审阅期选中第一条
+                  if (wordEdits[0]) wordRef.current?.highlight(wordEdits[0].editId); // 审阅期定位第一条
                 } else {
                   applyExcelStructure(cs); // 结构性操作(插删行列/合并/冻结/清空)先落,改变网格布局
                   const ops = diffToOps(diff);
@@ -924,11 +920,7 @@ export function App() {
     if (turn.board) {
       boardRef.current?.removeObjects(Object.values(turn.board.byEdit)); // drawio:从画板移除该回合对象
     } else if (turn.word) {
-      for (const w of turn.word) {
-        if (!accepted.has(w.editId)) continue;
-        if (w.style) { if (w.priorFmt) wordRef.current?.applyFormat(w.quote || null, w.priorFmt); } // 格式:回改前样式
-        else wordRef.current?.revertReplace(w.quote, w.replacement ?? ''); // 文本:回原文
-      }
+      for (const w of turn.word) if (accepted.has(w.editId)) wordRef.current?.revert(w.editId); // 按 editId 精确还原每条
     } else {
       const api = univerRef.current;
       if (api) {
@@ -1152,14 +1144,14 @@ export function App() {
     if (!item) return;
     if (isExcel) univerRef.current?.focus(item.ref.replace(/^.*!/, ''));
     else if (fmt === 'drawio') { const id = turn.board?.byEdit[item.editId]; if (id) boardRef.current?.highlight(id); }
-    else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === item.editId); const tx = accepted.has(item.editId) ? (w?.replacement ?? w?.quote) : w?.quote; if (tx) wordRef.current?.highlight(tx); } // 选中当前条对应的文字
+    else if (fmt === 'word') wordRef.current?.highlight(item.editId); // 定位当前条
   };
   const acceptItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number): void => {
     const it = turn.diff.items[idx]; if (!it) return;
     if (!accepted.has(it.editId)) { // 之前被拒 → 重新落回工作区
       if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
       else if (fmt === 'drawio') { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
-      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w?.style) wordRef.current?.applyFormat(w.quote || null, w.style); else if (w) wordRef.current?.applyReplace(w.quote, w.replacement ?? ''); }
+      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.editId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' }); }
       toggleAccept(it.editId, true);
     }
     setReviewIdx(idx + 1);
@@ -1168,7 +1160,7 @@ export function App() {
     const it = turn.diff.items[idx]; if (!it) return;
     if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) revertGridOp(op); }
     else if (fmt === 'drawio') { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); }
-    else if (fmt === 'word' && accepted.has(it.editId)) { const w = turn.word?.find((x) => x.editId === it.editId); if (w?.style) { if (w.priorFmt) wordRef.current?.applyFormat(w.quote || null, w.priorFmt); } else if (w) wordRef.current?.revertReplace(w.quote, w.replacement ?? ''); } // 之前已应用 → 还原(格式回改前样式)
+    else if (fmt === 'word' && accepted.has(it.editId)) wordRef.current?.revert(it.editId); // 之前已应用 → 精确还原该条
     toggleAccept(it.editId, false);
     setReviewIdx(idx + 1);
   };
@@ -1177,7 +1169,7 @@ export function App() {
       if (accepted.has(it.editId)) continue;
       if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
       else if (fmt === 'drawio') { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
-      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w?.style) wordRef.current?.applyFormat(w.quote || null, w.style); else if (w) wordRef.current?.applyReplace(w.quote, w.replacement ?? ''); }
+      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.editId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' }); }
     }
     const all = turn.diff.items.map((x) => x.editId);
     setAccepted(new Set(all));
@@ -1417,8 +1409,8 @@ export function App() {
               ) : fmt === 'drawio' ? (
                 <DrawioBoard ref={boardRef} onBoardSel={setBoardSel} />
               ) : fmt === 'word' ? (
-                <Suspense fallback={<div className="univer-loading">{t('加载文档引擎…')}</div>}>
-                  <UniverDoc ref={wordRef} />
+                <Suspense fallback={<div className="univer-loading">{t('加载文档编辑器…')}</div>}>
+                  <RichDoc ref={wordRef} />
                 </Suspense>
               ) : (
                 <div className="doc-page">

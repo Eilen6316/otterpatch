@@ -154,7 +154,30 @@ svg { display: block; }
 /* 渲染区铺满:Excel 满幅网格 / drawio 画板 / Word·PPT 页面 */
 .canvas.excel { padding: 0; background-color: var(--surface); background-image: none; place-items: stretch; overflow: hidden; }
 .canvas.worddoc { padding: 0; background-color: var(--surface); background-image: none; place-items: stretch; overflow: hidden; }
-.univer-doc-host { width: 100%; height: 100%; overflow: hidden; }
+/* 自控富文本「Word」编辑器 */
+.rd-wrap { display: flex; flex-direction: column; width: 100%; height: 100%; overflow: hidden; background: #eef0f2; }
+.rd-toolbar { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 12px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.rd-btn { min-width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; gap: 3px; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-soft); cursor: pointer; font-size: 13px; line-height: 1; }
+.rd-btn:hover { background: var(--fill); border-color: var(--line); }
+.rd-btn b, .rd-btn i, .rd-btn u { font-size: 14px; color: var(--text); }
+.rd-gl { font-size: 13px; color: var(--text-soft); }
+.rd-gl.flip { display: inline-block; transform: scaleX(-1); }
+.rd-sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+.rd-sel { height: 28px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 12.5px; padding: 0 4px; cursor: pointer; max-width: 120px; }
+.rd-sel.sm { max-width: 72px; }
+.rd-color { position: relative; min-width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 6px; cursor: pointer; font-weight: 700; color: var(--text); }
+.rd-color:hover { background: var(--fill); border-color: var(--line); }
+.rd-color.hl { color: #d97706; }
+.rd-color input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.rd-scroll { flex: 1; overflow: auto; padding: 26px; display: flex; justify-content: center; align-items: flex-start; }
+.rd-page { width: min(820px, 100%); min-height: 1000px; background: #fff; box-shadow: var(--shadow); border-radius: 2px; padding: 64px 72px; outline: none; font-family: 'Songti SC', '宋体', Georgia, serif; font-size: 15px; line-height: 1.9; color: #1f2430; }
+.rd-page:focus { box-shadow: var(--shadow), 0 0 0 2px rgba(37,99,235,0.18); }
+.rd-page h1 { font-size: 24px; font-weight: 700; text-align: center; margin: 0 0 18px; }
+.rd-page h2 { font-size: 18px; font-weight: 700; margin: 22px 0 10px; }
+.rd-page p { margin: 0 0 14px; }
+.rd-page [data-edit] { background: rgba(37,99,235,0.06); border-radius: 2px; }
+.rd-flash { animation: rdflash 1.2s ease; }
+@keyframes rdflash { 0%, 100% { background: rgba(37,99,235,0.06); } 30% { background: #fde68a; } }
 .univer-host { width: 100%; height: 100%; min-height: 0; }
 .univer-loading { display: grid; place-items: center; color: var(--muted); font-size: 13px; }
 .canvas.board { padding: 0; }
