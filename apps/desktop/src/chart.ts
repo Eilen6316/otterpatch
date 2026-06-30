@@ -6,7 +6,7 @@
 import * as echarts from 'echarts';
 import { type ChartSpec } from './chart-data.js';
 
-export { type ChartSpec, a1ToRC, rcToColLetter, buildChartGrid, gridToChartSpec, chartSummary } from './chart-data.js';
+export { type ChartSpec, a1ToRC, rcToColLetter, buildChartGrid, gridToChartSpec, specFromInline, chartSummary } from './chart-data.js';
 
 function buildOption(spec: ChartSpec): echarts.EChartsOption {
   const base: echarts.EChartsOption = {

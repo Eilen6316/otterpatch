@@ -70,6 +70,8 @@ export interface ExcelProposal {
     v?: number; // dataValidation numberGreaterThan 阈值
     chartType?: 'bar' | 'line' | 'pie'; // chart 图表类型
     title?: string; // chart 标题
+    categories?: string[]; // chart 内联类别(x 轴/扇区名);给了它=内联模式,cell 当放置锚点,不写汇总表
+    series?: { name: string; data: number[] }[]; // chart 内联系列,data 与 categories 等长
   }>;
 }
 
@@ -107,7 +109,13 @@ function buildExcelChangeSet(req: ProposeRequest, p: ExcelProposal): ChangeSet {
       case 'condFormat': op = { family: 'style', kind: 'conditionalFormat', when: e.when ?? 'notEmpty', ...(e.v1 != null ? { v1: e.v1 } : {}), ...(e.v2 != null ? { v2: e.v2 } : {}), style: e.style ?? {} }; break;
       case 'dataValidation': op = { family: 'style', kind: 'dataValidation', rule: e.rule ?? 'list', ...(e.list ? { list: e.list } : {}), ...(e.min != null ? { min: e.min } : {}), ...(e.max != null ? { max: e.max } : {}), ...(e.v != null ? { v: e.v } : {}) }; break;
       case 'filter': op = { family: 'structure', kind: 'autoFilter' }; break;
-      case 'chart': op = { family: 'object', kind: 'insertChart', chartType: e.chartType ?? 'bar', range: e.cell, title: e.title ?? '图表' }; break;
+      case 'chart':
+        // 内联模式(透视图首选):categories/series 直接给数据,cell=放置图表的锚点格,主表不落汇总表。
+        // 范围模式(对已有数据画图):无 categories,cell=含表头的数据范围。
+        op = e.categories?.length
+          ? { family: 'object', kind: 'insertChart', chartType: e.chartType ?? 'bar', title: e.title ?? '图表', categories: e.categories, series: e.series ?? [], anchor: e.cell }
+          : { family: 'object', kind: 'insertChart', chartType: e.chartType ?? 'bar', title: e.title ?? '图表', range: e.cell };
+        break;
       case 'clear': op = { family: 'value', kind: 'deleteRange' }; break;
       default: op = { family: 'value', kind: 'setValue', value: (e.value ?? null) as CellValue };
     }
@@ -130,7 +138,7 @@ export const excelDialect: HostDialect = {
         items: {
           type: 'object',
           properties: {
-            cell: { type: 'string', description: 'A1 引用:单格如 B2;范围如 A1:C3(merge/clear/sort 用范围);插删行用该行任一格(如 A5),插删列用该列任一格(如 C1);freeze 用 A1' },
+            cell: { type: 'string', description: 'A1 引用:单格如 B2;范围如 A1:C3(merge/clear/sort 用范围);插删行用该行任一格(如 A5),插删列用该列任一格(如 C1);freeze 用 A1;chart 内联模式时填放置图表的空白格(如 H2),范围模式时填含表头的数据范围' },
             op: { type: 'string', enum: [...EXCEL_OPS] },
             value: { description: 'setValue 的新值(字符串/数字/布尔/空)' },
             formula: { type: 'string', description: 'setFormula 的公式,如 =C2*D2' },
@@ -162,6 +170,8 @@ export const excelDialect: HostDialect = {
             v: { type: 'number', description: 'dataValidation numberGreaterThan 阈值' },
             chartType: { type: 'string', enum: ['bar', 'line', 'pie'], description: 'chart 图表类型' },
             title: { type: 'string', description: 'chart 标题' },
+            categories: { type: 'array', items: { type: 'string' }, description: 'chart 内联类别(x 轴/扇区名)。做透视图首选:把 aggregate 算出的各组名放这里 → 不写汇总表、表格保持干净;此时 cell 改填【放置图表的左上角空白格】(如 H2)' },
+            series: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, data: { type: 'array', items: { type: 'number' } } }, required: ['name', 'data'] }, description: 'chart 内联系列:[{name:系列名, data:[数值...]}],每个 data 与 categories 等长' },
           },
           required: ['cell', 'op'],
         },

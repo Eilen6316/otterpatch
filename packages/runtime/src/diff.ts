@@ -83,7 +83,10 @@ function describe(op: EditOp): { badge: DiffBadge; label: string; after?: string
       return { badge: 'modify', label: '自动筛选' };
     case 'insertChart': {
       const kind = op.chartType === 'pie' ? '饼' : op.chartType === 'line' ? '折线' : '柱状';
-      return { badge: 'add', label: `插入${kind}图「${op.title}」(数据 ${op.range})`, after: `📊 ${kind}图「${op.title}」· 数据 ${op.range}` };
+      const dataDesc = op.categories?.length
+        ? `${op.categories.length} 类 · ${(op.series ?? []).map((s) => s.name).join('/') || '系列'}`
+        : `数据 ${op.range ?? ''}`;
+      return { badge: 'add', label: `插入${kind}图「${op.title}」(${dataDesc})`, after: `📊 ${kind}图「${op.title}」· ${dataDesc}` };
     }
     case 'conditionalFormat':
       return { badge: 'modify', label: `条件格式 ${op.when}${op.style.bgColor ? ' → 填充 ' + op.style.bgColor : ''}${op.style.color ? ' 字色 ' + op.style.color : ''}` };

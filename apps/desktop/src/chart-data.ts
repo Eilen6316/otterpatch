@@ -84,6 +84,22 @@ export function gridToChartSpec(grid: unknown[][], chartType: ChartSpec['chartTy
   return { chartType, title, categories, series };
 }
 
+/** 内联数据(Agent 直接给 categories/series,不经表格)→ ChartSpec;做容错:数值强转、丢空系列。 */
+export function specFromInline(
+  chartType: ChartSpec['chartType'],
+  title: string,
+  categories: unknown[] | undefined,
+  series: { name?: unknown; data?: unknown[] }[] | undefined,
+): ChartSpec {
+  const cats = (categories ?? []).map((c) => String(c ?? ''));
+  const out: { name: string; data: number[] }[] = [];
+  for (const s of series ?? []) {
+    const data = (s?.data ?? []).map(toNum);
+    if (data.length && data.some((n) => n !== 0)) out.push({ name: String(s?.name ?? '系列'), data });
+  }
+  return { chartType, title, categories: cats, series: out };
+}
+
 /** 图表一句话摘要(供审阅 diff 展示,让"插入图表"在改动明细里看得见)。 */
 export function chartSummary(chartType: ChartSpec['chartType'], title: string, range: string): string {
   const kind = chartType === 'pie' ? '饼图' : chartType === 'line' ? '折线图' : '柱状图';

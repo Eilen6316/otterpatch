@@ -11,7 +11,7 @@ import { LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
 import { Markdown } from './Markdown.js';
-import { chartToPngDataUrl, gridToChartSpec, buildChartGrid } from './chart.js';
+import { chartToPngDataUrl, gridToChartSpec, buildChartGrid, specFromInline } from './chart.js';
 
 /** Agent 在网格上的一步操作(用于"边画边改"的可视化播放)。 */
 interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bold?: boolean; numFmt?: string; note: string; before?: unknown; editId?: string }
@@ -897,7 +897,7 @@ export function App() {
   };
   const applyExcelStructure = (cs: unknown): void => {
     const api = univerRef.current;
-    const c = cs as { edits?: Array<{ target: string; op: { kind?: string; count?: number; before?: boolean; rows?: number; cols?: number; by?: number; asc?: boolean; when?: string; v1?: number | string; v2?: number; rule?: string; list?: string[]; min?: number; max?: number; v?: number; style?: { bgColor?: string; color?: string; bold?: boolean; italic?: boolean }; chartType?: 'bar' | 'line' | 'pie'; title?: string; range?: string } }>; anchors?: Record<string, { portable?: { a1?: string } }> } | null;
+    const c = cs as { edits?: Array<{ target: string; op: { kind?: string; count?: number; before?: boolean; rows?: number; cols?: number; by?: number; asc?: boolean; when?: string; v1?: number | string; v2?: number; rule?: string; list?: string[]; min?: number; max?: number; v?: number; style?: { bgColor?: string; color?: string; bold?: boolean; italic?: boolean }; chartType?: 'bar' | 'line' | 'pie'; title?: string; range?: string; categories?: string[]; series?: { name?: string; data?: number[] }[]; anchor?: string } }>; anchors?: Record<string, { portable?: { a1?: string } }> } | null;
     if (!api || !c?.edits) return;
     const colA = (n: number): string => { let s = ''; let x = n + 1; while (x > 0) { const r = (x - 1) % 26; s = String.fromCharCode(65 + r) + s; x = Math.floor((x - 1) / 26); } return s; };
     const ADV = new Set(['insertRows', 'deleteRows', 'insertCols', 'deleteCols', 'mergeCells', 'unmergeCells', 'freezePanes', 'sortRange', 'deleteRange', 'conditionalFormat', 'dataValidation', 'autoFilter', 'insertChart']);
@@ -920,24 +920,34 @@ export function App() {
       else if (k === 'dataValidation') api.dataValidation(a1, { kind: e.op?.rule ?? 'list', list: e.op?.list, min: e.op?.min, max: e.op?.max, v: e.op?.v });
       else if (k === 'autoFilter') api.createFilter(a1);
       else if (k === 'insertChart') {
-        // 关键修复:图表数据常由【同一 changeset 的 setValue】刚写入,而本函数(结构性操作)先于
-        // playOps 落值执行 —— 直接 readGrid 会读到空格 → 空图。改为用"本次写入值优先 + 改前实时值"叠加。
-        const written = new Map<string, unknown>();
-        for (const ed of c.edits) {
-          const ek = ed.op?.kind;
-          if (ek !== 'setValue' && ek !== 'setFormula') continue;
-          const ea1 = (c.anchors?.[ed.target]?.portable?.a1 ?? '').replace(/^.*!/, '').toUpperCase();
-          const ev = (ed.op as { value?: unknown; formula?: string }).value ?? (ed.op as { formula?: string }).formula;
-          if (ea1 && ev !== undefined) written.set(ea1, ev);
+        const inline = (e.op?.categories?.length ?? 0) > 0;
+        let spec = null;
+        if (inline) {
+          // 内联模式(透视图首选):Agent 直接给 categories/series,不往表里写汇总表,主表保持干净。
+          spec = specFromInline(e.op?.chartType ?? 'bar', e.op?.title ?? '图表', e.op?.categories, e.op?.series);
+        } else {
+          // 范围模式:对已有/同 changeset 写入的数据范围画图。用"本次写入值优先 + 改前实时值"叠加,避开落值时序。
+          const written = new Map<string, unknown>();
+          for (const ed of c.edits) {
+            const ek = ed.op?.kind;
+            if (ek !== 'setValue' && ek !== 'setFormula') continue;
+            const ea1 = (c.anchors?.[ed.target]?.portable?.a1 ?? '').replace(/^.*!/, '').toUpperCase();
+            const ev = (ed.op as { value?: unknown; formula?: string }).value ?? (ed.op as { formula?: string }).formula;
+            if (ea1 && ev !== undefined) written.set(ea1, ev);
+          }
+          const grid = buildChartGrid(a1, written, (cell) => api.getValue(cell)); // a1 = 含表头的数据范围
+          if (grid.length && (grid[0]?.length ?? 0)) spec = gridToChartSpec(grid, e.op?.chartType ?? 'bar', e.op?.title ?? '图表');
         }
-        const grid = buildChartGrid(a1, written, (cell) => api.getValue(cell)); // a1 = 含表头的数据范围
-        if (grid.length && (grid[0]?.length ?? 0)) {
-          const spec = gridToChartSpec(grid, e.op?.chartType ?? 'bar', e.op?.title ?? '图表');
+        if (spec && spec.categories.length && spec.series.length) {
           const png = chartToPngDataUrl(spec);
-          // 放到数据范围右侧两列处
-          const end = (a1.split(':')[1] ?? a1.split(':')[0] ?? 'A1');
-          const ec = a1RowCol(end);
-          const place = colA(ec.col + 2) + (a1RowCol(a1.split(':')[0] ?? 'A1').row + 1);
+          let place: string;
+          if (inline) {
+            place = a1; // 内联模式:a1 = Agent 给的放置锚点格
+          } else {
+            const end = (a1.split(':')[1] ?? a1.split(':')[0] ?? 'A1'); // 范围模式:放到数据范围右侧两列处
+            const ec = a1RowCol(end);
+            place = colA(ec.col + 2) + (a1RowCol(a1.split(':')[0] ?? 'A1').row + 1);
+          }
           api.insertChartImage(place, png, 640, 400);
         }
       }

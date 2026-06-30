@@ -14,12 +14,15 @@ export const EXCEL_SYSTEM =
   'condFormat(条件格式规则:cell 给范围,when 取 greaterThan/lessThan/between/equalTo/textContains/notEmpty/formula,v1(/v2)给阈值,style 给满足时的格式如 {bgColor:"#ffd6d6"})、' +
   'dataValidation(数据验证:cell 给范围,rule 取 list(配 list 选项做下拉)/numberBetween(min,max)/numberGreaterThan(v)/checkbox)、' +
   'filter(对 cell 范围开启自动筛选)、' +
-  'chart(插入图表:cell 给【含表头的数据范围】如 A1:C7(首列=类别,其余数值列=系列),chartType 取 bar/line/pie,title 给标题 —— 系统会渲染成图片浮在数据右侧);这些同样先审阅再落表。' +
-  '(图表用 ECharts 渲染成图片,非 Excel 原生图表但导出仍在;需要"透视表/分组汇总"就用 aggregate 的 groupBy 算出各组结果,再写成新汇总表 —— 计算型透视表。)' +
-  '⑧ 【做透视图的标准姿势】先用 aggregate(groupBy)算出各组汇总,setValue 写成一张"汇总表"(如 A7 起:类别 + 各汇总列);' +
-  '再 chart 引用这张汇总表。图表数据范围【优先只取「类别列 + 一个数值列」】(如 A7:B10=产品+销量合计),这样柱子清晰;' +
-  '【不要把量级差很大的列(如「金额」十万级和「毛利率」十级)塞进同一张图】——会把小数值压成贴地直线、看起来像空图;' +
-  '确需多系列就保证量级相近,或分开画两张图。写汇总表 + chart 放在同一个 changeset(用户一次审阅,即看到新行又看到图)。';
+  'chart(插入图表,两种模式):① 内联模式【首选,尤其透视图】—— 用 categories 给类别、series 给 [{name,data}] 直接喂数据,' +
+  'cell 填【放置图表的空白格】如 H2,系统把图渲染成图片浮在该处,【不往表里写任何数据】;② 范围模式 —— 对表里已有数据画图,' +
+  'cell 给【含表头的数据范围】如 A1:C7(首列=类别,其余数值列=系列)。chartType 取 bar/line/pie,title 给标题;先审阅再落。' +
+  '(图表用 ECharts 渲染成图片,非 Excel 原生但导出仍在。)' +
+  '⑧ 【做透视图/汇总图 = 内联,不要写汇总表】先用 aggregate(groupBy=分组列, op, where?) 算出各组结果,' +
+  '把组名放进 chart 的 categories、各指标放进 series(如 [{name:"销量合计",data:[1620,178,64]}]),cell 给一个放置图表的空白格(如 H2)——' +
+  '这样【主表保持干净、不会多出汇总行】(用户要的是"透视图",不是往表里塞汇总表)。一张图【优先只放一个指标】;' +
+  '多指标且量级差大(如「金额」十万 vs「毛利率」十)就分开画几张图,别塞同一张 —— 否则小数值被压成贴地直线、看起来像空图。' +
+  '只有当用户【明确要"透视表/汇总表/把数据列出来"】时,才另外用 setValue 把汇总写进单元格。';
 
 export const EXCEL_TOOL_DESC =
   '提出对所选单元格的修改建议(不直接执行,交用户审阅)。用 A1 引用;改内容用 setValue/setFormula,改格式(标红/加粗/字色/对齐)用 setStyle,数字格式用 setNumberFormat。';
