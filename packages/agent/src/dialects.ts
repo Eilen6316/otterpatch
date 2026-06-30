@@ -307,7 +307,18 @@ export const drawioDialect: HostDialect = {
 
 export interface WordProposal {
   plan: string;
-  edits: Array<{ quote: string; replacement: string }>;
+  edits: Array<{
+    quote: string;
+    replacement?: string; // 文本改写:给了它=替换原文
+    // 格式(任一存在=格式改动,不需 replacement);all=true 表示对全文,此时 quote 可省
+    all?: boolean;
+    bold?: boolean;
+    italic?: boolean;
+    underline?: boolean;
+    font?: string;
+    size?: number;
+    color?: string;
+  }>;
 }
 
 function buildWordChangeSet(req: ProposeRequest, p: WordProposal): ChangeSet {
@@ -315,15 +326,31 @@ function buildWordChangeSet(req: ProposeRequest, p: WordProposal): ChangeSet {
   const edits: Edit[] = [];
   (p.edits ?? []).forEach((e, i) => {
     const aid = ('a' + i) as AnchorId;
+    const quoteText = e.all ? '' : (e.quote ?? '');
     anchors[aid] = {
       id: aid,
       hostId: req.hostId as HostId,
       kind: 'flow',
       ref: null,
       baseRev: req.baseRev,
-      portable: { kind: 'flow', path: [i], quote: { prefix: '', text: e.quote, suffix: '' }, bias: 'left' },
+      portable: { kind: 'flow', path: [i], quote: { prefix: '', text: quoteText, suffix: '' }, bias: 'left' },
     };
-    edits.push({ id: 'e' + i, target: aid, op: { family: 'text', kind: 'replaceText', text: e.replacement } });
+    const isFormat = e.replacement == null && (e.bold != null || e.italic != null || e.underline != null || e.font != null || e.size != null || e.color != null);
+    const op: EditOp = isFormat
+      ? {
+          family: 'style',
+          kind: 'setStyle',
+          style: {
+            ...(e.bold != null ? { bold: e.bold } : {}),
+            ...(e.italic != null ? { italic: e.italic } : {}),
+            ...(e.underline != null ? { underline: e.underline } : {}),
+            ...(e.font != null ? { font: e.font } : {}),
+            ...(e.size != null ? { size: e.size } : {}),
+            ...(e.color != null ? { color: e.color } : {}),
+          },
+        }
+      : { family: 'text', kind: 'replaceText', text: e.replacement ?? '' };
+    edits.push({ id: 'e' + i, target: aid, op });
   });
   return newChangeSet(req, p.plan, anchors, edits);
 }
@@ -342,10 +369,17 @@ export const wordDialect: HostDialect = {
         items: {
           type: 'object',
           properties: {
-            quote: { type: 'string', description: '文档中真实存在的原文片段(用于定位)' },
-            replacement: { type: 'string', description: '改后的文字' },
+            quote: { type: 'string', description: '文档中真实存在的原文片段(用于定位);改格式时也用它选中要套格式的文字。全文操作可配合 all=true 省略' },
+            replacement: { type: 'string', description: '文本改写:改后的文字(给了它即为"替换原文"。要改格式就别给它)' },
+            all: { type: 'boolean', description: '格式改动作用于【全文】(如"全文宋体五号");true 时可不给 quote' },
+            bold: { type: 'boolean', description: '加粗:true 设为加粗、false 取消加粗' },
+            italic: { type: 'boolean', description: '斜体' },
+            underline: { type: 'boolean', description: '下划线' },
+            font: { type: 'string', description: '字体名,如 宋体 / 黑体 / Arial' },
+            size: { type: 'number', description: '字号(磅);如 五号≈10.5、小四≈12、四号≈14、三号≈16' },
+            color: { type: 'string', description: '字体颜色,如 #c00000' },
           },
-          required: ['quote', 'replacement'],
+          required: ['quote'],
         },
       },
     },

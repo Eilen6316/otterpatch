@@ -37,8 +37,11 @@ export interface BoxRect {
 export interface AbstractStyle {
   bold?: boolean;
   italic?: boolean;
+  underline?: boolean;
   color?: string;
   bgColor?: string;
+  font?: string; // 字体名(如 宋体 / Arial)
+  size?: number; // 字号(磅)
   align?: 'left' | 'center' | 'right';
   numberFormat?: string;
   /** 条件格式等高层意图,适配器决定原生 or 降级模拟。 */

@@ -22,8 +22,9 @@ export interface DocHandle {
   applyReplace(quote: string, replacement: string): boolean;
   /** 撤销文本改写:replacement → quote。 */
   revertReplace(quote: string, replacement: string): boolean;
-  /** 套用格式:quote 为空=全文,否则作用于命中片段(走 doc.command.set-inline-format-*)。 */
-  applyFormat(quote: string | null, fmt: DocFmt): boolean;
+  /** 套用格式:quote 为空=全文,否则作用于命中片段(走 doc.command.set-inline-format-*)。
+   *  返回作用区间的【改前样式】,供"拒绝"时原样还原(再调一次 applyFormat 传回它即可)。 */
+  applyFormat(quote: string | null, fmt: DocFmt): DocFmt | null;
   /** 审阅定位:把命中片段选中(滚动到视图)。 */
   highlight(text: string): void;
 }
@@ -53,14 +54,22 @@ const DEMO_PARAS = [
   '备注:本文档为演示数据,你可以圈选任意段落,用顶部工具栏手动排版,或让右侧 Agent 帮你改写、润色、统一字体字号。',
 ];
 
+interface TextRun { st: number; ed: number; ts?: { ff?: string; fs?: number; bl?: number; it?: number; ul?: { s?: number }; cl?: { rgb?: string } } }
 interface DocApi {
   getActiveDocument?: () => {
-    getSnapshot?: () => { body?: { dataStream?: string } };
+    getSnapshot?: () => { body?: { dataStream?: string; textRuns?: TextRun[] } };
     setSelection?: (s: number, e: number) => void;
     insertText?: (t: string, o?: { startOffset?: number; endOffset?: number }) => Promise<boolean>;
     insertParagraph?: (t?: string) => Promise<boolean>;
   } | null;
   executeCommand?: (id: string, params?: unknown) => Promise<boolean>;
+}
+
+/** 读取某偏移处的字符样式(从 snapshot.body.textRuns)→ DocFmt,作为"改前样式"。 */
+function styleAt(textRuns: TextRun[] | undefined, offset: number): DocFmt {
+  const run = (textRuns ?? []).find((r) => r.st <= offset && offset < r.ed) ?? (textRuns ?? []).find((r) => r.ed === offset);
+  const ts = run?.ts ?? {};
+  return { bold: ts.bl === 1, italic: ts.it === 1, underline: ts.ul?.s === 1, font: ts.ff, size: ts.fs, color: ts.cl?.rgb };
 }
 
 const UniverDoc = forwardRef<DocHandle, { onReady?: () => void }>(function UniverDoc({ onReady }, ref) {
@@ -101,20 +110,24 @@ const UniverDoc = forwardRef<DocHandle, { onReady?: () => void }>(function Unive
       applyFormat: (quote, fmt) => {
         const doc = apiRef.current?.getActiveDocument?.();
         const api = apiRef.current;
-        if (!doc || !api?.executeCommand) return false;
-        const ds = doc.getSnapshot?.()?.body?.dataStream ?? '';
+        if (!doc || !api?.executeCommand) return null;
+        const snap = doc.getSnapshot?.();
+        const ds = snap?.body?.dataStream ?? '';
         let start = 0;
         let end = Math.max(0, ds.length - 1); // 全文(不含尾部 \n)
-        if (quote) { const i = ds.indexOf(quote); if (i < 0) return false; start = i; end = i + quote.length; }
+        if (quote) { const i = ds.indexOf(quote); if (i < 0) return null; start = i; end = i + quote.length; }
+        const prior = styleAt(snap?.body?.textRuns, start); // 改前样式,供"拒绝"还原
         doc.setSelection?.(start, end);
         const cmd = (id: string, params?: unknown): void => { void api.executeCommand?.(id, params); };
-        if (fmt.bold) cmd('doc.command.set-inline-format-bold');
-        if (fmt.italic) cmd('doc.command.set-inline-format-italic');
-        if (fmt.underline) cmd('doc.command.set-inline-format-underline');
-        if (fmt.font) cmd('doc.command.set-inline-format-font-family', { value: fmt.font });
-        if (fmt.size) cmd('doc.command.set-inline-format-fontsize', { value: fmt.size });
-        if (fmt.color) cmd('doc.command.set-inline-format-text-color', { value: fmt.color });
-        return true;
+        // 加粗/斜体/下划线是【切换】命令:仅当目标态与现态不同才触发,从而实现可靠的"设为 X"与还原
+        if (fmt.bold !== undefined && !!fmt.bold !== !!prior.bold) cmd('doc.command.set-inline-format-bold');
+        if (fmt.italic !== undefined && !!fmt.italic !== !!prior.italic) cmd('doc.command.set-inline-format-italic');
+        if (fmt.underline !== undefined && !!fmt.underline !== !!prior.underline) cmd('doc.command.set-inline-format-underline');
+        // 字体/字号/颜色是【赋值】命令:与现值不同才设
+        if (fmt.font !== undefined && fmt.font !== prior.font) cmd('doc.command.set-inline-format-font-family', { value: fmt.font });
+        if (fmt.size !== undefined && fmt.size !== prior.size) cmd('doc.command.set-inline-format-fontsize', { value: fmt.size });
+        if (fmt.color !== undefined && fmt.color !== prior.color) cmd('doc.command.set-inline-format-text-color', { value: fmt.color });
+        return prior;
       },
       highlight: (text) => {
         const doc = apiRef.current?.getActiveDocument?.();

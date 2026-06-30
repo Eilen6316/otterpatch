@@ -10,7 +10,7 @@ import {
 import { LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
-import type { DocHandle } from './UniverDoc.js';
+import type { DocHandle, DocFmt } from './UniverDoc.js';
 import { Markdown } from './Markdown.js';
 import { chartToPngDataUrl, gridToChartSpec, buildChartGrid, specFromInline } from './chart.js';
 
@@ -31,8 +31,8 @@ type Turn =
 /** drawio 改动落到画板的句柄:editId→画板对象 id 映射 + 可重放的节点/连线(供逐条接受/拒绝)。 */
 interface BoardPatch { byEdit: Record<string, string>; objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> }
 
-/** Word 一条改动:原文 quote → 改后 replacement,按 editId 与 diff 项对应(供逐条审阅/应用/撤销)。 */
-interface WordEdit { editId: string; quote: string; replacement: string }
+/** Word 一条改动:文本改写(replacement)或格式改动(style);priorFmt 为格式改动的改前样式,供拒绝还原。 */
+interface WordEdit { editId: string; quote: string; replacement?: string; style?: DocFmt; priorFmt?: DocFmt }
 
 /**
  * 把对话流投影成模型历史(Pi 的 projection 模式:thread 是单一数据源)。
@@ -838,14 +838,24 @@ export function App() {
                   }
                   setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], board: { byEdit: board.byEdit, objs: board.objs }, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                 } else if (fmt === 'word') {
-                  // Word:从 changeSet 取每条 edit 的【完整 quote(原文)+ replacement(改后)】,按 diff 顺序建审阅项
-                  const wcs = cs as { edits?: Array<{ id: string; target: string; op?: { text?: string } }>; anchors?: Record<string, { portable?: { quote?: { text?: string } } }> } | null;
-                  const byId = new Map((wcs?.edits ?? []).map((e) => [e.id, { quote: wcs?.anchors?.[e.target]?.portable?.quote?.text ?? '', replacement: e.op?.text ?? '' }]));
-                  const wordEdits: WordEdit[] = diff.items.map((it) => ({ editId: it.editId, quote: byId.get(it.editId)?.quote ?? it.ref, replacement: byId.get(it.editId)?.replacement ?? (it.after ?? '') }));
-                  for (const w of wordEdits) wordRef.current?.applyReplace(w.quote, w.replacement); // 乐观落入文档(与 Excel playOps 一致),审阅可逐条拒绝还原
+                  // Word:从 changeSet 取每条 edit —— 文本改写(replaceText)或格式(setStyle),按 diff 顺序建审阅项
+                  const wcs = cs as { edits?: Array<{ id: string; target: string; op?: { kind?: string; text?: string; style?: DocFmt } }>; anchors?: Record<string, { portable?: { quote?: { text?: string } } }> } | null;
+                  const byId = new Map((wcs?.edits ?? []).map((e) => [e.id, { quote: wcs?.anchors?.[e.target]?.portable?.quote?.text ?? '', op: e.op }]));
+                  const wordEdits: WordEdit[] = diff.items.map((it) => {
+                    const rec = byId.get(it.editId);
+                    const quote = rec?.quote ?? it.ref;
+                    if (rec?.op?.kind === 'setStyle') return { editId: it.editId, quote, style: rec.op.style ?? {} };
+                    return { editId: it.editId, quote, replacement: rec?.op?.text ?? (it.after ?? '') };
+                  });
+                  // 乐观落入文档(与 Excel playOps 一致);格式改动同时记下改前样式,供拒绝时还原
+                  for (const w of wordEdits) {
+                    if (w.style) w.priorFmt = wordRef.current?.applyFormat(w.quote || null, w.style) ?? undefined;
+                    else wordRef.current?.applyReplace(w.quote, w.replacement ?? '');
+                  }
                   setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], word: wordEdits, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                   setReviewIdx(0);
-                  if (wordEdits[0]) wordRef.current?.highlight(wordEdits[0].replacement); // 审阅期选中第一条改后的文字(已乐观应用)
+                  const first = wordEdits[0];
+                  if (first && (first.replacement || first.quote)) wordRef.current?.highlight(first.replacement ?? first.quote); // 审阅期选中第一条
                 } else {
                   applyExcelStructure(cs); // 结构性操作(插删行列/合并/冻结/清空)先落,改变网格布局
                   const ops = diffToOps(diff);
@@ -914,7 +924,11 @@ export function App() {
     if (turn.board) {
       boardRef.current?.removeObjects(Object.values(turn.board.byEdit)); // drawio:从画板移除该回合对象
     } else if (turn.word) {
-      for (const w of turn.word) if (accepted.has(w.editId)) wordRef.current?.revertReplace(w.quote, w.replacement); // Word:把已应用的改回原文
+      for (const w of turn.word) {
+        if (!accepted.has(w.editId)) continue;
+        if (w.style) { if (w.priorFmt) wordRef.current?.applyFormat(w.quote || null, w.priorFmt); } // 格式:回改前样式
+        else wordRef.current?.revertReplace(w.quote, w.replacement ?? ''); // 文本:回原文
+      }
     } else {
       const api = univerRef.current;
       if (api) {
@@ -1138,14 +1152,14 @@ export function App() {
     if (!item) return;
     if (isExcel) univerRef.current?.focus(item.ref.replace(/^.*!/, ''));
     else if (fmt === 'drawio') { const id = turn.board?.byEdit[item.editId]; if (id) boardRef.current?.highlight(id); }
-    else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === item.editId); if (w) wordRef.current?.highlight(accepted.has(item.editId) ? w.replacement : w.quote); } // 已采纳→选中改后文字,已拒绝→选中还原的原文
+    else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === item.editId); const tx = accepted.has(item.editId) ? (w?.replacement ?? w?.quote) : w?.quote; if (tx) wordRef.current?.highlight(tx); } // 选中当前条对应的文字
   };
   const acceptItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number): void => {
     const it = turn.diff.items[idx]; if (!it) return;
     if (!accepted.has(it.editId)) { // 之前被拒 → 重新落回工作区
       if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
       else if (fmt === 'drawio') { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
-      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyReplace(w.quote, w.replacement); }
+      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w?.style) wordRef.current?.applyFormat(w.quote || null, w.style); else if (w) wordRef.current?.applyReplace(w.quote, w.replacement ?? ''); }
       toggleAccept(it.editId, true);
     }
     setReviewIdx(idx + 1);
@@ -1154,7 +1168,7 @@ export function App() {
     const it = turn.diff.items[idx]; if (!it) return;
     if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) revertGridOp(op); }
     else if (fmt === 'drawio') { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); }
-    else if (fmt === 'word' && accepted.has(it.editId)) { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.revertReplace(w.quote, w.replacement); } // 之前已应用 → 撤回
+    else if (fmt === 'word' && accepted.has(it.editId)) { const w = turn.word?.find((x) => x.editId === it.editId); if (w?.style) { if (w.priorFmt) wordRef.current?.applyFormat(w.quote || null, w.priorFmt); } else if (w) wordRef.current?.revertReplace(w.quote, w.replacement ?? ''); } // 之前已应用 → 还原(格式回改前样式)
     toggleAccept(it.editId, false);
     setReviewIdx(idx + 1);
   };
@@ -1163,7 +1177,7 @@ export function App() {
       if (accepted.has(it.editId)) continue;
       if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
       else if (fmt === 'drawio') { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
-      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyReplace(w.quote, w.replacement); }
+      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w?.style) wordRef.current?.applyFormat(w.quote || null, w.style); else if (w) wordRef.current?.applyReplace(w.quote, w.replacement ?? ''); }
     }
     const all = turn.diff.items.map((x) => x.editId);
     setAccepted(new Set(all));
@@ -1521,8 +1535,8 @@ export function App() {
                                     {d.items.map((it, k) => {
                                       const o = turn.ops.find((x) => x.editId === it.editId);
                                       const w = turn.word?.find((x) => x.editId === it.editId);
-                                      const oldV = w ? w.quote : !it.style && o?.before != null && String(o.before) !== '' ? String(o.before) : '';
-                                      const newV = w ? w.replacement : (it.after ?? '');
+                                      const oldV = w ? (w.quote || (w.style ? '全文' : '')) : !it.style && o?.before != null && String(o.before) !== '' ? String(o.before) : '';
+                                      const newV = w ? (w.replacement ?? (it.after ?? '')) : (it.after ?? '');
                                       return (
                                         <tr key={it.editId} className={'dt dt-' + it.badge} onClick={() => { if (active) setReviewIdx(k); }} title={it.label}>
                                           <td className="dt-ref">{it.ref.replace(/^.*!/, '')}</td>

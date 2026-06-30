@@ -18,10 +18,13 @@ export interface OtterPatchDiffItem {
 
 function styleSummary(s: AbstractStyle): string {
   const parts: string[] = [];
+  if (s.font) parts.push('字体 ' + s.font);
+  if (s.size) parts.push('字号 ' + s.size);
   if (s.bgColor) parts.push('填充 ' + s.bgColor);
   if (s.color) parts.push('字色 ' + s.color);
   if (s.bold) parts.push('加粗');
   if (s.italic) parts.push('斜体');
+  if (s.underline) parts.push('下划线');
   if (s.align) parts.push('对齐 ' + s.align);
   if (s.numberFormat) parts.push('数字格式 ' + s.numberFormat);
   return parts.join(' · ') || '套用格式';
