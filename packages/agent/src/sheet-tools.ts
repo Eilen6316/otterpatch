@@ -13,7 +13,7 @@ export { ROUTING_PREAMBLE, TOO_MANY_STEPS_MSG };
 
 /** respond 多步 loop 的系统提示(路由前导 + 方言 + 当前表格/选区上下文)。 */
 export function respondSystem(dialect: HostDialect, req: ProposeRequest): string {
-  return ROUTING_PREAMBLE + '\n\n' + dialect.systemPrompt + '\n\n当前表格/选区上下文:\n' + req.context;
+  return ROUTING_PREAMBLE + '\n\n' + dialect.systemPrompt + '\n\n当前文档/选区上下文:\n' + req.context;
 }
 
 /** 取最近多轮历史(防上下文过长)。 */
