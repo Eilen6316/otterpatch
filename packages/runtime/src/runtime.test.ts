@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync } from 'fflate';
 import type { DocRev } from '@otterpatch/core';
-import { MockModelClient } from '@otterpatch/agent';
+import { MockModelClient, type ModelClient, type ProposeRequest, type RespondOptions, type AgentResponse } from '@otterpatch/agent';
 import { comparePartsIntegrity, readOoxmlParts } from '@otterpatch/writeback-surgical';
 import { OtterPatchRuntime } from './runtime.js';
 import type { OtterPatchEvent } from './events.js';
@@ -57,6 +57,25 @@ test('runtime: propose → diff → commit(excel) 端到端 + 事件流', async 
   for (const t of ['propose:start', 'propose:done', 'diff:done', 'commit:start', 'commit:done'] as const) {
     assert.ok(seen.includes(t), `missing event ${t}`);
   }
+});
+
+test('runtime: verifyOpts 给 word 挂上影子自检、给 drawio 不挂', async () => {
+  const rt = new OtterPatchRuntime();
+  const captured: Array<RespondOptions | undefined> = [];
+  const cap: ModelClient = {
+    proposeChangeSet: async () => { throw new Error('unused'); },
+    respondStream: async (_req: ProposeRequest, _d, onEvent, opts) => {
+      captured.push(opts);
+      const result: AgentResponse = { kind: 'answer', text: 'ok' };
+      onEvent({ type: 'done', result });
+      return result;
+    },
+  };
+  const base = { hostId: 'h1', intent: 'x', baseRev: 0 as DocRev, anchors: [] };
+  await rt.respondStream({ ...base, format: 'word', context: '全省财政收入逐年增长。' }, cap, () => {});
+  await rt.respondStream({ ...base, format: 'drawio', context: '<mxGraphModel/>' }, cap, () => {});
+  assert.ok(captured[0]?.verify, 'word 应挂上 verify(锚点可落地性自检)');
+  assert.equal(captured[1]?.verify, undefined, 'drawio 不走影子自检');
 });
 
 test('runtime: 未注册格式 commit 抛错;已注册含 excel/word/pdf/ppt/drawio', async () => {
