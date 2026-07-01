@@ -9,3 +9,4 @@ export * from './anthropic.js';
 export * from './openai-compat.js';
 export * from './providers.js';
 export * from './agent.js';
+export * from './word-verify.js';

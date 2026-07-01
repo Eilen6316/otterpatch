@@ -5,7 +5,7 @@
  * 端到端:propose(intent → ChangeSet) → diff(可审阅) → 用户接受子集 → commit(外科写回 → 新字节 + 保真报告)。
  * 写回后端按 format 路由:excel/xlsx → 外科 OOXML(Univer 编译器);drawio → 单 XML 外科。
  */
-import { Agent } from '@otterpatch/agent';
+import { Agent, buildDocVerifier } from '@otterpatch/agent';
 import type { AgentResponse, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from '@otterpatch/agent';
 import type { ChangeSet, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
 import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
@@ -83,10 +83,14 @@ export class OtterPatchRuntime {
     }
   }
 
-  /** 提案产出后的影子校验(仅 Excel 且带整表快照时):重算 + 越界/重复命中检查,支撑 propose→observe→repair。 */
+  /** 提案产出后的影子校验:Excel 重算 + 越界/重复命中;Word 锚点可落地性(quote 是否真实唯一)。支撑 propose→observe→repair。 */
   private verifyOpts(req: ProposeRequest): RespondOptions | undefined {
     if ((req.format === 'excel' || req.format === 'xlsx') && req.sheet) {
       return { verify: buildGridVerifier(req.sheet), maxRepairs: 1 };
+    }
+    // Word:没有网格可重算,自检 = 每条改动的 quote 锚点能否在原文中真实、唯一地落地(否则乐观应用会静默 no-op)
+    if ((req.format === 'word' || req.format === 'docx') && req.context.trim()) {
+      return { verify: buildDocVerifier(req.context), maxRepairs: 1 };
     }
     return undefined;
   }
