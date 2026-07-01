@@ -1527,24 +1527,30 @@ export function App() {
                                   <pre>{d.items.map((it) => `${it.ref}${it.after ? '  ' + it.after : ''}  · ${it.label}`).join('\n')}</pre>
                                 </details>
                               ) : (
-                                <details className="rv-code">
-                                  <summary>{t('改动明细(git diff)')} · {total} {t('处')}</summary>
-                                  <table className="rv-difftable"><tbody>
-                                    {d.items.map((it, k) => {
-                                      const o = turn.ops.find((x) => x.editId === it.editId);
-                                      const w = turn.word?.find((x) => x.editId === it.editId);
-                                      const oldV = w ? (w.quote || (w.style ? '全文' : '')) : !it.style && o?.before != null && String(o.before) !== '' ? String(o.before) : '';
-                                      const newV = w ? (w.replacement ?? (it.after ?? '')) : (it.after ?? '');
-                                      return (
-                                        <tr key={it.editId} className={'dt dt-' + it.badge} onClick={() => { if (active) setReviewIdx(k); }} title={it.label}>
-                                          <td className="dt-ref">{it.ref.replace(/^.*!/, '')}</td>
-                                          <td className="dt-old">{oldV}</td>
-                                          <td className="dt-new">{newV}</td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody></table>
-                                </details>
+                                <div className="rv-gitdiff">
+                                  <div className="gd-head">{t('改动 diff')} · {total} {t('处')}</div>
+                                  {d.items.map((it, k) => {
+                                    const o = turn.ops.find((x) => x.editId === it.editId);
+                                    const w = turn.word?.find((x) => x.editId === it.editId);
+                                    const isFmt = !!(it.style || w?.style);
+                                    const refShort = it.ref.replace(/^.*!/, '');
+                                    const oldV = w ? (w.quote || '') : (!it.style && o?.before != null && String(o.before) !== '' ? String(o.before) : '');
+                                    const newV = w ? (w.replacement ?? '') : (it.after ?? '');
+                                    const fmtDesc = it.after || (w?.style ? Object.keys(w.style).join('/') : '') || t('改格式');
+                                    const cur = active && k === ridx;
+                                    return (
+                                      <div key={it.editId} className={'gd-hunk' + (cur ? ' cur' : '') + (accepted.has(it.editId) ? '' : ' gd-rej')} onClick={() => { if (active) setReviewIdx(k); }} title={it.label}>
+                                        <div className="gd-ref"><span className="gd-at">@@</span> {refShort} <span className="gd-lbl">{it.label}</span></div>
+                                        {isFmt ? (
+                                          <div className="gd-line fmt"><span className="gd-sign">~</span>{fmtDesc}{oldV ? <span className="gd-ctx">　「{oldV.length > 42 ? oldV.slice(0, 42) + '…' : oldV}」</span> : null}</div>
+                                        ) : (<>
+                                          {oldV ? <div className="gd-line del"><span className="gd-sign">-</span>{oldV}</div> : null}
+                                          {newV ? <div className="gd-line add"><span className="gd-sign">+</span>{newV}</div> : null}
+                                        </>)}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               )
                             ) : null}
                             {total > 0 && active && <div className="rv-prog"><div className="rv-prog-fill" style={{ width: `${(ridx / total) * 100}%` }} /></div>}

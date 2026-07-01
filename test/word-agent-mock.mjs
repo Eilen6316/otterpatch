@@ -59,6 +59,12 @@ try {
     return spans.some((s) => /下周计划/.test(s.textContent) && /bold|700/.test(s.getAttribute('style') || ''));
   }));
   ok('diff 展示了 新文本', await page.evaluate(() => (document.querySelector('.reviewbox')?.textContent || '').includes('整体进度略超预期')));
+  // git 风格统一 diff 始终可见(无需展开),含红减/绿加行
+  ok('git-diff 始终可见(.rv-gitdiff)', await page.evaluate(() => !!document.querySelector('.rv-gitdiff')));
+  ok('git-diff 有红减行 - 旧文本', await page.evaluate(() => [...document.querySelectorAll('.gd-line.del')].some((e) => /整体进度符合预期/.test(e.textContent))));
+  ok('git-diff 有绿加行 + 新文本', await page.evaluate(() => [...document.querySelectorAll('.gd-line.add')].some((e) => /整体进度略超预期/.test(e.textContent))));
+  ok('git-diff 有格式改动行(~)', await page.evaluate(() => !!document.querySelector('.gd-line.fmt')));
+  await page.screenshot({ path: `${process.env.SHOT_DIR || '.'}/word-gitdiff.png` });
 
   // 全部接受
   await page.locator('.reviewbox .btn.solid').click();

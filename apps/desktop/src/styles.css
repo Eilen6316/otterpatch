@@ -677,6 +677,24 @@ svg { display: block; }
 .rv-difftable .dt-old { color: var(--del); text-decoration: line-through; max-width: 120px; }
 .rv-difftable .dt-new { color: var(--add); max-width: 140px; }
 .rv-code > .rv-difftable { border-top: 1px solid var(--line); }
+/* git 风格统一 diff(始终可见):红减绿加、等宽、逐条 hunk;当前审阅条高亮,已拒条划线淡出 */
+.rv-gitdiff { margin: 9px 0 2px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: #fbfcfd; }
+.gd-head { padding: 6px 11px; font-size: 11.5px; color: var(--muted); background: rgba(37,99,235,0.05); border-bottom: 1px solid var(--line); }
+.gd-hunk { border-top: 1px solid var(--line); cursor: pointer; }
+.gd-hunk:first-of-type { border-top: 0; }
+.gd-hunk:hover { background: rgba(37,99,235,0.02); }
+.gd-hunk.cur { box-shadow: inset 3px 0 0 var(--accent); }
+.gd-hunk.gd-rej { opacity: 0.42; }
+.gd-hunk.gd-rej .gd-line.add, .gd-hunk.gd-rej .gd-line.fmt { text-decoration: line-through; }
+.gd-ref { display: flex; align-items: baseline; gap: 7px; padding: 4px 11px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.gd-at { color: var(--accent); font-weight: 700; opacity: 0.7; }
+.gd-lbl { color: var(--faint); font-family: var(--sans); }
+.gd-line { display: flex; gap: 6px; padding: 3px 11px; font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.gd-line.del { background: var(--del-bg); color: var(--del); }
+.gd-line.add { background: var(--add-bg); color: var(--add); }
+.gd-line.fmt { background: #eef3ff; color: var(--accent); }
+.gd-sign { flex-shrink: 0; width: 10px; font-weight: 700; opacity: 0.65; }
+.gd-ctx { color: var(--muted); }
 .rv-why { margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .rv-acts { display: flex; align-items: center; gap: 7px; margin-top: 11px; }
 .rv-acts.done { margin-top: 0; }
