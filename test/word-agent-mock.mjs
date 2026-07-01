@@ -53,6 +53,26 @@ try {
 
   ok('审阅区出现 diff 卡片', await page.evaluate(() => !!document.querySelector('.reviewbox')));
   ok('replaceText 已落入文档(宽松定位命中带空白的 quote)', await page.evaluate(() => document.querySelector('.rd-page').innerText.includes('整体进度略超预期')));
+  // 行内修订态:del 旧 + ins 新 + 三态切换条
+  ok('行内修订:del 旧 + ins 新', await page.evaluate(() => {
+    const del = [...document.querySelectorAll('.rd-page del.rd-del')].some((e) => /整体进度符合预期/.test(e.textContent));
+    const ins = [...document.querySelectorAll('.rd-page ins.rd-ins')].some((e) => /整体进度略超预期/.test(e.textContent));
+    return del && ins;
+  }));
+  ok('工作区出现"原文/修订/改后"切换条', await page.evaluate(() => document.querySelectorAll('.rd-difftoggle .rd-dt-seg').length === 3));
+  // 切到"原文":只看旧值,新值(ins)隐藏
+  await page.locator('.rd-difftoggle .rd-dt-seg', { hasText: '原文' }).click();
+  await sleep(150);
+  ok('切"原文"→ 只显示改前(ins 隐藏、del 常态)', await page.evaluate(() => {
+    const insHidden = [...document.querySelectorAll('.rd-page ins.rd-ins')].every((e) => getComputedStyle(e).display === 'none');
+    return insHidden && document.querySelector('.rd-page').innerText.includes('整体进度符合预期');
+  }));
+  // 切到"改后":只看新值,del 隐藏
+  await page.locator('.rd-difftoggle .rd-dt-seg', { hasText: '改后' }).click();
+  await sleep(150);
+  ok('切"改后"→ 只显示改后(del 隐藏)', await page.evaluate(() => [...document.querySelectorAll('.rd-page del.rd-del')].every((e) => getComputedStyle(e).display === 'none')));
+  await page.locator('.rd-difftoggle .rd-dt-seg', { hasText: '修订' }).click();
+  await sleep(150);
   ok('两条改动都打了 data-edit 标记', await page.evaluate(() => document.querySelectorAll('.rd-page [data-edit]').length >= 2));
   ok('setStyle 加粗已落到"下周计划"', await page.evaluate(() => {
     const spans = [...document.querySelectorAll('.rd-page [data-edit]')];

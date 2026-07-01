@@ -230,7 +230,7 @@ svg { display: block; }
 .rd-wc-row b { color: var(--text); font-variant-numeric: tabular-nums; }
 .rd-wc-close { margin-top: 12px; width: 100%; height: 32px; border: 0; background: var(--accent); color: #fff; border-radius: 8px; font-size: 12.5px; cursor: pointer; }
 /* 舞台:导航窗格 + 文档滚动区 */
-.rd-stage { flex: 1; display: flex; min-height: 0; }
+.rd-stage { flex: 1; display: flex; min-height: 0; position: relative; }
 .rd-scroll { flex: 1; overflow: auto; padding: 26px; display: flex; justify-content: center; align-items: flex-start; }
 /* 标尺 */
 .rd-ruler { flex-shrink: 0; height: 22px; background: var(--surface); border-bottom: 1px solid var(--line); background-image: repeating-linear-gradient(90deg, var(--line-2) 0 1px, transparent 1px 96px), repeating-linear-gradient(90deg, transparent 0 47px, var(--faint) 47px 48px, transparent 48px 96px); background-position: center; }
@@ -326,10 +326,20 @@ svg { display: block; }
 /* 批注 / 修订 */
 .rd-page .rd-comment { background: rgba(255,214,0,0.32); border-bottom: 1px dotted #d4a300; cursor: help; }
 .rd-page.rd-hide-comments .rd-comment { background: transparent; border-bottom: 0; }
-.rd-page ins.rd-ins, .rd-page ins { color: #1a7f37; text-decoration: underline; }
-.rd-page del.rd-del, .rd-page del { color: #cf222e; }
-.rd-page.rd-hide-markup del { display: none; }
-.rd-page.rd-hide-markup ins { color: inherit; text-decoration: none; }
+/* Agent 行内修订(Office 修订态):del=红删除线、ins=绿下划线;三态由 .rd-diff-* 控制显隐 */
+.rd-page ins.rd-ins, .rd-page ins { color: #116329; text-decoration: none; background: rgba(17,99,41,0.11); box-shadow: inset 0 -1px 0 rgba(17,99,41,0.5); border-radius: 2px; }
+.rd-page del.rd-del, .rd-page del { color: #b91c1c; text-decoration: line-through; text-decoration-color: rgba(185,28,28,0.65); background: rgba(185,28,28,0.09); border-radius: 2px; }
+.rd-page.rd-diff-final del.rd-del, .rd-page.rd-hide-markup del { display: none; }
+.rd-page.rd-diff-final ins.rd-ins, .rd-page.rd-hide-markup ins { color: inherit; text-decoration: none; background: transparent; box-shadow: none; }
+.rd-page.rd-diff-orig ins.rd-ins { display: none; }
+.rd-page.rd-diff-orig del.rd-del { color: inherit; text-decoration: none; background: transparent; }
+/* 工作区内的"原文/修订/改后"三态切换条(浮于文档上方) */
+.rd-difftoggle { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; align-items: center; gap: 3px; padding: 4px 5px 4px 11px; background: rgba(255,255,255,0.92); backdrop-filter: saturate(1.4) blur(6px); border: 1px solid var(--line-2); border-radius: 999px; box-shadow: 0 4px 18px rgba(20,22,28,0.12); font-size: 12px; }
+.rd-dt-lb { display: inline-flex; align-items: center; gap: 6px; color: var(--text-soft); font-weight: 500; padding-right: 6px; }
+.rd-dt-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,0.16); }
+.rd-dt-seg { border: 0; background: transparent; color: var(--muted); padding: 4px 11px; border-radius: 999px; cursor: pointer; font-size: 12px; line-height: 1; }
+.rd-dt-seg:hover { color: var(--text-soft); background: var(--fill); }
+.rd-dt-seg.on { background: var(--accent); color: #fff; box-shadow: 0 1px 3px rgba(37,99,235,0.35); }
 /* 网格 / 行号 */
 .rd-page.rd-grid { background-image: linear-gradient(var(--line-2) 1px, transparent 1px), linear-gradient(90deg, var(--line-2) 1px, transparent 1px); background-size: 24px 24px; }
 .rd-page.rd-linenumbers { counter-reset: rdln; }

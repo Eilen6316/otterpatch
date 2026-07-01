@@ -261,6 +261,8 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   const [toast, setToast] = useState<string | null>(null);
   const [wc, setWc] = useState<{ chars: number; noSpace: number; cjk: number; words: number; paras: number } | null>(null);
   const [nav, setNav] = useState<{ level: number; text: string; idx: number }[]>([]);
+  const [diffView, setDiffView] = useState<'orig' | 'mark' | 'final'>('mark'); // Agent 改动的三态:原文/修订/改后
+  const [hasDiff, setHasDiff] = useState(false); // 文档里是否存在 Agent 改动(决定是否显示修订切换条)
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null); // Office 式即时悬浮提示
   const tipTimer = useRef<number | null>(null);
   const lastFore = useRef('#c00000');
@@ -269,6 +271,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (edRef.current) edRef.current.innerHTML = saved && saved.trim() ? saved : DEMO_HTML;
+    setHasDiff(!!edRef.current?.querySelector('[data-edit],[data-edit-block],ins.rd-ins,del.rd-del'));
     try { document.execCommand('styleWithCSS', false, 'true'); } catch { /* 老浏览器忽略 */ }
     const onSel = (): void => {
       const s = window.getSelection();
@@ -338,6 +341,12 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   }, [page]);
 
   useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 1800); return () => clearTimeout(id); }, [toast]);
+  // Agent 改动的三态切换:给 .rd-page 加类,CSS 决定 del/ins 的显隐(原文=只旧、修订=红删绿增、改后=只新)
+  useEffect(() => {
+    const el = edRef.current; if (!el) return;
+    el.classList.toggle('rd-diff-final', diffView === 'final');
+    el.classList.toggle('rd-diff-orig', diffView === 'orig');
+  }, [diffView, hasDiff]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { setPop(null); setWc(null); } };
     document.addEventListener('keydown', onKey);
@@ -354,6 +363,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   };
   const persist = (): void => { try { if (edRef.current) localStorage.setItem(STORAGE_KEY, edRef.current.innerHTML); } catch { /* 配额满忽略 */ } };
   const notify = (m: string): void => setToast(m);
+  const refreshHasDiff = (): void => setHasDiff(!!edRef.current?.querySelector('[data-edit],[data-edit-block],ins.rd-ins,del.rd-del'));
 
   useImperativeHandle(ref, (): RichDocHandle => ({
     getText: () => edRef.current?.innerText ?? '',
@@ -415,15 +425,27 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
         }
         // 找不到块 → 落回内联 span 处理
       }
-      // 文本改写 或 纯字符级格式:包一个 data-edit span
-      const span = document.createElement('span');
-      span.setAttribute('data-edit', editId);
-      if (fmt) styleSpan(span, fmt);
-      span.textContent = opts.replacement ?? quote;
+      // 文本改写 → Office 式行内修订(del 旧 + ins 新,可在"原文/修订/改后"三态间切换);纯字符级格式 → 样式 span(格式标记)
       const prior = range.cloneContents();
-      range.deleteContents();
-      range.insertNode(span);
-      undoMap.current.set(editId, { mode: 'span', prior, el: span });
+      const oldText = range.toString();
+      if (opts.replacement != null) {
+        const frag = document.createDocumentFragment();
+        let firstEl: HTMLElement | null = null;
+        if (oldText) { const del = document.createElement('del'); del.className = 'rd-del'; del.setAttribute('data-edit', editId); del.textContent = oldText; frag.appendChild(del); firstEl = del; }
+        if (opts.replacement) { const ins = document.createElement('ins'); ins.className = 'rd-ins'; ins.setAttribute('data-edit', editId); if (fmt) styleSpan(ins, fmt); ins.textContent = opts.replacement; frag.appendChild(ins); if (!firstEl) firstEl = ins; }
+        range.deleteContents();
+        if (firstEl) range.insertNode(frag);
+        undoMap.current.set(editId, { mode: 'span', prior, el: firstEl ?? root });
+      } else {
+        const span = document.createElement('span');
+        span.setAttribute('data-edit', editId);
+        if (fmt) styleSpan(span, fmt);
+        span.textContent = oldText || quote;
+        range.deleteContents();
+        range.insertNode(span);
+        undoMap.current.set(editId, { mode: 'span', prior, el: span });
+      }
+      refreshHasDiff();
       persist();
       return true;
     },
@@ -440,10 +462,13 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
         const cur = info.el && root.contains(info.el) ? info.el : root.querySelector(`[data-edit-block="${editId}"]`);
         if (cur && cur.parentNode) cur.parentNode.replaceChild(info.prior.cloneNode(true), cur);
       } else {
-        const span = info.el && root.contains(info.el) ? info.el : root.querySelector(`[data-edit="${editId}"]`);
-        if (span && span.parentNode) span.parentNode.replaceChild(info.prior.cloneNode(true), span);
+        // 文本改动可能是一对 del+ins(同一 data-edit),整体用原片段替回
+        const els = Array.from(root.querySelectorAll(`[data-edit="${editId}"]`)) as HTMLElement[];
+        if (els.length && els[0]!.parentNode) { els[0]!.parentNode.insertBefore(info.prior.cloneNode(true), els[0]!); els.forEach((e) => e.remove()); }
+        else if (info.el && info.el.parentNode) { info.el.parentNode.insertBefore(info.prior.cloneNode(true), info.el); info.el.remove(); }
       }
       undoMap.current.delete(editId);
+      refreshHasDiff();
       persist();
     },
     highlight: (editId) => {
@@ -1355,6 +1380,14 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
 
       {page.ruler ? <div className="rd-ruler" /> : null}
       <div className="rd-stage">
+        {hasDiff ? (
+          <div className="rd-difftoggle" role="group" aria-label="Agent 修订视图">
+            <span className="rd-dt-lb"><span className="rd-dt-dot" />Agent 修订</span>
+            {([['orig', '原文'], ['mark', '修订'], ['final', '改后']] as const).map(([v, lb]) => (
+              <button key={v} className={'rd-dt-seg' + (diffView === v ? ' on' : '')} onMouseDown={(e) => { e.preventDefault(); setDiffView(v); }} title={v === 'orig' ? '只看改前' : v === 'mark' ? '红删绿增对照' : '只看改后'}>{lb}</button>
+            ))}
+          </div>
+        ) : null}
         {page.nav ? (
           <aside className="rd-nav">
             <div className="rd-nav-h">{t('导航')}</div>
@@ -1364,7 +1397,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
           </aside>
         ) : null}
         <div className="rd-scroll">
-          <div className="rd-page" ref={edRef} contentEditable suppressContentEditableWarning onInput={() => { persist(); if (page.nav) refreshNav(); }} onMouseUp={onEdMouseUp} onClick={onEdClick} />
+          <div className="rd-page" ref={edRef} contentEditable suppressContentEditableWarning onInput={() => { persist(); refreshHasDiff(); if (page.nav) refreshNav(); }} onMouseUp={onEdMouseUp} onClick={onEdClick} />
         </div>
       </div>
 
