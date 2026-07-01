@@ -156,27 +156,85 @@ svg { display: block; }
 .canvas.worddoc { padding: 0; background-color: var(--surface); background-image: none; place-items: stretch; overflow: hidden; }
 /* 自控富文本「Word」编辑器 */
 .rd-wrap { display: flex; flex-direction: column; width: 100%; height: 100%; overflow: hidden; background: #eef0f2; }
-/* 工具栏:横向排布,逻辑组(.rd-grp)为最小换行单位;字形已全部图标化 */
-.rd-toolbar { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 6px 12px; background: var(--surface); border-bottom: 1px solid var(--line); }
-/* 逻辑分组:组内不换行 → 整组一起参与换行,组永不被劈开 */
-.rd-grp { position: relative; display: flex; flex: 0 0 auto; flex-wrap: nowrap; align-items: center; gap: 2px; padding-right: 7px; }
-/* 组间竖线:画在右侧 padding 内,复刻旧 .rd-sep 的 18px 居中细线,绝不落单在行首/行尾(:last-of-type 排除隐藏 input 后的末组) */
-.rd-grp:not(:last-of-type)::after { content: ""; position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: 1px; height: 18px; background: var(--line); }
-.rd-btn { box-sizing: border-box; min-width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; gap: 3px; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-soft); cursor: pointer; font-size: 13px; line-height: 1; }
-.rd-btn:hover { background: var(--fill); border-color: var(--line); }
-/* 关键对齐:SVG 转 block,消除 inline 基线空隙,15px 图标在 28px 内真正垂直居中 */
-.rd-btn svg, .rd-color svg { display: block; }
-.rd-color svg { pointer-events: none; }
-/* B / I / U 保留字母(行业惯例),压平行高使其与线性图标同权重 */
-.rd-btn b, .rd-btn i, .rd-btn u { font-size: 14px; line-height: 1; color: var(--text); }
-.rd-sel { box-sizing: border-box; height: 28px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 12.5px; padding: 0 6px; cursor: pointer; max-width: 120px; vertical-align: middle; }
-.rd-sel.sm { max-width: 72px; }
-.rd-sel.ico { max-width: 68px; }
-.rd-color { box-sizing: border-box; position: relative; min-width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 6px; cursor: pointer; color: var(--text); }
-.rd-color:hover { background: var(--fill); border-color: var(--line); }
-.rd-color.hl { color: #d97706; }
-.rd-color input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+/* ── 仿 Word 多选项卡功能区:复用 Excel 功能区视觉系统(.ribbon/.rgroup/.rbig/.rs/.rcombo/.rstyle),此处仅补 Word 特有件 ── */
+.rd-ribbon .ribbon-bar { min-height: 84px; align-items: stretch; }
+.rd-ribbon .rgroup { padding: 3px 9px 0; }
+.rd-ribbon .rgbody { align-items: center; gap: 3px; }
+.rd-ribbon .rcombo.font { min-width: 122px; }
+.rd-ribbon .rcombo.size { min-width: 58px; }
+/* 图标按钮激活态(B/I/U/对齐/列表/开关…) */
+.rs.on { color: var(--accent); background: var(--sel); border-color: transparent; }
+.rbig.on, .rbig.on .rbig-ic { color: var(--accent); }
+/* 组合框:悬停/展开态发丝线聚焦 */
+.rcombo:hover { border-color: var(--faint); }
+.rcombo.open { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37,99,235,0.12); }
+/* 选项卡右侧:弹性占位 + 安静状态芯片(字数/缩放) */
+.rd-tabs-grow { flex: 1; }
+.rd-chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border: 0; background: transparent; border-radius: 7px; font-size: 12px; color: var(--text-soft); cursor: pointer; }
+.rd-chip:hover { background: var(--fill); }
+.rd-chip svg { color: var(--muted); }
+/* 拆分色彩按钮(字体颜色/突出显示)——Word 招牌控件:上半应用当前色,下拉换色 */
+.rd-split { display: inline-flex; align-items: stretch; height: 23px; border: 1px solid transparent; border-radius: 6px; }
+.rd-split:hover { background: var(--fill); border-color: var(--line); }
+.rd-split-main { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 0 4px; background: transparent; border: 0; cursor: pointer; color: var(--text-soft); }
+.rd-split-main.ic-red { color: #e02424; }
+.rd-split-main.ic-amber { color: #f0a500; }
+.rd-split-main svg { display: block; }
+.rd-underbar { width: 15px; height: 3px; border-radius: 1px; }
+.rd-split-caret { display: grid; place-items: center; width: 13px; font-size: 7px; color: var(--faint); background: transparent; border: 0; border-left: 1px solid var(--line); cursor: pointer; }
+.rd-split:hover .rd-split-caret:hover { color: var(--accent); background: var(--sel); }
+/* 数值微调(左右缩进 / 段前后间距) */
+.rd-num { display: inline-flex; align-items: center; height: 23px; margin: 2px 0; padding-left: 7px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface); font-size: 11.5px; color: var(--text-soft); gap: 5px; }
+.rd-num-ic { color: var(--muted); display: inline-flex; }
+.rd-num-lb { white-space: nowrap; }
+.rd-num button { width: 18px; height: 21px; border: 0; border-left: 1px solid var(--line); background: var(--fill); color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1; }
+.rd-num button:first-of-type { margin-left: 3px; }
+.rd-num button:hover { color: var(--accent); }
+/* 表格网格选择器 */
+.rd-tgrid { display: grid; grid-template-columns: repeat(10, 15px); gap: 2px; padding: 9px 9px 3px; }
+.rd-tgrid i { width: 15px; height: 15px; border: 1px solid var(--line-2); border-radius: 2px; }
+.rd-tgrid i.hot { background: var(--sel); border-color: var(--accent); }
+.rd-tgrid-cap { text-align: center; font-size: 11.5px; color: var(--muted); padding: 4px 0 6px; }
+/* 符号面板 */
+.rd-symtabs { display: flex; gap: 2px; padding: 4px 4px 6px; border-bottom: 1px solid var(--line); }
+.rd-symtab { border: 0; background: transparent; padding: 4px 9px; border-radius: 6px; font-size: 11.5px; color: var(--muted); cursor: pointer; }
+.rd-symtab:hover { background: var(--fill); }
+.rd-symtab.on { background: var(--sel); color: var(--accent); font-weight: 600; }
+.rd-symgrid { display: grid; grid-template-columns: repeat(10, 26px); gap: 2px; padding: 6px; max-height: 210px; overflow: auto; }
+.rd-symgrid button { width: 26px; height: 26px; border: 0; border-radius: 5px; background: transparent; font-size: 15px; line-height: 1; color: var(--text); cursor: pointer; }
+.rd-symgrid button:hover { background: var(--sel); }
+/* 查找小面板 */
+.rd-find { display: flex; gap: 6px; padding: 8px; align-items: center; }
+.rd-find-in { flex: 1; height: 28px; border: 1px solid var(--line-2); border-radius: 7px; padding: 0 9px; font: inherit; font-size: 12.5px; outline: none; }
+.rd-find-in:focus { border-color: var(--accent); }
+.rd-find-btn { height: 28px; border: 0; background: var(--accent); color: #fff; border-radius: 7px; padding: 0 11px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.drop-item .di-sub { margin-left: auto; padding-left: 18px; font-style: normal; font-size: 11px; color: var(--faint); }
+.drop-item svg { color: var(--accent); }
+/* 弹层入场动画(仅 Word 弹层附加,不动 Excel 的 .dropdown) */
+.dropdown.rd-pop { animation: rdPop 0.12s ease; }
+@keyframes rdPop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+/* 命令反馈气泡 */
+.rd-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 200; padding: 9px 17px; background: var(--primary); color: #fff; border-radius: 9px; font-size: 12.5px; box-shadow: 0 8px 24px rgba(20,22,28,0.24); pointer-events: none; animation: rdPop 0.12s ease; }
+/* 字数统计弹窗 */
+.rd-wc { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 100; width: 280px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: 0 16px 44px rgba(20,22,28,0.22); padding: 16px 18px; }
+.rd-wc-h { font-size: 13.5px; font-weight: 600; color: var(--text); padding-bottom: 10px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.rd-wc-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 2px; font-size: 12.5px; color: var(--text-soft); border-bottom: 1px solid var(--line); }
+.rd-wc-row b { color: var(--text); font-variant-numeric: tabular-nums; }
+.rd-wc-close { margin-top: 12px; width: 100%; height: 32px; border: 0; background: var(--accent); color: #fff; border-radius: 8px; font-size: 12.5px; cursor: pointer; }
+/* 舞台:导航窗格 + 文档滚动区 */
+.rd-stage { flex: 1; display: flex; min-height: 0; }
 .rd-scroll { flex: 1; overflow: auto; padding: 26px; display: flex; justify-content: center; align-items: flex-start; }
+/* 标尺 */
+.rd-ruler { flex-shrink: 0; height: 22px; background: var(--surface); border-bottom: 1px solid var(--line); background-image: repeating-linear-gradient(90deg, var(--line-2) 0 1px, transparent 1px 96px), repeating-linear-gradient(90deg, transparent 0 47px, var(--faint) 47px 48px, transparent 48px 96px); background-position: center; }
+/* 导航窗格 */
+.rd-nav { flex-shrink: 0; width: 232px; background: var(--surface); border-right: 1px solid var(--line); overflow: auto; }
+.rd-nav-h { font-size: 12px; font-weight: 600; color: var(--text-soft); padding: 12px 14px 8px; }
+.rd-nav-list { padding: 0 8px 12px; display: flex; flex-direction: column; gap: 1px; }
+.rd-nav-empty { padding: 8px 12px; color: var(--faint); font-size: 12px; }
+.rd-nav-i { text-align: left; border: 0; background: transparent; padding: 6px 10px; border-radius: 7px; font-size: 12.5px; color: var(--text-soft); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rd-nav-i:hover { background: var(--sel); color: var(--accent); }
+.rd-nav-i.lv2 { padding-left: 22px; font-size: 12px; }
+.rd-nav-i.lv3 { padding-left: 34px; font-size: 12px; color: var(--muted); }
 .rd-page { width: min(820px, 100%); min-height: 1000px; background: #fff; box-shadow: var(--shadow); border-radius: 2px; padding: 64px 72px; outline: none; font-family: 'Songti SC', '宋体', Georgia, serif; font-size: 15px; line-height: 1.9; color: #1f2430; }
 .rd-page:focus { box-shadow: var(--shadow), 0 0 0 2px rgba(37,99,235,0.18); }
 .rd-page h1 { font-size: 24px; font-weight: 700; text-align: center; margin: 0 0 18px; }
@@ -193,6 +251,90 @@ svg { display: block; }
 .rd-page [data-edit] { background: rgba(37,99,235,0.06); border-radius: 2px; }
 .rd-flash { animation: rdflash 1.2s ease; }
 @keyframes rdflash { 0%, 100% { background: rgba(37,99,235,0.06); } 30% { background: #fde68a; } }
+
+/* ── 功能区插入的文档构件(全部落在 .rd-page 内) ── */
+.rd-page h4 { font-size: 15px; font-weight: 700; margin: 14px 0 6px; }
+.rd-page ul, .rd-page ol { margin: 0 0 14px; padding-left: 26px; }
+.rd-page sup, .rd-page sub { font-size: 0.72em; }
+/* 分页符 */
+.rd-page .rd-pagebreak { height: 0; border-top: 1px dashed #c2c8d0; margin: 20px -20px; position: relative; break-before: page; }
+.rd-page .rd-pagebreak::after { content: "分页符"; position: absolute; right: 0; top: -8px; font-size: 9px; color: var(--faint); background: #fff; padding: 0 6px; }
+/* 封面 */
+.rd-page .rd-cover { text-align: center; padding: 60px 20px 40px; }
+.rd-page .rd-cover-kicker { font-size: 11px; letter-spacing: 3px; color: #2563eb; }
+.rd-page .rd-cover-title { font-size: 34px; font-weight: 700; margin: 18px 0 10px; border: 0; text-align: center; }
+.rd-page .rd-cover-sub { font-size: 16px; color: #6b7280; margin-bottom: 40px; }
+.rd-page .rd-cover-meta { font-size: 13px; color: #9aa0aa; }
+.rd-page .rd-cover--b { background: linear-gradient(135deg, #eff6ff, #faf5ff); border-radius: 8px; }
+.rd-page .rd-cover--b .rd-cover-title { color: #1e3a8a; }
+.rd-page .rd-cover--c { text-align: left; border-left: 5px solid #2563eb; padding-left: 30px; }
+.rd-page .rd-cover--c .rd-cover-title, .rd-page .rd-cover--c { text-align: left; }
+/* 形状 / 图表 / SmartArt / 文本框 */
+.rd-page .rd-shape { display: inline-block; margin: 6px; vertical-align: middle; color: #2563eb; }
+.rd-page .rd-smartart { display: flex; gap: 10px; margin: 14px 0; }
+.rd-page .rd-smartart span { flex: 1; padding: 14px 8px; text-align: center; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; color: #1e40af; font-size: 13px; }
+.rd-page .rd-chart { display: inline-block; margin: 12px 0; padding: 10px 14px; border: 1px solid var(--line-2); border-radius: 8px; text-align: center; }
+.rd-page .rd-chart-cap { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.rd-page .rd-textbox { border: 1px solid #c9ced6; border-radius: 6px; padding: 10px 14px; margin: 10px 0; background: #fbfbfc; }
+/* 艺术字 */
+.rd-page .rd-wordart { font-weight: 800; font-size: 1.4em; }
+.rd-page .rd-wa-1 { background: linear-gradient(90deg,#2563eb,#8b5cf6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.rd-page .rd-wa-2 { color: #2563eb; text-shadow: 1px 1px 0 #bfdbfe, 2px 2px 0 #93c5fd; }
+.rd-page .rd-wa-3 { color: transparent; -webkit-text-stroke: 1px #2563eb; }
+.rd-page .rd-wa-4 { background: linear-gradient(90deg,#e02424,#f0a500); -webkit-background-clip: text; background-clip: text; color: transparent; }
+/* 首字下沉 / 带圈 / 强调 / 标题样式 */
+.rd-page .rd-dropcap { float: left; font-size: 3em; line-height: 0.8; padding: 4px 8px 0 0; font-weight: 700; color: #1f2430; }
+.rd-page .rd-dropcap.hang { float: none; margin-left: -0.5em; }
+.rd-page .rd-enclosed { display: inline-block; min-width: 1.2em; height: 1.2em; line-height: 1.2em; text-align: center; border: 1px solid currentColor; border-radius: 50%; }
+.rd-page .rd-emphasis { font-style: italic; color: var(--accent); }
+.rd-page .rd-title { font-size: 30px; font-weight: 300; text-align: left; border-bottom: 2px solid var(--accent); padding-bottom: 6px; }
+.rd-page .rd-subtitle { color: var(--text-soft); letter-spacing: 1px; font-size: 17px; }
+.rd-page .rd-nospacing { margin: 0; line-height: 1; }
+/* 目录 / 索引 / 书目 / 参考文献 */
+.rd-page .rd-toc { margin: 12px 0; padding: 12px 16px; background: #fafbfc; border: 1px solid var(--line); border-radius: 8px; }
+.rd-page .rd-toc-h { font-weight: 700; margin-bottom: 8px; color: #1f2430; }
+.rd-page .rd-toc a { display: block; text-decoration: none; color: #374151; padding: 3px 0; font-size: 14px; }
+.rd-page .rd-toc a:hover { color: var(--accent); }
+.rd-page .rd-index, .rd-page .rd-biblio { margin: 16px 0; }
+.rd-page .rd-index div { padding: 2px 0; font-size: 14px; }
+.rd-page .rd-caption { font-size: 13px; color: #6b7280; text-align: center; margin: 6px 0 14px; }
+.rd-page .rd-cite, .rd-page .rd-xref { color: #2563eb; }
+.rd-page .rd-xref { text-decoration: underline; cursor: pointer; }
+/* 脚注 / 尾注 */
+.rd-page .rd-fnref a, .rd-page .rd-enref a { color: #2563eb; text-decoration: none; }
+.rd-page .rd-footnotes, .rd-page .rd-endnotes { margin-top: 24px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; color: #4b5563; }
+/* 页眉 / 页脚 / 页码 / 签名 / 对象 / 公式 / 书签 */
+.rd-page .rd-header { margin: -24px -20px 22px; padding: 6px 20px 8px; border-bottom: 1px solid var(--line); color: #9aa0aa; font-size: 13px; }
+.rd-page .rd-footer { margin: 22px -20px -24px; padding: 8px 20px 6px; border-top: 1px solid var(--line); color: #9aa0aa; font-size: 13px; }
+.rd-page .rd-pagenum { font-variant-numeric: tabular-nums; }
+.rd-page .rd-signline { margin: 18px 0; max-width: 240px; }
+.rd-page .rd-signline .x { color: #e02424; font-weight: 700; }
+.rd-page .rd-signline .ln { display: block; border-top: 1px solid #333; margin: 2px 0; }
+.rd-page .rd-signline small { color: #9aa0aa; }
+.rd-page .rd-object { display: inline-block; padding: 2px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: #fbfbfc; color: #374151; text-decoration: none; }
+.rd-page .rd-eq { font-family: "Cambria Math", Georgia, serif; font-style: italic; padding: 0 2px; }
+.rd-page .rd-bookmark { display: inline; }
+.rd-page ruby rt { font-size: 0.5em; color: #6b7280; }
+/* 批注 / 修订 */
+.rd-page .rd-comment { background: rgba(255,214,0,0.32); border-bottom: 1px dotted #d4a300; cursor: help; }
+.rd-page.rd-hide-comments .rd-comment { background: transparent; border-bottom: 0; }
+.rd-page ins.rd-ins, .rd-page ins { color: #1a7f37; text-decoration: underline; }
+.rd-page del.rd-del, .rd-page del { color: #cf222e; }
+.rd-page.rd-hide-markup del { display: none; }
+.rd-page.rd-hide-markup ins { color: inherit; text-decoration: none; }
+/* 网格 / 行号 */
+.rd-page.rd-grid { background-image: linear-gradient(var(--line-2) 1px, transparent 1px), linear-gradient(90deg, var(--line-2) 1px, transparent 1px); background-size: 24px 24px; }
+.rd-page.rd-linenumbers { counter-reset: rdln; }
+.rd-page.rd-linenumbers > p { position: relative; }
+.rd-page.rd-linenumbers > p::before { counter-increment: rdln; content: counter(rdln); position: absolute; left: -2.6em; width: 2em; text-align: right; color: var(--faint); font-size: 0.8em; }
+/* 视图模式 */
+.rd-view-read .rd-scroll { background: #e9ebee; }
+.rd-view-read .rd-page { max-width: 720px; box-shadow: none; }
+.rd-view-web .rd-scroll { padding: 0; align-items: stretch; }
+.rd-view-web .rd-page { width: 100%; max-width: none; min-height: 100%; box-shadow: none; border-radius: 0; padding: 32px 44px; }
+.rd-view-outline .rd-page h2 { margin-left: 24px; }
+.rd-view-outline .rd-page h3 { margin-left: 48px; }
+.rd-view-outline .rd-page p { margin-left: 72px; color: var(--muted); }
 .univer-host { width: 100%; height: 100%; min-height: 0; }
 .univer-loading { display: grid; place-items: center; color: var(--muted); font-size: 13px; }
 .canvas.board { padding: 0; }
