@@ -9,14 +9,14 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type Reac
 import { useT } from './i18n.js';
 import {
   IconUndo, IconRedo, IconClipboard, IconScissors, IconCopy, IconFormatBrush,
-  IconFontGrow, IconFontShrink, IconTextFunc, IconClearFormat, IconStrikethrough,
-  IconSubscript, IconSuperscript, IconWordArt, IconHighlighter, IconFontColor, IconPhonetic, IconMath,
+  IconFontGrow, IconFontShrink, IconChangeCase, IconClearFormat, IconStrikethrough,
+  IconSubscript, IconSuperscript, IconWordArt, IconTextEffect, IconHighlighter, IconFontColor, IconPhonetic, IconEncloseChar,
   IconBulletsRb, IconNumberingRb, IconMultilevelListRb, IconIndentDecrease, IconIndentIncrease,
   IconChineseLayoutRb, IconSortAsc, IconAlignLeft, IconAlignCenter, IconAlignRight, IconAlignJustify,
-  IconLineSpacing, IconShadingRb, IconBorders, IconSearch, IconSelect,
+  IconLineSpacing, IconShadingRb, IconBorders, IconSearch, IconReplace, IconSelect,
   IconCoverPageRb, IconBlankPageRb, IconPageBreakRb, IconTable, IconImage, IconShapes, IconStar,
-  IconSmartArt, IconBarChart, IconScreenshot, IconObject, IconVariantsRb, IconHelp,
-  IconLink, IconBookmark, IconCrossRef, IconHeaderFooter, IconTextBox, IconDocPartsRb, IconDropCapRb,
+  IconSmartArt, IconBarChart, IconScreenshot, IconObject, IconAddin, IconVariantsRb, IconHelp,
+  IconLink, IconBookmark, IconCrossRef, IconHeader, IconFooter, IconPageNumber, IconTextBox, IconDocPartsRb, IconDropCapRb,
   IconDateTime, IconSignatureLineRb, IconRoot, IconOmega, IconHorizontalRule,
   IconTextDirectionRb, IconMargins, IconOrientation, IconPaperSize, IconColumnsRb, IconSeparator,
   IconLineNumbersRb, IconHyphenationRb, IconGridPaperRb, IconIndentLeftRb, IconIndentRightRb,
@@ -25,17 +25,26 @@ import {
   IconTocRb, IconAddTextRb, IconUpdateTocRb, IconFootnoteRb, IconEndnoteRb, IconNextFootnoteRb,
   IconShowNotesRb, IconCitationRb, IconManageSourcesRb, IconStylesRb, IconBibliographyRb,
   IconCaptionRb, IconTableOfFiguresRb, IconMarkEntryRb, IconIndexRb, IconUpdateIndexRb,
-  IconSpellingRb, IconWordCountRb, IconFromWebRb, IconComment, IconEraser, IconPreviousRb,
+  IconSpellingRb, IconWordCountRb, IconTranslate, IconLanguage, IconComment, IconShowComments, IconEraser, IconPreviousRb,
   IconNextItemRb, IconTrackChangesRb, IconShowMarkupRb, IconAcceptRb, IconRejectRb,
   IconReadingViewRb, IconPageViewRb, IconWebLayoutRb, IconOutlineRb, IconRulerRb, IconGridlines,
   IconNavPaneRb, IconZoomRb, IconZoom100Rb, IconSinglePageRb, IconMultiPageRb, IconWidthRb, IconCheck,
 } from './icons.js';
 
-export interface DocFmt { bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; font?: string; size?: number; color?: string; align?: 'left' | 'center' | 'right' }
+export interface DocFmt {
+  bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; font?: string; size?: number; color?: string;
+  // 段落级(Agent 可下发,作用于 quote 所在整段)
+  align?: 'left' | 'center' | 'right' | 'justify'; lineSpacing?: number; bgColor?: string;
+  block?: 'h1' | 'h2' | 'h3' | 'p' | 'blockquote';
+}
+const INLINE_FMT = (f: DocFmt): boolean => f.bold != null || f.italic != null || f.underline != null || f.strike != null || f.font != null || f.size != null || f.color != null;
+const BLOCK_FMT = (f: DocFmt): boolean => f.align != null || f.lineSpacing != null || f.bgColor != null || f.block != null;
 
 export interface RichDocHandle {
-  /** 全文纯文本(供 Agent 上下文/定位)。 */
+  /** 全文纯文本(供 Agent 定位)。 */
   getText(): string;
+  /** 带格式的文档上下文(逐段样式/字体/字号/对齐 + 概览)——让 Agent 看得见排版细节。 */
+  getContext(): string;
   /** 落一条 Agent 改动(文本改写 replacement 或格式 fmt),按 editId 包裹,可还原。 */
   applyEdit(editId: string, quote: string, opts: { replacement?: string; fmt?: DocFmt }): boolean;
   /** 按 editId 精确还原该条改动。 */
@@ -43,8 +52,11 @@ export interface RichDocHandle {
   /** 选中/滚动到某条改动。 */
   highlight(editId: string): void;
 }
+/** 上抛给 App 的 Word 选区(与 Excel 的 UniSel 对等,供输入区显示"已选"芯片 + 喂给 Agent 聚焦,含选区格式)。 */
+export interface WordSel { text: string; block: string; chars: number; font?: string; size?: number; bold?: boolean; italic?: boolean; align?: string }
+
 /** props 全可选(避免 Record<string,never> 与 ref 冲突)。 */
-export interface RichDocProps { className?: string }
+export interface RichDocProps { className?: string; onSelection?: (s: WordSel | null) => void }
 
 type IconCmp = (p: { size?: number }) => ReactNode;
 
@@ -153,6 +165,54 @@ function findRange(root: HTMLElement, quote: string, from = 0): Range | null {
   return r;
 }
 
+/** 宽松定位:先精确;失败则按"空白折叠"匹配(容忍换行/多空格差异),把归一化命中映射回原始 Range。 */
+function findRangeLoose(root: HTMLElement, quote: string): Range | null {
+  const exact = findRange(root, quote);
+  if (exact) return exact;
+  const nq = quote.replace(/\s+/g, ' ').trim();
+  if (!nq) return null;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const cells: { node: Text; off: number; ch: string }[] = [];
+  let n: Node | null;
+  while ((n = walker.nextNode())) { const d = (n as Text).data; for (let i = 0; i < d.length; i++) cells.push({ node: n as Text, off: i, ch: d[i]! }); }
+  let norm = '';
+  const map: number[] = []; // 归一化下标 → cells 下标
+  let prevWs = false;
+  for (let i = 0; i < cells.length; i++) {
+    const ch = cells[i]!.ch;
+    if (/\s/.test(ch)) { if (!prevWs) { norm += ' '; map.push(i); } prevWs = true; }
+    else { norm += ch; map.push(i); prevWs = false; }
+  }
+  const idx = norm.indexOf(nq);
+  if (idx < 0) return null;
+  const startCell = cells[map[idx]!]!;
+  const endCell = cells[map[idx + nq.length - 1]!]!;
+  const r = document.createRange();
+  r.setStart(startCell.node, startCell.off);
+  r.setEnd(endCell.node, endCell.off + 1);
+  return r;
+}
+
+/** rgb(…) → #rrggbb(供喂给 Agent 的格式概览)。 */
+function rgbToHex(rgb: string): string {
+  const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(rgb);
+  if (!m) return rgb;
+  const h = (x: string): string => Number(x).toString(16).padStart(2, '0');
+  return ('#' + h(m[1]!) + h(m[2]!) + h(m[3]!)).toLowerCase();
+}
+/** 元素样式 → 简明中文格式串(段落/选区概览用)。 */
+function fmtBrief(el: HTMLElement): { font: string; size: number; color: string; bold: boolean; italic: boolean; align: string } {
+  const cs = getComputedStyle(el);
+  return {
+    font: cs.fontFamily.split(',')[0]?.replace(/["']/g, '').trim() ?? '',
+    size: Math.round(parseFloat(cs.fontSize) * 0.75 * 10) / 10,
+    color: rgbToHex(cs.color),
+    bold: parseInt(cs.fontWeight, 10) >= 600,
+    italic: cs.fontStyle === 'italic',
+    align: cs.textAlign === 'center' ? '居中' : cs.textAlign === 'right' ? '右对齐' : cs.textAlign === 'justify' || cs.textAlign === 'justify-all' ? '两端对齐' : '左对齐',
+  };
+}
+
 function styleSpan(span: HTMLElement, fmt: DocFmt): void {
   if (fmt.bold) span.style.fontWeight = 'bold';
   if (fmt.italic) span.style.fontStyle = 'italic';
@@ -161,6 +221,13 @@ function styleSpan(span: HTMLElement, fmt: DocFmt): void {
   if (fmt.font) span.style.fontFamily = fmt.font;
   if (fmt.size) span.style.fontSize = fmt.size + 'pt';
   if (fmt.color) span.style.color = fmt.color;
+}
+
+/** 段落级样式(对齐/行距/底纹)落到块元素上;block(标题/正文/引用)换标签由调用方处理。 */
+function styleBlockEl(el: HTMLElement, fmt: DocFmt): void {
+  if (fmt.align) { el.style.textAlign = fmt.align; if (fmt.align === 'justify') el.style.textAlignLast = 'justify'; }
+  if (fmt.lineSpacing) el.style.lineHeight = String(fmt.lineSpacing);
+  if (fmt.bgColor) el.style.backgroundColor = fmt.bgColor;
 }
 
 const transformCase = (txt: string, mode: string): string => {
@@ -174,8 +241,10 @@ const transformCase = (txt: string, mode: string): string => {
   }
 };
 
-const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props, ref) {
+const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSelection }, ref) {
   const t = useT();
+  const selCb = useRef(onSelection);
+  selCb.current = onSelection;
   const edRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const objRef = useRef<HTMLInputElement>(null);
@@ -183,7 +252,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
   const painter = useRef<DocFmt | null>(null); // 格式刷源格式
   const cmtCursor = useRef(0); // 批注导航游标
   const lastImg = useRef<HTMLElement | null>(null); // 最近点选的图片/对象(排列命令的目标)
-  const undoMap = useRef<Map<string, { mode: 'span'; prior: DocumentFragment } | { mode: 'root'; priorProps: Record<string, string> }>>(new Map());
+  const undoMap = useRef<Map<string, { mode: 'span'; prior: DocumentFragment; el: HTMLElement } | { mode: 'root'; priorProps: Record<string, string> } | { mode: 'block'; prior: Element; el: HTMLElement }>>(new Map());
 
   const [tab, setTab] = useState<number>(() => { const v = parseInt(localStorage.getItem(TAB_KEY) ?? '0', 10); return Number.isFinite(v) && v >= 0 && v < 6 ? v : 0; });
   const [pop, setPop] = useState<{ key: string; x: number; y: number } | null>(null);
@@ -192,6 +261,8 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
   const [toast, setToast] = useState<string | null>(null);
   const [wc, setWc] = useState<{ chars: number; noSpace: number; cjk: number; words: number; paras: number } | null>(null);
   const [nav, setNav] = useState<{ level: number; text: string; idx: number }[]>([]);
+  const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null); // Office 式即时悬浮提示
+  const tipTimer = useRef<number | null>(null);
   const lastFore = useRef('#c00000');
   const lastHi = useRef('#ffe600');
 
@@ -203,6 +274,17 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
       const s = window.getSelection();
       if (!(s && s.rangeCount && edRef.current && s.anchorNode && edRef.current.contains(s.anchorNode))) return;
       savedRange.current = s.getRangeAt(0).cloneRange();
+      // 上抛选区芯片:选中文字→给 App(显示"已选"+喂 Agent);折叠→清空
+      const selTxt = s.toString();
+      if (selTxt && selTxt.trim()) {
+        let be: Node | null = s.anchorNode;
+        while (be && be !== edRef.current) { if (be instanceof HTMLElement && BLOCK_TAGS.test(be.tagName)) break; be = be.parentNode; }
+        const tag = be instanceof HTMLElement ? be.tagName : '';
+        const blockLabel = /^H[1-3]$/.test(tag) ? '标题' : tag === 'BLOCKQUOTE' ? '引用' : tag === 'LI' ? '列表项' : '正文';
+        let ae: Node | null = s.anchorNode; if (ae && ae.nodeType === 3) ae = ae.parentElement;
+        const fb = ae instanceof HTMLElement ? fmtBrief(ae) : null;
+        selCb.current?.({ text: selTxt.length > 400 ? selTxt.slice(0, 400) + '…' : selTxt, block: blockLabel, chars: selTxt.length, ...(fb ? { font: fb.font, size: fb.size, bold: fb.bold, italic: fb.italic, align: fb.align } : {}) });
+      } else selCb.current?.(null);
       try {
         let el: Node | null = s.anchorNode;
         if (el && el.nodeType === 3) el = el.parentElement;
@@ -275,27 +357,73 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
 
   useImperativeHandle(ref, (): RichDocHandle => ({
     getText: () => edRef.current?.innerText ?? '',
+    getContext: () => {
+      const root = edRef.current; if (!root) return '(空文档)';
+      const blocks = Array.from(root.querySelectorAll('p,h1,h2,h3,h4,li,blockquote')) as HTMLElement[];
+      if (!blocks.length) return root.innerText || '(空文档)';
+      const fonts = new Set<string>(); const sizes = new Set<number>(); const colors = new Set<string>();
+      const lines = blocks.map((el, i) => {
+        const b = fmtBrief(el);
+        if (b.font) fonts.add(b.font); sizes.add(b.size); if (b.color !== '#000000' && b.color !== '#1f2430') colors.add(b.color);
+        const tag = el.tagName.toLowerCase();
+        const style = tag === 'h1' ? '标题1' : tag === 'h2' ? '标题2' : tag === 'h3' ? '标题3' : tag === 'h4' ? '标题4' : tag === 'blockquote' ? '引用' : tag === 'li' ? '列表项' : '正文';
+        const txt = (el.innerText || '').replace(/\s+/g, ' ').trim();
+        const marks = [style, `${b.font} ${b.size}pt`, b.color !== '#000000' && b.color !== '#1f2430' ? b.color : '', b.bold ? '加粗' : '', b.italic ? '斜体' : '', b.align !== '左对齐' ? b.align : ''].filter(Boolean).join(' · ');
+        return `第${i + 1}段 [${marks}]: ${txt.length > 90 ? txt.slice(0, 90) + '…' : txt}`;
+      });
+      return `[Word 文档 · ${blocks.length} 段] 每段已标注它的样式/字体/字号/对齐/颜色;要改格式就据此下发 setStyle。\n格式概览: 字体 ${[...fonts].join('、')} | 字号 ${[...sizes].sort((a, b) => a - b).join('、')}pt${colors.size ? ' | 非黑颜色 ' + [...colors].join('、') : ''}\n逐段:\n${lines.join('\n')}`;
+    },
     applyEdit: (editId, quote, opts) => {
       const root = edRef.current;
       if (!root) return false;
-      if (!quote && opts.fmt) {
-        // 只快照 styleSpan 会改的字符属性,别吞掉页面级内联样式(纸张/边距/分栏/缩放),否则还原会误抹
+      const fmt = opts.fmt;
+      // 全文格式(无 quote):字符级改根内联样式;段落级(对齐/行距/底纹)也落根(继承给各段);block 对全文无意义,忽略
+      if (!quote && fmt) {
         const s = root.style;
-        undoMap.current.set(editId, { mode: 'root', priorProps: { fontWeight: s.fontWeight, fontStyle: s.fontStyle, textDecoration: s.textDecoration, fontFamily: s.fontFamily, fontSize: s.fontSize, color: s.color } });
-        styleSpan(root, opts.fmt);
+        undoMap.current.set(editId, { mode: 'root', priorProps: {
+          fontWeight: s.fontWeight, fontStyle: s.fontStyle, textDecoration: s.textDecoration, fontFamily: s.fontFamily, fontSize: s.fontSize, color: s.color,
+          textAlign: s.textAlign, lineHeight: s.lineHeight, backgroundColor: s.backgroundColor,
+        } });
+        styleSpan(root, fmt);
+        styleBlockEl(root, fmt);
         persist();
         return true;
       }
-      const range = findRange(root, quote);
+      const range = findRangeLoose(root, quote); // 宽松定位:容忍模型 quote 的空白/换行差异,edit 才真落地
       if (!range) return false;
+      // 段落级格式(且非文本改写):快照整段以便还原,套用后打 data-edit-block 标记
+      if (opts.replacement == null && fmt && BLOCK_FMT(fmt)) {
+        let blk: Node | null = range.startContainer;
+        while (blk && blk !== root) { if (blk instanceof HTMLElement && BLOCK_TAGS.test(blk.tagName)) break; blk = blk.parentNode; }
+        if (blk instanceof HTMLElement && blk !== root) {
+          const prior = blk.cloneNode(true) as Element;
+          if (INLINE_FMT(fmt)) { // 字符级部分:把 quote 包进内联 span
+            const sp = document.createElement('span'); styleSpan(sp, fmt);
+            try { range.surroundContents(sp); } catch { sp.appendChild(range.extractContents()); range.insertNode(sp); }
+          }
+          let target: HTMLElement = blk; // 换段落标签(标题/正文/引用)
+          if (fmt.block && blk.tagName.toLowerCase() !== fmt.block) {
+            target = document.createElement(fmt.block);
+            while (blk.firstChild) target.appendChild(blk.firstChild);
+            blk.replaceWith(target);
+          }
+          styleBlockEl(target, fmt);
+          target.setAttribute('data-edit-block', editId);
+          undoMap.current.set(editId, { mode: 'block', prior, el: target }); // 存 el:同段多次改 或 跨回合 editId 撞名时仍能精确还原
+          persist();
+          return true;
+        }
+        // 找不到块 → 落回内联 span 处理
+      }
+      // 文本改写 或 纯字符级格式:包一个 data-edit span
       const span = document.createElement('span');
       span.setAttribute('data-edit', editId);
-      if (opts.fmt) styleSpan(span, opts.fmt);
+      if (fmt) styleSpan(span, fmt);
       span.textContent = opts.replacement ?? quote;
       const prior = range.cloneContents();
       range.deleteContents();
       range.insertNode(span);
-      undoMap.current.set(editId, { mode: 'span', prior });
+      undoMap.current.set(editId, { mode: 'span', prior, el: span });
       persist();
       return true;
     },
@@ -307,17 +435,24 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
         const s = root.style; const pp = info.priorProps;
         s.fontWeight = pp.fontWeight ?? ''; s.fontStyle = pp.fontStyle ?? ''; s.textDecoration = pp.textDecoration ?? '';
         s.fontFamily = pp.fontFamily ?? ''; s.fontSize = pp.fontSize ?? ''; s.color = pp.color ?? '';
+        s.textAlign = pp.textAlign ?? ''; s.lineHeight = pp.lineHeight ?? ''; s.backgroundColor = pp.backgroundColor ?? '';
+      } else if (info.mode === 'block') {
+        const cur = info.el && root.contains(info.el) ? info.el : root.querySelector(`[data-edit-block="${editId}"]`);
+        if (cur && cur.parentNode) cur.parentNode.replaceChild(info.prior.cloneNode(true), cur);
+      } else {
+        const span = info.el && root.contains(info.el) ? info.el : root.querySelector(`[data-edit="${editId}"]`);
+        if (span && span.parentNode) span.parentNode.replaceChild(info.prior.cloneNode(true), span);
       }
-      else { const span = root.querySelector(`[data-edit="${editId}"]`); if (span && span.parentNode) span.parentNode.replaceChild(info.prior.cloneNode(true), span); }
       undoMap.current.delete(editId);
       persist();
     },
     highlight: (editId) => {
-      const span = edRef.current?.querySelector(`[data-edit="${editId}"]`) as HTMLElement | null;
-      if (!span) return;
-      span.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      span.classList.add('rd-flash');
-      setTimeout(() => span.classList.remove('rd-flash'), 1200);
+      const info = undoMap.current.get(editId);
+      const el = (info && 'el' in info && info.el && edRef.current?.contains(info.el) ? info.el : edRef.current?.querySelector(`[data-edit="${editId}"], [data-edit-block="${editId}"]`)) as HTMLElement | null;
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('rd-flash');
+      setTimeout(() => el.classList.remove('rd-flash'), 1200);
     },
   }), []);
 
@@ -855,6 +990,28 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
   const openPop = (key: string, el: HTMLElement): void => {
     const r = el.getBoundingClientRect();
     setPop({ key, x: Math.min(r.left, window.innerWidth - 260), y: r.bottom + 4 });
+    if (tipTimer.current) window.clearTimeout(tipTimer.current);
+    setTip(null);
+  };
+
+  // ── Office 式即时悬浮提示:委托到功能区,读 [data-cmd] 的 aria-label,短延迟显示 ──
+  const onRibbonOver = (e: React.MouseEvent): void => {
+    const el = (e.target as HTMLElement).closest?.('[data-cmd]') as HTMLElement | null;
+    if (!el) return;
+    const label = el.getAttribute('aria-label') ?? '';
+    if (!label) return;
+    if (tipTimer.current) window.clearTimeout(tipTimer.current);
+    tipTimer.current = window.setTimeout(() => {
+      const r = el.getBoundingClientRect();
+      setTip({ text: label, x: Math.round(r.left + r.width / 2), y: Math.round(r.bottom + 7) });
+    }, 130);
+  };
+  const onRibbonOut = (e: React.MouseEvent): void => {
+    const from = (e.target as HTMLElement).closest?.('[data-cmd]');
+    const to = e.relatedTarget as Node | null;
+    if (from && to && from.contains(to)) return; // 仍在同一按钮内移动,不关
+    if (tipTimer.current) window.clearTimeout(tipTimer.current);
+    setTip(null);
   };
 
   // ── 直接动作分发(非弹层项) ──
@@ -1060,24 +1217,24 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
 
   const Big = ({ label, icon }: { label: string; icon: IconCmp }): ReactNode => {
     const Ico = icon;
-    return <button className="rbig" title={t(label)} onMouseDown={(e) => clickCell(label, e)}><span className="rbig-ic"><Ico size={20} /></span><span className="rbig-lb">{t(label)}{MENU.has(label) ? ' ▾' : ''}</span></button>;
+    return <button className="rbig" aria-label={t(label)} data-cmd={label} onMouseDown={(e) => clickCell(label, e)}><span className="rbig-ic"><Ico size={20} /></span><span className="rbig-lb">{t(label)}{MENU.has(label) ? ' ▾' : ''}</span></button>;
   };
   const Small = ({ label, icon, accent }: { label: string; icon?: IconCmp; accent?: 'red' | 'amber' }): ReactNode => {
     const Ico = icon;
     const g = GLYPH[label];
-    return <button className={'rs' + (g ? ' biu biu-' + (label === '加粗' ? 'b' : label === '斜体' ? 'i' : 'u') : '') + (accent === 'red' ? ' ic-red' : accent === 'amber' ? ' ic-amber' : '') + (isActive(label) ? ' on' : '')} title={t(label)} onMouseDown={(e) => clickCell(label, e)}>
+    return <button className={'rs' + (g ? ' biu biu-' + (label === '加粗' ? 'b' : label === '斜体' ? 'i' : 'u') : '') + (accent === 'red' ? ' ic-red' : accent === 'amber' ? ' ic-amber' : '') + (isActive(label) ? ' on' : '')} aria-label={t(label)} data-cmd={label} onMouseDown={(e) => clickCell(label, e)}>
       {g ?? (Ico ? <Ico size={15} /> : t(label))}{MENU.has(label) ? <span className="caret">▾</span> : null}
     </button>;
   };
   const Combo = ({ label, cls }: { label: string; cls: string }): ReactNode => {
     const val = label === '字体' ? (st.font || t('字体')) : label === '字号' ? (st.size ? String(st.size) : t('字号')) : t(label);
-    return <button className={'rcombo ' + cls + (pop?.key === label ? ' open' : '')} title={t(label)} onMouseDown={(e) => { e.preventDefault(); openPop(label, e.currentTarget); }}><span className="rc-val">{val}</span><span className="caret">▾</span></button>;
+    return <button className={'rcombo ' + cls + (pop?.key === label ? ' open' : '')} aria-label={t(label)} data-cmd={label} onMouseDown={(e) => { e.preventDefault(); openPop(label, e.currentTarget); }}><span className="rc-val">{val}</span><span className="caret">▾</span></button>;
   };
   const SplitColor = ({ label, icon, color }: { label: string; icon: IconCmp; color: 'fore' | 'hi' }): ReactNode => {
     const Ico = icon;
     const cur = color === 'fore' ? lastFore.current : lastHi.current;
     const apply = (): void => color === 'fore' ? exec('foreColor', cur) : exec('hiliteColor', cur);
-    return <span className="rd-split" title={t(label)}>
+    return <span className="rd-split" aria-label={t(label)} data-cmd={label}>
       <button className={'rd-split-main' + (color === 'fore' ? ' ic-red' : ' ic-amber')} onMouseDown={(e) => { e.preventDefault(); apply(); }}><Ico size={15} /><span className="rd-underbar" style={{ background: cur }} /></button>
       <button className="rd-split-caret" onMouseDown={(e) => { e.preventDefault(); openPop(label, e.currentTarget); }}>▾</button>
     </span>;
@@ -1090,7 +1247,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
       else if (label === '段前间距') styleBlocks((el) => { el.style.marginTop = Math.max(0, parseFloat(el.style.marginTop || '0') + d * 6) + 'pt'; });
       else styleBlocks((el) => { el.style.marginBottom = Math.max(0, parseFloat(el.style.marginBottom || '0') + d * 6) + 'pt'; });
     };
-    return <span className="rd-num" title={t(label)}><span className="rd-num-ic"><Ico size={13} /></span><span className="rd-num-lb">{t(label)}</span><button onMouseDown={(e) => { e.preventDefault(); step(-1); }}>−</button><button onMouseDown={(e) => { e.preventDefault(); step(1); }}>＋</button></span>;
+    return <span className="rd-num" aria-label={t(label)} data-cmd={label}><span className="rd-num-ic"><Ico size={13} /></span><span className="rd-num-lb">{t(label)}</span><button onMouseDown={(e) => { e.preventDefault(); step(-1); }}>−</button><button onMouseDown={(e) => { e.preventDefault(); step(1); }}>＋</button></span>;
   };
 
   type Cell =
@@ -1108,8 +1265,8 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
       { name: '剪贴板', cells: [{ k: 'big', label: '粘贴', icon: IconClipboard }, { k: 'row', items: [{ label: '剪切', icon: IconScissors }, { label: '复制', icon: IconCopy }, { label: '格式刷', icon: IconFormatBrush }] }] },
       { name: '字体', cells: [
         { k: 'combo', label: '字体', cls: 'font' }, { k: 'combo', label: '字号', cls: 'size' },
-        { k: 'row', items: [{ label: '增大字号', icon: IconFontGrow }, { label: '减小字号', icon: IconFontShrink }, { label: '更改大小写', icon: IconTextFunc }, { label: '清除格式', icon: IconClearFormat }] },
-        { k: 'row', items: [{ label: '加粗' }, { label: '斜体' }, { label: '下划线' }, { label: '删除线', icon: IconStrikethrough }, { label: '下标', icon: IconSubscript }, { label: '上标', icon: IconSuperscript }, { label: '文本效果', icon: IconWordArt }, { label: '拼音指南', icon: IconPhonetic }, { label: '带圈字符', icon: IconMath }] },
+        { k: 'row', items: [{ label: '增大字号', icon: IconFontGrow }, { label: '减小字号', icon: IconFontShrink }, { label: '更改大小写', icon: IconChangeCase }, { label: '清除格式', icon: IconClearFormat }] },
+        { k: 'row', items: [{ label: '加粗' }, { label: '斜体' }, { label: '下划线' }, { label: '删除线', icon: IconStrikethrough }, { label: '下标', icon: IconSubscript }, { label: '上标', icon: IconSuperscript }, { label: '文本效果', icon: IconTextEffect }, { label: '拼音指南', icon: IconPhonetic }, { label: '带圈字符', icon: IconEncloseChar }] },
         { k: 'split', label: '字体颜色', icon: IconFontColor, color: 'fore' }, { k: 'split', label: '突出显示', icon: IconHighlighter, color: 'hi' },
       ] },
       { name: '段落', cells: [
@@ -1117,15 +1274,15 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
         { k: 'row', items: [{ label: '左对齐', icon: IconAlignLeft }, { label: '居中', icon: IconAlignCenter }, { label: '右对齐', icon: IconAlignRight }, { label: '两端对齐', icon: IconAlignJustify }, { label: '行距', icon: IconLineSpacing }, { label: '底纹', icon: IconShadingRb }, { label: '边框', icon: IconBorders }] },
       ] },
       { name: '样式', cells: [{ k: 'styles' }] },
-      { name: '编辑', cells: [{ k: 'row', items: [{ label: '查找', icon: IconSearch }, { label: '替换', icon: IconSearch }, { label: '选择', icon: IconSelect }] }] },
+      { name: '编辑', cells: [{ k: 'row', items: [{ label: '查找', icon: IconSearch }, { label: '替换', icon: IconReplace }, { label: '选择', icon: IconSelect }] }] },
     ] },
     { name: '插入', groups: [
       { name: '页面', cells: [{ k: 'big', label: '封面', icon: IconCoverPageRb }, { k: 'row', items: [{ label: '空白页', icon: IconBlankPageRb }, { label: '分页', icon: IconPageBreakRb }] }] },
       { name: '表格', cells: [{ k: 'big', label: '表格', icon: IconTable }] },
       { name: '插图', cells: [{ k: 'row', items: [{ label: '图片', icon: IconImage }, { label: '形状', icon: IconShapes }, { label: '图标', icon: IconStar }, { label: 'SmartArt', icon: IconSmartArt }, { label: '图表', icon: IconBarChart }, { label: '屏幕截图', icon: IconScreenshot }] }] },
-      { name: '加载项', cells: [{ k: 'row', items: [{ label: '获取加载项', icon: IconObject }, { label: '我的加载项', icon: IconVariantsRb }, { label: '维基百科', icon: IconHelp }] }] },
+      { name: '加载项', cells: [{ k: 'row', items: [{ label: '获取加载项', icon: IconAddin }, { label: '我的加载项', icon: IconVariantsRb }, { label: '维基百科', icon: IconHelp }] }] },
       { name: '链接', cells: [{ k: 'row', items: [{ label: '链接', icon: IconLink }, { label: '书签', icon: IconBookmark }, { label: '交叉引用', icon: IconCrossRef }] }] },
-      { name: '页眉页脚', cells: [{ k: 'row', items: [{ label: '页眉', icon: IconHeaderFooter }, { label: '页脚', icon: IconHeaderFooter }, { label: '页码', icon: IconNumberingRb }] }] },
+      { name: '页眉页脚', cells: [{ k: 'row', items: [{ label: '页眉', icon: IconHeader }, { label: '页脚', icon: IconFooter }, { label: '页码', icon: IconPageNumber }] }] },
       { name: '文本', cells: [{ k: 'row', items: [{ label: '文本框', icon: IconTextBox }, { label: '文档部件', icon: IconDocPartsRb }, { label: '艺术字', icon: IconWordArt }, { label: '首字下沉', icon: IconDropCapRb }, { label: '签名行', icon: IconSignatureLineRb }, { label: '日期和时间', icon: IconDateTime }, { label: '对象', icon: IconObject }] }] },
       { name: '符号', cells: [{ k: 'row', items: [{ label: '公式', icon: IconRoot }, { label: '符号', icon: IconOmega }, { label: '水平线', icon: IconHorizontalRule }] }] },
     ] },
@@ -1148,8 +1305,8 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
     ] },
     { name: '审阅', groups: [
       { name: '校对', cells: [{ k: 'big', label: '字数统计', icon: IconWordCountRb }, { k: 'row', items: [{ label: '拼写和语法', icon: IconSpellingRb }] }] },
-      { name: '语言', cells: [{ k: 'row', items: [{ label: '翻译', icon: IconFromWebRb }, { label: '语言', icon: IconChineseLayoutRb }] }] },
-      { name: '批注', cells: [{ k: 'row', items: [{ label: '新建批注', icon: IconComment }, { label: '删除', icon: IconEraser }, { label: '上一条', icon: IconPreviousRb }, { label: '下一条', icon: IconNextItemRb }, { label: '显示批注', icon: IconShowNotesRb }] }] },
+      { name: '语言', cells: [{ k: 'row', items: [{ label: '翻译', icon: IconTranslate }, { label: '语言', icon: IconLanguage }] }] },
+      { name: '批注', cells: [{ k: 'row', items: [{ label: '新建批注', icon: IconComment }, { label: '删除', icon: IconEraser }, { label: '上一条', icon: IconPreviousRb }, { label: '下一条', icon: IconNextItemRb }, { label: '显示批注', icon: IconShowComments }] }] },
       { name: '修订', cells: [{ k: 'big', label: '修订', icon: IconTrackChangesRb }, { k: 'row', items: [{ label: '显示标记', icon: IconShowMarkupRb }, { label: '接受', icon: IconAcceptRb }, { label: '拒绝', icon: IconRejectRb }] }] },
     ] },
     { name: '视图', groups: [
@@ -1165,7 +1322,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
       case 'combo': return <Combo key={i} label={cell.label} cls={cell.cls} />;
       case 'split': return <SplitColor key={i} label={cell.label} icon={cell.icon} color={cell.color} />;
       case 'spin': return <Spin key={i} label={cell.label} icon={cell.icon} />;
-      case 'styles': return <div className="rstyles" key={i}>{STYLE_CELLS.map(([name, kind, sample]) => <button key={name} className={'rstyle ' + kind} title={t(name)} onMouseDown={(e) => { e.preventDefault(); applyStyle(name); }}>{t(sample)}</button>)}</div>;
+      case 'styles': return <div className="rstyles" key={i}>{STYLE_CELLS.map(([name, kind, sample]) => <button key={name} className={'rstyle ' + kind} aria-label={t(name)} data-cmd={name} onMouseDown={(e) => { e.preventDefault(); applyStyle(name); }}>{t(sample)}</button>)}</div>;
       case 'row': return <div className="rsmall-grid" key={i}>{cell.items.map((it) => <Small key={it.label} label={it.label} icon={it.icon} accent={it.accent} />)}</div>;
       default: return null;
     }
@@ -1179,12 +1336,12 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
     <div className={wrapCls}>
       <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPickImg} />
       <input ref={objRef} type="file" hidden onChange={onPickObj} />
-      <div className="ribbon rd-ribbon">
+      <div className="ribbon rd-ribbon" onMouseOver={onRibbonOver} onMouseOut={onRibbonOut} onMouseDownCapture={() => { if (tipTimer.current) window.clearTimeout(tipTimer.current); setTip(null); }}>
         <div className="ribbon-tabs">
           {TABS.map((tb, i) => <button key={tb.name} className={'rtab' + (i === tab ? ' on' : '')} onClick={() => { setTab(i); localStorage.setItem(TAB_KEY, String(i)); }}>{t(tb.name)}</button>)}
           <span className="rd-tabs-grow" />
-          <button className="rd-chip" title={t('字数统计')} onMouseDown={(e) => { e.preventDefault(); openWordCount(); }}><IconWordCountRb size={13} />{t('字数')} {(edRef.current?.innerText.replace(/\s/g, '').length ?? 0)}</button>
-          <button className="rd-chip" title={t('缩放')} onMouseDown={(e) => { e.preventDefault(); openPop('缩放', e.currentTarget); }}>{zoomPct}%</button>
+          <button className="rd-chip" aria-label={t('字数统计')} data-cmd="字数统计" onMouseDown={(e) => { e.preventDefault(); openWordCount(); }}><IconWordCountRb size={13} />{t('字数')} {(edRef.current?.innerText.replace(/\s/g, '').length ?? 0)}</button>
+          <button className="rd-chip" aria-label={t('缩放')} data-cmd="缩放" onMouseDown={(e) => { e.preventDefault(); openPop('缩放', e.currentTarget); }}>{zoomPct}%</button>
         </div>
         <div className="ribbon-bar">
           {active.groups.map((g) => (
@@ -1231,6 +1388,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc(_props,
         </>
       ) : null}
 
+      {tip ? <div className="rd-tip" style={{ left: tip.x, top: tip.y }}>{tip.text}</div> : null}
       {toast ? <div className="rd-toast">{toast}</div> : null}
     </div>
   );

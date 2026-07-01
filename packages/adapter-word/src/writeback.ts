@@ -1,8 +1,9 @@
 /**
- * WordRedlineWriteback —— Word 红线写回后端(外科 OOXML)。
- * ChangeSet 的 replaceText 编辑(flow 锚点的 quote.text = 原文,op.text = 改后)→ 段落级红线
- * (w:ins/w:del)→ 只重写 word/document.xml,其余部件字节级原样透传。
- * 这样 Agent 的正文改动落成 Word 原生可审阅修订,且保真(复用 writeback-surgical 的 repack)。
+ * WordRedlineWriteback —— Word 外科手术级 OOXML 写回后端。
+ * flow 锚点的 quote.text 定位原文,按 op 落成 Word 原生可审阅修订,只重写 word/document.xml,其余部件字节级透传:
+ *  · replaceText → run 级词级红线 <w:ins>/<w:del>(保留未触及 run);
+ *  · setStyle    → 字符格式 <w:rPr>+<w:rPrChange>、段落格式 <w:pPr>+<w:pPrChange>(可逐条接受/拒绝的格式修订)。
+ * 保真复用 writeback-surgical 的 repack;这就是 OtterPatch 的护城河所在。
  */
 import type {
   ChangeSet,
@@ -16,11 +17,13 @@ import type {
   WritebackResult,
 } from '@otterpatch/core';
 import { comparePartsIntegrity, readOoxmlParts, repackOoxml } from '@otterpatch/writeback-surgical';
-import { redlineDocumentXml, type ParaEdit } from './document.js';
+import { redlineDocumentXml, type DocEdit } from './document.js';
+import type { CharProps, ParaProps } from './style.js';
 
 const dec = new TextDecoder();
 const enc = new TextEncoder();
-const SUPPORTED: ReadonlySet<EditOpKind> = new Set<EditOpKind>(['replaceText']);
+// replaceText → 词级红线;setStyle → 字符(rPr/rPrChange)+ 段落(pPr/pPrChange)格式修订
+const SUPPORTED: ReadonlySet<EditOpKind> = new Set<EditOpKind>(['replaceText', 'setStyle']);
 const DOC_PART = 'word/document.xml';
 
 export interface WordRedlineOptions {
@@ -36,7 +39,7 @@ export class WordRedlineWriteback implements WritebackBackend {
 
   canHandle(cs: ChangeSet): { ok: boolean; reason?: string } {
     const bad = cs.edits.find((e) => !SUPPORTED.has(e.op.kind));
-    if (bad) return { ok: false, reason: `word-redline supports replaceText only (got ${bad.op.kind})` };
+    if (bad) return { ok: false, reason: `word-redline supports replaceText / setStyle (got ${bad.op.kind})` };
     return { ok: true };
   }
 
@@ -50,12 +53,31 @@ export class WordRedlineWriteback implements WritebackBackend {
     const docXml = parts[DOC_PART];
     if (!docXml) throw new Error(`WordRedlineWriteback: ${DOC_PART} not found`);
 
-    const edits: ParaEdit[] = [];
+    const edits: DocEdit[] = [];
     for (const e of cs.edits) {
-      if (e.op.kind !== 'replaceText') continue;
       const anchor = cs.anchors[e.target];
-      const old = anchor && anchor.portable.kind === 'flow' ? anchor.portable.quote.text : '';
-      if (old) edits.push({ old, new: e.op.text });
+      const quote = anchor && anchor.portable.kind === 'flow' ? anchor.portable.quote.text : '';
+      if (e.op.kind === 'replaceText') {
+        if (quote) edits.push({ old: quote, new: e.op.text });
+      } else if (e.op.kind === 'setStyle') {
+        if (!quote) continue; // 全文(all=true)空锚点:外科写回暂不处理
+        const st = e.op.style;
+        const char: CharProps = {};
+        if (st.bold != null) char.bold = st.bold;
+        if (st.italic != null) char.italic = st.italic;
+        if (st.underline != null) char.underline = st.underline;
+        if (st.font != null) char.font = st.font;
+        if (st.size != null) char.size = st.size;
+        if (st.color != null) char.color = st.color;
+        const para: ParaProps = {};
+        if (st.align != null) para.align = st.align;
+        if (st.lineSpacing != null) para.lineSpacing = st.lineSpacing;
+        if (st.block != null) para.block = st.block;
+        if (st.bgColor != null) para.bgColor = st.bgColor;
+        const hasChar = Object.keys(char).length > 0;
+        const hasPara = Object.keys(para).length > 0;
+        if (hasChar || hasPara) edits.push({ kind: 'fmt', quote, ...(hasChar ? { char } : {}), ...(hasPara ? { para } : {}) });
+      }
     }
 
     const opts: ParaEditOpts = {};

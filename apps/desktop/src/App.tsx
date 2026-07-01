@@ -10,7 +10,7 @@ import {
 import { LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
-import type { RichDocHandle, DocFmt } from './RichDoc.js';
+import type { RichDocHandle, DocFmt, WordSel } from './RichDoc.js';
 import { Markdown } from './Markdown.js';
 import { chartToPngDataUrl, gridToChartSpec, buildChartGrid, specFromInline } from './chart.js';
 
@@ -31,8 +31,8 @@ type Turn =
 /** drawio 改动落到画板的句柄:editId→画板对象 id 映射 + 可重放的节点/连线(供逐条接受/拒绝)。 */
 interface BoardPatch { byEdit: Record<string, string>; objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> }
 
-/** Word 一条改动:文本改写(replacement)或格式改动(style);还原信息由编辑器按 editId 内部保存。 */
-interface WordEdit { editId: string; quote: string; replacement?: string; style?: DocFmt }
+/** Word 一条改动:文本改写(replacement)或格式改动(style)。domId 为跨回合唯一的 DOM 标记(避免 editId 撞名误还原)。 */
+interface WordEdit { editId: string; domId: string; quote: string; replacement?: string; style?: DocFmt }
 
 /**
  * 把对话流投影成模型历史(Pi 的 projection 模式:thread 是单一数据源)。
@@ -552,6 +552,7 @@ export function App() {
   const [apiKey, setApiKey] = useState(() => lsGet('oa.apiKey', ''));
   const [server, setServer] = useState(() => lsGet('oa.server', 'http://localhost:4319'));
   const [uniSel, setUniSel] = useState<UniSel | null>(null);
+  const [wordSel, setWordSel] = useState<WordSel | null>(null);
   const [boardSel, setBoardSel] = useState<BoardSel | null>(null);
   const univerRef = useRef<SheetHandle>(null);
   const boardRef = useRef<BoardHandle>(null);
@@ -756,7 +757,11 @@ export function App() {
     if (intentOverride && intentOverride !== intent) setIntent(intentOverride);
     // Excel:永远主动拉整张表(概览+数据+焦点),与是否圈选无关 —— 没圈选也能看全局、也有 read_range/aggregate 工具
     const sheetSnap = isExcel ? (univerRef.current?.getSheet() ?? uniSel) : null;
-    const ctx = isExcel ? (sheetSnap?.text ?? '(表格为空)') : fmt === 'drawio' && boardSel ? boardSel.context : fmt === 'word' ? `Word 文档全文(按整篇理解;改写给 quote 必须是其中真实存在的原文片段):\n${wordRef.current?.getText() ?? '(空文档)'}` : selectionContext();
+    const selDesc = wordSel ? `${wordSel.block}${wordSel.font ? ' · ' + wordSel.font : ''}${wordSel.size ? ' ' + wordSel.size + 'pt' : ''}${wordSel.bold ? ' 加粗' : ''}${wordSel.italic ? ' 斜体' : ''}${wordSel.align && wordSel.align !== '左对齐' ? ' ' + wordSel.align : ''}` : '';
+    const ctx = isExcel ? (sheetSnap?.text ?? '(表格为空)') : fmt === 'drawio' && boardSel ? boardSel.context : fmt === 'word'
+      ? `${wordRef.current?.getContext() ?? '(空文档)'}\n(改写正文:给 quote=文档中真实存在的原文片段 + replacement;改格式:给 quote + setStyle 字段,别给 replacement。)`
+        + (wordSel ? `\n[当前选区·用户此刻圈选了这段(${selDesc})]:"${wordSel.text}"\n若指令含"这段/这句/这里/选中的/选中/它",优先针对它;quote 用这段真实原文定位。` : '\n[未圈选文字]:请基于整篇文档理解。')
+      : selectionContext();
     setSendErr(null);
     const ep = server.trim().replace(/\/$/, '');
     if (ep && apiKey) {
@@ -844,14 +849,15 @@ export function App() {
                   const wordEdits: WordEdit[] = diff.items.map((it) => {
                     const rec = byId.get(it.editId);
                     const quote = rec?.quote ?? it.ref;
-                    if (rec?.op?.kind === 'setStyle') return { editId: it.editId, quote, style: rec.op.style ?? {} };
-                    return { editId: it.editId, quote, replacement: rec?.op?.text ?? (it.after ?? '') };
+                    const domId = `${diff.changeSetId}::${it.editId}`; // 跨回合唯一,避免 e0/e1 撞名误还原
+                    if (rec?.op?.kind === 'setStyle') return { editId: it.editId, domId, quote, style: rec.op.style ?? {} };
+                    return { editId: it.editId, domId, quote, replacement: rec?.op?.text ?? (it.after ?? '') };
                   });
-                  // 乐观落入文档(与 Excel playOps 一致);编辑器按 editId 包裹,拒绝可精确还原
-                  for (const w of wordEdits) wordRef.current?.applyEdit(w.editId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' });
+                  // 乐观落入文档(与 Excel playOps 一致);编辑器按 domId 包裹,拒绝可精确还原
+                  for (const w of wordEdits) wordRef.current?.applyEdit(w.domId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' });
                   setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], word: wordEdits, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                   setReviewIdx(0);
-                  if (wordEdits[0]) wordRef.current?.highlight(wordEdits[0].editId); // 审阅期定位第一条
+                  if (wordEdits[0]) wordRef.current?.highlight(wordEdits[0].domId); // 审阅期定位第一条
                 } else {
                   applyExcelStructure(cs); // 结构性操作(插删行列/合并/冻结/清空)先落,改变网格布局
                   const ops = diffToOps(diff);
@@ -920,7 +926,7 @@ export function App() {
     if (turn.board) {
       boardRef.current?.removeObjects(Object.values(turn.board.byEdit)); // drawio:从画板移除该回合对象
     } else if (turn.word) {
-      for (const w of turn.word) if (accepted.has(w.editId)) wordRef.current?.revert(w.editId); // 按 editId 精确还原每条
+      for (const w of turn.word) if (accepted.has(w.editId)) wordRef.current?.revert(w.domId); // 按 domId 精确还原每条
     } else {
       const api = univerRef.current;
       if (api) {
@@ -1144,14 +1150,14 @@ export function App() {
     if (!item) return;
     if (isExcel) univerRef.current?.focus(item.ref.replace(/^.*!/, ''));
     else if (fmt === 'drawio') { const id = turn.board?.byEdit[item.editId]; if (id) boardRef.current?.highlight(id); }
-    else if (fmt === 'word') wordRef.current?.highlight(item.editId); // 定位当前条
+    else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === item.editId); if (w) wordRef.current?.highlight(w.domId); } // 定位当前条
   };
   const acceptItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number): void => {
     const it = turn.diff.items[idx]; if (!it) return;
     if (!accepted.has(it.editId)) { // 之前被拒 → 重新落回工作区
       if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
       else if (fmt === 'drawio') { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
-      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.editId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' }); }
+      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.domId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' }); }
       toggleAccept(it.editId, true);
     }
     setReviewIdx(idx + 1);
@@ -1160,7 +1166,7 @@ export function App() {
     const it = turn.diff.items[idx]; if (!it) return;
     if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) revertGridOp(op); }
     else if (fmt === 'drawio') { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); }
-    else if (fmt === 'word' && accepted.has(it.editId)) wordRef.current?.revert(it.editId); // 之前已应用 → 精确还原该条
+    else if (fmt === 'word' && accepted.has(it.editId)) { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.revert(w.domId); } // 之前已应用 → 精确还原该条
     toggleAccept(it.editId, false);
     setReviewIdx(idx + 1);
   };
@@ -1169,7 +1175,7 @@ export function App() {
       if (accepted.has(it.editId)) continue;
       if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
       else if (fmt === 'drawio') { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
-      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.editId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' }); }
+      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.domId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' }); }
     }
     const all = turn.diff.items.map((x) => x.editId);
     setAccepted(new Set(all));
@@ -1410,7 +1416,7 @@ export function App() {
                 <DrawioBoard ref={boardRef} onBoardSel={setBoardSel} />
               ) : fmt === 'word' ? (
                 <Suspense fallback={<div className="univer-loading">{t('加载文档编辑器…')}</div>}>
-                  <RichDoc ref={wordRef} />
+                  <RichDoc ref={wordRef} onSelection={setWordSel} />
                 </Suspense>
               ) : (
                 <div className="doc-page">
@@ -1427,9 +1433,9 @@ export function App() {
           <aside className="rail">
             <div className="selbar">
               <span className="dot" />
-              {t('选区')} <span className="ref">{isExcel ? (uniSel?.a1 ?? '—') : '—'}</span>
+              {t('选区')} <span className="ref">{isExcel ? (uniSel?.a1 ?? '—') : fmt === 'word' ? (wordSel ? t('已选') : '—') : '—'}</span>
               <span className="grow" />
-              <span>{isExcel ? (uniSel ? `${uniSel.rows} × ${uniSel.cols} ${t('单元格')}` : '—') : fmt === 'drawio' && boardSel ? `${boardSel.count} ${t('个对象')}` : fmt === 'word' ? t('文档工作区') : `${t(curFmt.label)} ${t('工作区')}`}</span>
+              <span>{isExcel ? (uniSel ? `${uniSel.rows} × ${uniSel.cols} ${t('单元格')}` : '—') : fmt === 'drawio' && boardSel ? `${boardSel.count} ${t('个对象')}` : fmt === 'word' ? (wordSel ? `${wordSel.chars} ${t('字')} · ${t(wordSel.block)}` : t('文档工作区')) : `${t(curFmt.label)} ${t('工作区')}`}</span>
             </div>
 
             <div className="rail-body">
@@ -1674,6 +1680,14 @@ export function App() {
                     )
                   ) : fmt === 'drawio' && boardSel ? (
                     <>{boardSel.chip}</>
+                  ) : fmt === 'word' ? (
+                    wordSel ? (
+                      <>
+                        {t('已选')} <b>{wordSel.chars} {t('字')}</b> · <span className="sel-quote">{wordSel.text}</span>
+                      </>
+                    ) : (
+                      <span className="muted">{t('未选文字 · 将基于整篇文档理解')}</span>
+                    )
                   ) : (
                     <>
                       {t('当前')} <b>{t(curFmt.label)}</b> {t('工作区')}

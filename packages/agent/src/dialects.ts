@@ -318,6 +318,11 @@ export interface WordProposal {
     font?: string;
     size?: number;
     color?: string;
+    // 段落级格式(作用于 quote 所在整段)
+    align?: 'left' | 'center' | 'right' | 'justify';
+    lineSpacing?: number; // 行距倍数 1 / 1.5 / 2
+    bgColor?: string; // 段落底纹色
+    block?: 'h1' | 'h2' | 'h3' | 'p' | 'blockquote'; // 段落样式:标题1-3 / 正文 / 引用
   }>;
 }
 
@@ -335,7 +340,7 @@ function buildWordChangeSet(req: ProposeRequest, p: WordProposal): ChangeSet {
       baseRev: req.baseRev,
       portable: { kind: 'flow', path: [i], quote: { prefix: '', text: quoteText, suffix: '' }, bias: 'left' },
     };
-    const isFormat = e.replacement == null && (e.bold != null || e.italic != null || e.underline != null || e.font != null || e.size != null || e.color != null);
+    const isFormat = e.replacement == null && (e.bold != null || e.italic != null || e.underline != null || e.font != null || e.size != null || e.color != null || e.align != null || e.lineSpacing != null || e.bgColor != null || e.block != null);
     const op: EditOp = isFormat
       ? {
           family: 'style',
@@ -347,6 +352,10 @@ function buildWordChangeSet(req: ProposeRequest, p: WordProposal): ChangeSet {
             ...(e.font != null ? { font: e.font } : {}),
             ...(e.size != null ? { size: e.size } : {}),
             ...(e.color != null ? { color: e.color } : {}),
+            ...(e.align != null ? { align: e.align } : {}),
+            ...(e.lineSpacing != null ? { lineSpacing: e.lineSpacing } : {}),
+            ...(e.bgColor != null ? { bgColor: e.bgColor } : {}),
+            ...(e.block != null ? { block: e.block } : {}),
           },
         }
       : { family: 'text', kind: 'replaceText', text: e.replacement ?? '' };
@@ -378,6 +387,10 @@ export const wordDialect: HostDialect = {
             font: { type: 'string', description: '字体名,如 宋体 / 黑体 / Arial' },
             size: { type: 'number', description: '字号(磅);如 五号≈10.5、小四≈12、四号≈14、三号≈16' },
             color: { type: 'string', description: '字体颜色,如 #c00000' },
+            align: { type: 'string', enum: ['left', 'center', 'right', 'justify'], description: '段落对齐(作用于 quote 所在整段):左/居中/右/两端对齐' },
+            lineSpacing: { type: 'number', description: '行距倍数(作用于整段),如 1 / 1.5 / 2' },
+            bgColor: { type: 'string', description: '段落底纹色,如 #fff3cd' },
+            block: { type: 'string', enum: ['h1', 'h2', 'h3', 'p', 'blockquote'], description: '段落样式:h1/h2/h3=标题1/2/3、p=正文、blockquote=引用(如"把这行设为标题2""这段改成引用")' },
           },
           required: ['quote'],
         },

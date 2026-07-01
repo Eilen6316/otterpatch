@@ -823,6 +823,52 @@ export const IconIndentLeftRb = (p: P) => (
   <Svg size={p.size}><line x1="4" y1="5.5" x2="20" y2="5.5"/><line x1="9.5" y1="10" x2="20" y2="10"/><line x1="9.5" y1="14" x2="20" y2="14"/><line x1="4" y1="18.5" x2="20" y2="18.5"/><polyline points="3.5 9.5 6.5 12 3.5 14.5"/></Svg>
 );
 
+// ── Word 功能区专用:去重 + 更贴合 Office 语义的图标(2026 补) ──
+/** 更改大小写:Aa。 */
+export const IconChangeCase = (p: P) => (
+  <Svg size={p.size}><text x="12" y="16.5" textAnchor="middle" fontSize="13" fontWeight="600" fontFamily="Georgia, serif" fill="currentColor" stroke="none">Aa</text></Svg>
+);
+/** 文本效果:A + 星芒。 */
+export const IconTextEffect = (p: P) => (
+  <Svg size={p.size}><text x="3.5" y="19" fontSize="16" fontWeight="700" fill="currentColor" stroke="none">A</text><path d="M17.2 3.5l1.1 2.5 2.5 1.1-2.5 1.1-1.1 2.5-1.1-2.5-2.5-1.1 2.5-1.1z" fill="currentColor" stroke="none"/></Svg>
+);
+/** 带圈字符:圆圈内一个"字"。 */
+export const IconEncloseChar = (p: P) => (
+  <Svg size={p.size}><circle cx="12" cy="12" r="8.4"/><text x="12" y="15.6" textAnchor="middle" fontSize="9.5" fill="currentColor" stroke="none">字</text></Svg>
+);
+/** 替换:两行文字 + 反向箭头(交换)。 */
+export const IconReplace = (p: P) => (
+  <Svg size={p.size}><path d="M5 8h8"/><path d="M11 6l2.4 2-2.4 2"/><path d="M19 15.5H11"/><path d="M13 13.5l-2.4 2 2.4 2"/></Svg>
+);
+/** 页眉:纸张 + 顶部粗条。 */
+export const IconHeader = (p: P) => (
+  <Svg size={p.size}><rect x="5" y="3.5" width="14" height="17" rx="1.6"/><path d="M8 7.5h8" strokeWidth={2.4}/><path d="M8 12h8M8 15h6" opacity={0.5}/></Svg>
+);
+/** 页脚:纸张 + 底部粗条。 */
+export const IconFooter = (p: P) => (
+  <Svg size={p.size}><rect x="5" y="3.5" width="14" height="17" rx="1.6"/><path d="M8 16.5h8" strokeWidth={2.4}/><path d="M8 9h8M8 12h6" opacity={0.5}/></Svg>
+);
+/** 页码:纸张 + #。 */
+export const IconPageNumber = (p: P) => (
+  <Svg size={p.size}><rect x="5" y="3.5" width="14" height="17" rx="1.6"/><text x="12" y="15.2" textAnchor="middle" fontSize="9" fontWeight="700" fill="currentColor" stroke="none">#</text></Svg>
+);
+/** 加载项:购物袋(获取加载项)。 */
+export const IconAddin = (p: P) => (
+  <Svg size={p.size}><path d="M5.5 8h13l-1 11.5H6.5z"/><path d="M9 8V6.2a3 3 0 0 1 6 0V8"/></Svg>
+);
+/** 翻译:文 → A。 */
+export const IconTranslate = (p: P) => (
+  <Svg size={p.size}><text x="2.5" y="11" fontSize="9" fill="currentColor" stroke="none">文</text><text x="13.5" y="21" fontSize="9.5" fontWeight="600" fill="currentColor" stroke="none">A</text><path d="M12 6.2h7"/><path d="M16.5 4.2l2.6 2-2.6 2"/></Svg>
+);
+/** 语言:地球。 */
+export const IconLanguage = (p: P) => (
+  <Svg size={p.size}><circle cx="12" cy="12" r="8.2"/><path d="M3.8 12h16.4"/><path d="M12 3.8c2.3 2 3.4 5 3.4 8.2s-1.1 6.2-3.4 8.2c-2.3-2-3.4-5-3.4-8.2S9.7 5.8 12 3.8z"/></Svg>
+);
+/** 显示批注:气泡 + 眼睛。 */
+export const IconShowComments = (p: P) => (
+  <Svg size={p.size}><path d="M4 4.5h16v9.5H9.5L5.5 18v-4H4z"/><path d="M8.4 9.3c1.3-1.7 5.9-1.7 7.2 0-1.3 1.7-5.9 1.7-7.2 0z"/><circle cx="12" cy="9.3" r="1.1" fill="currentColor" stroke="none"/></Svg>
+);
+
 export const FUNC_ICONS: Record<string, (p: { size?: number }) => ReactNode> = {
   '粘贴': IconClipboard,
   '剪切': IconScissors,
