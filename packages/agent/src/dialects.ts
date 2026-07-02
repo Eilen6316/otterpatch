@@ -323,6 +323,10 @@ export interface WordProposal {
     lineSpacing?: number; // 行距倍数 1 / 1.5 / 2
     bgColor?: string; // 段落底纹色
     block?: 'h1' | 'h2' | 'h3' | 'p' | 'blockquote'; // 段落样式:标题1-3 / 正文 / 引用
+    // 页面级(须 all=true):分栏 / 页边距 / 纸张方向 —— IEEE 双栏等版式的关键参数
+    columns?: number;
+    margin?: 'narrow' | 'normal' | 'moderate' | 'wide';
+    orient?: 'portrait' | 'landscape';
   }>;
 }
 
@@ -340,7 +344,7 @@ function buildWordChangeSet(req: ProposeRequest, p: WordProposal): ChangeSet {
       baseRev: req.baseRev,
       portable: { kind: 'flow', path: [i], quote: { prefix: '', text: quoteText, suffix: '' }, bias: 'left' },
     };
-    const isFormat = e.replacement == null && (e.bold != null || e.italic != null || e.underline != null || e.font != null || e.size != null || e.color != null || e.align != null || e.lineSpacing != null || e.bgColor != null || e.block != null);
+    const isFormat = e.replacement == null && (e.bold != null || e.italic != null || e.underline != null || e.font != null || e.size != null || e.color != null || e.align != null || e.lineSpacing != null || e.bgColor != null || e.block != null || e.columns != null || e.margin != null || e.orient != null);
     const op: EditOp = isFormat
       ? {
           family: 'style',
@@ -356,6 +360,9 @@ function buildWordChangeSet(req: ProposeRequest, p: WordProposal): ChangeSet {
             ...(e.lineSpacing != null ? { lineSpacing: e.lineSpacing } : {}),
             ...(e.bgColor != null ? { bgColor: e.bgColor } : {}),
             ...(e.block != null ? { block: e.block } : {}),
+            ...(e.columns != null ? { columns: e.columns } : {}),
+            ...(e.margin != null ? { margin: e.margin } : {}),
+            ...(e.orient != null ? { orient: e.orient } : {}),
           },
         }
       : { family: 'text', kind: 'replaceText', text: e.replacement ?? '' };
@@ -391,6 +398,9 @@ export const wordDialect: HostDialect = {
             lineSpacing: { type: 'number', description: '行距倍数(作用于整段),如 1 / 1.5 / 2' },
             bgColor: { type: 'string', description: '段落底纹色,如 #fff3cd' },
             block: { type: 'string', enum: ['h1', 'h2', 'h3', 'p', 'blockquote'], description: '段落样式:h1/h2/h3=标题1/2/3、p=正文、blockquote=引用(如"把这行设为标题2""这段改成引用")' },
+            columns: { type: 'number', enum: [1, 2, 3], description: '【页面级,须 all=true】分栏数:2=双栏(IEEE/论文版式)、1=恢复单栏' },
+            margin: { type: 'string', enum: ['narrow', 'normal', 'moderate', 'wide'], description: '【页面级,须 all=true】页边距预设:narrow 窄 / normal 常规 / moderate 适中 / wide 宽' },
+            orient: { type: 'string', enum: ['portrait', 'landscape'], description: '【页面级,须 all=true】纸张方向:portrait 纵向 / landscape 横向' },
           },
           required: ['quote'],
         },

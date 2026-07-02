@@ -4,6 +4,7 @@
  */
 export * from './agent-loop.js';
 export * from './sheet.js';
+export * from './doc.js';
 export * from './excel.js';
 export * from './drawio.js';
 export * from './word.js';

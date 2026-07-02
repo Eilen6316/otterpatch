@@ -6,14 +6,20 @@
 import type { ClarifyOption, ClarifyQuestion, HostDialect, ProposeRequest } from './model.js';
 import { safeParse } from './json-salvage.js';
 import { ROUTING_PREAMBLE, TOO_MANY_STEPS_MSG, ANSWER_USER_DESC, ASK_USER_DESC, READ_RANGE_DESC, AGGREGATE_DESC } from './prompts/index.js';
+import { DOC_TOOL_DEFS, execDocTool, type DocSnapshot } from './doc-tools.js';
 
 /** 多步 loop 的步数上限(含一轮影子校验修复)。提示词均在 ./prompts(按场景分文件)。 */
 export const STEP_LIMIT = 8;
 export { ROUTING_PREAMBLE, TOO_MANY_STEPS_MSG };
 
-/** respond 多步 loop 的系统提示(路由前导 + 方言 + 当前表格/选区上下文)。 */
+/** respond 系统提示拆两段:stable(路由前导+方言+技能,跨轮不变→可挂 prompt cache)与 volatile(当前文档/选区快照,每轮都变)。 */
+export function respondSystemParts(dialect: HostDialect, req: ProposeRequest): { stable: string; volatile: string } {
+  return { stable: ROUTING_PREAMBLE + '\n\n' + dialect.systemPrompt, volatile: '当前文档/选区上下文:\n' + req.context };
+}
+/** respond 多步 loop 的系统提示(拼接版,OpenAI 兼容通道用)。 */
 export function respondSystem(dialect: HostDialect, req: ProposeRequest): string {
-  return ROUTING_PREAMBLE + '\n\n' + dialect.systemPrompt + '\n\n当前文档/选区上下文:\n' + req.context;
+  const p = respondSystemParts(dialect, req);
+  return p.stable + '\n\n' + p.volatile;
 }
 
 /** 取最近多轮历史(防上下文过长)。 */
@@ -91,10 +97,17 @@ export const AGGREGATE_DEF: ToolDef = {
 };
 export interface AggWhere { col: string; op: '=' | '!=' | '>' | '<' | 'contains'; value: string | number }
 
-/** 辅助工具菜单:answer_user / ask_user 总在;有整表快照时再加 read_range/aggregate 取数工具。 */
-export function auxToolDefs(hasSheet: boolean): ToolDef[] {
+/** 辅助工具菜单:answer_user / ask_user 总在;有整表快照加 read_range/aggregate;有文档快照加 Word 四件套。 */
+export function auxToolDefs(hasSheet: boolean, hasDoc = false): ToolDef[] {
   const base = [ANSWER_USER_DEF, ASK_USER_DEF];
-  return hasSheet ? [...base, READ_RANGE_DEF, AGGREGATE_DEF] : base;
+  return [...base, ...(hasSheet ? [READ_RANGE_DEF, AGGREGATE_DEF] : []), ...(hasDoc ? DOC_TOOL_DEFS : [])];
+}
+
+/** 统一只读工具执行:sheet 工具 → execSheetTool;doc 工具 → execDocTool;都不认识 → '(unknown tool)'。 */
+export function execReadTool(name: string, args: Record<string, unknown>, req: { sheet?: SheetData; doc?: DocSnapshot }): string {
+  const d = execDocTool(name, args as { from?: number; to?: number; pattern?: string }, req.doc);
+  if (d !== null) return d;
+  return execSheetTool(name, args as { a1?: string; column?: string; op?: string; groupBy?: string; where?: AggWhere }, req.sheet);
 }
 
 /** 容错解析 ask_user 入参(字符串或已解析对象皆可)→ 规范化的澄清问题;无有效问题则返回 []。 */

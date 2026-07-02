@@ -16,6 +16,8 @@ export interface ProposeRequest {
   sessionId?: string;
   /** 整张表全量数据(本地传给 serve,不直接塞进模型 prompt;供 read_range/aggregate 工具按需取数)。 */
   sheet?: { a1: string; values: unknown[][] };
+  /** Word 文档全量快照(逐段全文+样式;同样不进 prompt,供 read_blocks/find_text/get_outline/get_style_usage 按需取)。 */
+  doc?: { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> };
   /** 多轮对话历史(用户消息 + Agent 回答/改动摘要),让本次请求关联上下文。 */
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
@@ -52,12 +54,14 @@ export type StreamEvent =
 /** 影子校验器:把提案应用到影子、重算后产出可回喂的观察(供 propose→observe→repair)。 */
 export type ChangeSetVerifier = (cs: ChangeSet) => VerifyReport | Promise<VerifyReport>;
 
-/** respond/respondStream 的可选项:影子校验 + 修复轮数上限。 */
+/** respond/respondStream 的可选项:影子校验 + 修复轮数上限 + 宿主追加工具。 */
 export interface RespondOptions {
   /** 提案产出后跑一次影子校验;ok=false 时把 report 回喂模型,允许其修正。省略=不校验。 */
   verify?: ChangeSetVerifier;
   /** 校验不通过最多让模型重新提案几次(默认 1)。 */
   maxRepairs?: number;
+  /** 宿主追加的只读工具(如 load_skill 渐进披露):defs 并入工具菜单;exec 返回 null=不是它的工具,继续走取数路由。 */
+  extraTools?: { defs: Array<{ name: string; description: string; parameters: Record<string, unknown> }>; exec: (name: string, args: unknown) => string | null };
 }
 
 /** 任何模型实现(真实 Claude / OpenAI 兼容 / Mock)。 */

@@ -5,8 +5,8 @@
  * 端到端:propose(intent → ChangeSet) → diff(可审阅) → 用户接受子集 → commit(外科写回 → 新字节 + 保真报告)。
  * 写回后端按 format 路由:excel/xlsx → 外科 OOXML(Univer 编译器);drawio → 单 XML 外科。
  */
-import { Agent, buildDocVerifier } from '@otterpatch/agent';
-import type { AgentResponse, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from '@otterpatch/agent';
+import { Agent, buildDocVerifier, buildDrawioVerifier } from '@otterpatch/agent';
+import type { AgentResponse, ChangeSetVerifier, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from '@otterpatch/agent';
 import type { ChangeSet, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
 import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
 import { buildXlsxCompiler, buildGridVerifier } from '@otterpatch/adapter-univer';
@@ -35,9 +35,17 @@ export class OtterPatchRuntime {
   private readonly listeners = new Set<OtterPatchEventListener>();
   private readonly skills: SkillLibrary;
   private readonly backends: Record<string, () => WritebackBackend>;
+  private readonly verifiers: Record<string, (req: ProposeRequest) => ChangeSetVerifier | undefined>;
 
   constructor(opts: OtterPatchRuntimeOptions = {}) {
     this.skills = opts.skills ?? defaultLibrary();
+    this.verifiers = {
+      excel: (req) => (req.sheet ? buildGridVerifier(req.sheet) : undefined),
+      xlsx: (req) => (req.sheet ? buildGridVerifier(req.sheet) : undefined),
+      word: (req) => (req.context.trim() ? buildDocVerifier(req.context) : undefined),
+      docx: (req) => (req.context.trim() ? buildDocVerifier(req.context) : undefined),
+      drawio: (req) => (req.context.trim() ? buildDrawioVerifier(req.context) : undefined),
+    };
     this.backends = {
       excel: () => new SurgicalOoxmlWriteback(buildXlsxCompiler()),
       xlsx: () => new SurgicalOoxmlWriteback(buildXlsxCompiler()),
@@ -65,6 +73,10 @@ export class OtterPatchRuntime {
   registerWriteback(format: string, make: () => WritebackBackend): void {
     this.backends[format] = make;
   }
+  /** 注册/覆盖某格式的影子校验器(与 backends 同款注册表;ppt/pdf 等后续接入)。 */
+  registerVerifier(format: string, make: (req: ProposeRequest) => ChangeSetVerifier | undefined): void {
+    this.verifiers[format] = make;
+  }
   formats(): string[] {
     return Object.keys(this.backends);
   }
@@ -83,16 +95,12 @@ export class OtterPatchRuntime {
     }
   }
 
-  /** 提案产出后的影子校验:Excel 重算 + 越界/重复命中;Word 锚点可落地性(quote 是否真实唯一)。支撑 propose→observe→repair。 */
+  /** 提案产出后的影子校验(按 format 走注册表):Excel 重算/越界;Word 锚点可落地;drawio 拓扑完整。
+   *  外面再包一层收尾语义自检(withFinalSelfCheck)。 */
   private verifyOpts(req: ProposeRequest): RespondOptions | undefined {
-    if ((req.format === 'excel' || req.format === 'xlsx') && req.sheet) {
-      return { verify: buildGridVerifier(req.sheet), maxRepairs: 1 };
-    }
-    // Word:没有网格可重算,自检 = 每条改动的 quote 锚点能否在原文中真实、唯一地落地(否则乐观应用会静默 no-op)
-    if ((req.format === 'word' || req.format === 'docx') && req.context.trim()) {
-      return { verify: buildDocVerifier(req.context), maxRepairs: 1 };
-    }
-    return undefined;
+    const structural = this.verifiers[req.format]?.(req);
+    if (!structural) return undefined;
+    return { verify: withFinalSelfCheck(structural), maxRepairs: 2 };
   }
 
   /** 智能路由:模型自行决定『回答问题』还是『提出改动』。 */
@@ -159,4 +167,26 @@ export class OtterPatchRuntime {
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * 收尾语义自检:大改动(≥minEdits 条)结构校验通过后,再让模型把整组改动【作为整体】复盘一次
+ * (完整性/冲突/更优解)——满意则原样重交、不满意交修正版。只对大提案多花一轮,
+ * 专治"逐条都对、整体却没达成意图"。每个请求只触发一次(闭包记账)。
+ */
+export function withFinalSelfCheck(structural: ChangeSetVerifier, minEdits = 5): ChangeSetVerifier {
+  let selfChecked = false;
+  return async (cs) => {
+    const v = await structural(cs);
+    if (!v.ok) return v;
+    if (!selfChecked && cs.edits.length >= minEdits) {
+      selfChecked = true;
+      return {
+        ok: false,
+        report: '结构自检通过。收尾自检(最后一步):请把这组改动作为【整体】复盘 —— ①是否完整达成用户意图,有没有漏掉同类问题;②各条改动之间是否冲突/重复命中同一处;③有没有专业上更优的做法。' +
+          '全部满意就【原样重新提交同一组改动】;发现问题就提交修正版。这是收尾确认,不要因此缩减本来正确的改动。',
+      };
+    }
+    return v;
+  };
 }

@@ -586,6 +586,9 @@ export function App() {
   const [realCs, setRealCs] = useState<unknown>(null);
   const [accepted, setAccepted] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('oa.accepted') ?? '[]') as string[]); } catch { return new Set(); } }); // 随 thread 持久化:刷新后审批处置不丢
   useEffect(() => { try { localStorage.setItem('oa.accepted', JSON.stringify([...accepted])); } catch { /* 配额忽略 */ } }, [accepted]);
+  useEffect(() => { // 接受率遥测读取口:控制台 __otterTelemetry() 看 格式×改动类型 的 accept/reject 分布
+    (window as unknown as { __otterTelemetry?: () => unknown }).__otterTelemetry = () => { try { return JSON.parse(localStorage.getItem('oa.telemetry') ?? '{}'); } catch { return {}; } };
+  }, []);
   const [fileB64, setFileB64] = useState('');
   const [fileName, setFileName] = useState('');
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -764,6 +767,8 @@ export function App() {
     if (intentOverride && intentOverride !== intent) setIntent(intentOverride);
     // Excel:永远主动拉整张表(概览+数据+焦点),与是否圈选无关 —— 没圈选也能看全局、也有 read_range/aggregate 工具
     const sheetSnap = isExcel ? (univerRef.current?.getSheet() ?? uniSel) : null;
+    // Word:同理主动拉全文快照(逐段全文+样式),供 read_blocks/find_text/get_outline/get_style_usage 按需取 —— 上下文里的截断不再是感知天花板
+    const docSnap = fmt === 'word' ? (wordRef.current?.getDocSnapshot() ?? null) : null;
     const selDesc = wordSel ? `${wordSel.block}${wordSel.font ? ' · ' + wordSel.font : ''}${wordSel.size ? ' ' + wordSel.size + 'pt' : ''}${wordSel.bold ? ' 加粗' : ''}${wordSel.italic ? ' 斜体' : ''}${wordSel.align && wordSel.align !== '左对齐' ? ' ' + wordSel.align : ''}` : '';
     const ctx = isExcel ? (sheetSnap?.text ?? '(表格为空)') : fmt === 'drawio' && boardSel ? boardSel.context : fmt === 'word'
       ? `${wordRef.current?.getContext() ?? '(空文档)'}\n(改写正文:给 quote=文档中真实存在的原文片段 + replacement;改格式:给 quote + setStyle 字段,别给 replacement。)`
@@ -781,7 +786,7 @@ export function App() {
         const resp = await fetch(ep + '/propose-stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ format: fmt, intent: theIntent, context: ctx, provider, model, apiKey, ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(thread.length ? { history: buildHistory(thread) } : {}) }),
+          body: JSON.stringify({ format: fmt, intent: theIntent, context: ctx, provider, model, apiKey, ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildHistory(thread) } : {}) }),
         });
         if (!resp.ok || !resp.body) throw new Error('propose failed (' + resp.status + ')');
         if (theIntent.trim()) setRecent((rr) => [{ t: theIntent.trim(), time: t('刚刚') }, ...rr.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
@@ -1172,6 +1177,24 @@ export function App() {
     else if (fmt === 'drawio') { const id = turn.board?.byEdit[item.editId]; if (id) boardRef.current?.highlight(id); }
     else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === item.editId); if (w) wordRef.current?.highlight(w.domId); } // 定位当前条
   };
+  /** 接受率飞轮:按 格式×改动类型 统计逐条处置,localStorage 持久化;接受率最低的类别就是 skills/prompt 下一轮的靶子。
+   *  控制台 window.__otterTelemetry() 可随时查看汇总。 */
+  const telemetry = (verb: 'accept' | 'reject', kind: string): void => {
+    try {
+      const t = JSON.parse(localStorage.getItem('oa.telemetry') ?? '{}') as Record<string, Record<string, { accept: number; reject: number }>>;
+      const f = (t[fmt] ??= {});
+      const k = (f[kind] ??= { accept: 0, reject: 0 });
+      k[verb]++;
+      localStorage.setItem('oa.telemetry', JSON.stringify(t));
+    } catch { /* 配额/解析问题不影响主流程 */ }
+  };
+  /** 一条审阅项的改动类型(遥测口径):word=text/style,excel=value/style/structure,drawio=object。 */
+  const itemKind = (turn: Extract<Turn, { kind: 'diff' }>, it: AgentDiffItem): string => {
+    if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); return w?.style || it.style ? 'style' : 'text'; }
+    if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (!op) return 'structure'; return op.value !== undefined ? 'value' : 'style'; }
+    if (fmt === 'drawio') return 'object';
+    return 'other';
+  };
   const acceptItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number, silent = false): void => {
     const it = turn.diff.items[idx]; if (!it) return;
     const k = akey(turn.diff.changeSetId, it.editId);
@@ -1182,6 +1205,7 @@ export function App() {
       toggleAccept(k, true);
     }
     if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.markResolved(w.domId, 'accepted'); } // 物理定稿:删 del、ins 落地
+    telemetry('accept', itemKind(turn, it));
     if (!silent) setReviewIdx(idx + 1);
   };
   /** 行内卡片 ✓/✕ → 复用 rail 的接受/拒绝(按 domId 找回条目);老回合的处置不动当前回合的审阅游标。 */
@@ -1205,6 +1229,7 @@ export function App() {
     else if (fmt === 'drawio') { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); }
     else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w && !wordRef.current?.revert(w.domId) && accepted.has(k)) notify(t('该改动已定稿,未找到可还原的位置')); } // undoMap 缺失时 revert 自带 DOM 兜底
     toggleAccept(k, false);
+    telemetry('reject', itemKind(turn, it));
     if (!silent) setReviewIdx(idx + 1);
   };
   const acceptAll = (turn: Extract<Turn, { kind: 'diff' }>, ti: number): void => {
@@ -1215,6 +1240,7 @@ export function App() {
       else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.domId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' }); }
     }
     if (fmt === 'word') for (const w of turn.word ?? []) wordRef.current?.markResolved(w.domId, 'accepted'); // 全部接受同样物理定稿,与逐条路径一致
+    for (const it of turn.diff.items) telemetry('accept', itemKind(turn, it)); // 批量确认也计入接受
     const all = turn.diff.items.map((x) => x.editId);
     setAccepted((prev) => new Set([...prev, ...turn.diff.items.map((x) => akey(turn.diff.changeSetId, x.editId))]));
     setReviewIdx(all.length);
@@ -1609,7 +1635,12 @@ export function App() {
                             {total === 0 ? (
                               <div className="rv-empty">{t('Agent 未提出改动')}</div>
                             ) : turn.committed ? (
-                              <div className="rv-final ok"><IconCheck size={15} /> {t('已采纳')}{turn.committedCount ? ` · ${turn.committedCount} ${t('处')}` : ''}<span className="grow" /><button className="link-btn" onClick={() => revertTurn(i)}>{t('撤销')}</button></div>
+                              <div className="rv-final ok"><IconCheck size={15} /> {t('已采纳')}{turn.committedCount ? ` · ${turn.committedCount} ${t('处')}` : ''}<span className="grow" />
+                                {/* 分批任务不断链:plan 说了"先做第一批/前 N 处"之类,采纳后给一键续发,loop 不断 */}
+                                {/先做|第一批|前\s*\d+\s*[项处条个批]|下一批|分批|其余|剩余/.test(d.intent ?? '') ? (
+                                  <button className="btn solid rv-next" onClick={() => { void send('下一批'); }}>{t('继续下一批')} ›</button>
+                                ) : null}
+                                <button className="link-btn" onClick={() => revertTurn(i)}>{t('撤销')}</button></div>
                             ) : turn.reverted ? (
                               <div className="rv-final dim">↩ {t('已撤销')}</div>
                             ) : cur ? (

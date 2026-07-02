@@ -36,15 +36,22 @@ export interface DocFmt {
   // 段落级(Agent 可下发,作用于 quote 所在整段)
   align?: 'left' | 'center' | 'right' | 'justify'; lineSpacing?: number; bgColor?: string;
   block?: 'h1' | 'h2' | 'h3' | 'p' | 'blockquote';
+  // 页面级(Agent 以 all=true 下发,作用于整篇版面):分栏 / 页边距 / 纸张方向
+  columns?: number; margin?: 'narrow' | 'normal' | 'moderate' | 'wide'; orient?: 'portrait' | 'landscape';
 }
 const INLINE_FMT = (f: DocFmt): boolean => f.bold != null || f.italic != null || f.underline != null || f.strike != null || f.font != null || f.size != null || f.color != null;
 const BLOCK_FMT = (f: DocFmt): boolean => f.align != null || f.lineSpacing != null || f.bgColor != null || f.block != null;
+const PAGE_FMT = (f: DocFmt): boolean => f.columns != null || f.margin != null || f.orient != null;
+/** Agent 页边距预设 → 布局选项卡使用的 MARGINS 键(普通/窄/适中/宽)。 */
+const MARGIN_KEY: Record<string, string> = { normal: '普通', narrow: '窄', moderate: '适中', wide: '宽' };
 
 export interface RichDocHandle {
   /** 全文纯文本(供 Agent 定位)。 */
   getText(): string;
-  /** 带格式的文档上下文(逐段样式/字体/字号/对齐 + 概览)——让 Agent 看得见排版细节。 */
+  /** 带格式的文档上下文(逐段样式/字体/字号/对齐 + 样式系统摘要)——让 Agent 看得见排版细节。 */
   getContext(): string;
+  /** 全文快照(逐段全文+样式,清样投影)——随请求上送 serve,供 read_blocks/find_text 等工具按需取,不进 prompt。 */
+  getDocSnapshot(): { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string }> };
   /** 落一条 Agent 改动(文本改写 replacement 或格式 fmt),按 editId 包裹,可还原。 */
   applyEdit(editId: string, quote: string, opts: { replacement?: string; fmt?: DocFmt }): boolean;
   /** 按 editId 精确还原该条改动(undoMap 缺失时按 DOM 现场兜底);false=完全找不到可还原目标。 */
@@ -290,12 +297,13 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   const painter = useRef<DocFmt | null>(null); // 格式刷源格式
   const cmtCursor = useRef(0); // 批注导航游标
   const lastImg = useRef<HTMLElement | null>(null); // 最近点选的图片/对象(排列命令的目标)
-  const undoMap = useRef<Map<string, { mode: 'span'; prior: DocumentFragment; el: HTMLElement } | { mode: 'root'; priorProps: Record<string, string> } | { mode: 'block'; prior: Element; el: HTMLElement }>>(new Map());
+  const undoMap = useRef<Map<string, { mode: 'span'; prior: DocumentFragment; el: HTMLElement } | { mode: 'root'; priorProps: Record<string, string>; nextProps?: Record<string, string>; priorPage?: PageState; nextPage?: PageState } | { mode: 'block'; prior: Element; el: HTMLElement }>>(new Map());
 
   const [tab, setTab] = useState<number>(() => { const v = parseInt(localStorage.getItem(TAB_KEY) ?? '0', 10); return Number.isFinite(v) && v >= 0 && v < 6 ? v : 0; });
   const [pop, setPop] = useState<{ key: string; x: number; y: number } | null>(null);
   const [st, setSt] = useState<CmdState>({ bold: false, italic: false, underline: false, strike: false, ul: false, ol: false, align: 'left', font: '', size: 0 });
   const [page, setPage] = useState<PageState>(() => { try { return JSON.parse(localStorage.getItem(PAGE_KEY) ?? '{}') as PageState; } catch { return {}; } });
+  const pageRef = useRef(page); pageRef.current = page; // imperative handle 里读取当前页面态(闭包安全)
   const [toast, setToast] = useState<string | null>(null);
   const [wc, setWc] = useState<{ chars: number; noSpace: number; cjk: number; words: number; paras: number } | null>(null);
   const [nav, setNav] = useState<{ level: number; text: string; idx: number }[]>([]);
@@ -303,6 +311,10 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   const [hasDiff, setHasDiff] = useState(false); // 文档里是否存在 Agent 改动(决定是否显示修订切换条)
   const [chgCount, setChgCount] = useState(0); // 改动条数(计数器)
   const [stepPos, setStepPos] = useState(0); // 步进导航当前位置(0 基)
+  const [docChgs, setDocChgs] = useState<Array<{ cid: string; label: string }>>([]); // 全文/页面级改动(无行内锚点,切换条旁以 chip 呈现)
+  const docChgsRef = useRef<Array<{ cid: string; label: string }>>([]); // imperative handle 闭包安全的镜像
+  const setDocChanges = (list: Array<{ cid: string; label: string }>): void => { docChgsRef.current = list; setDocChgs(list); };
+  const [linkedCid, setLinkedCid] = useState<string | null>(null); // rail 悬停联动(chip 用状态点亮,行内标记走类)
   const [hoverCard, setHoverCard] = useState<{ cid: string; kind: string; oldText: string; newText: string; glyph: string; x: number; y: number; below: boolean } | null>(null); // 逐条改动悬浮卡
   const cardTimer = useRef<number | null>(null);
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null); // Office 式即时悬浮提示
@@ -388,6 +400,19 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     el.classList.toggle('rd-diff-final', diffView === 'final');
     el.classList.toggle('rd-diff-clean', diffView === 'clean');
     el.classList.toggle('rd-diff-orig', diffView === 'orig');
+    // 全文/页面级改动的真前后对比:原文=回改前(根样式+页面设置),其余视图=改后
+    const toOrig = diffView === 'orig';
+    for (const c of docChgsRef.current) {
+      const info = undoMap.current.get(c.cid);
+      if (!info || info.mode !== 'root') continue;
+      const props = toOrig ? info.priorProps : (info.nextProps ?? info.priorProps);
+      const s = el.style;
+      s.fontWeight = props.fontWeight ?? ''; s.fontStyle = props.fontStyle ?? ''; s.textDecoration = props.textDecoration ?? '';
+      s.fontFamily = props.fontFamily ?? ''; s.fontSize = props.fontSize ?? ''; s.color = props.color ?? '';
+      s.textAlign = props.textAlign ?? ''; s.lineHeight = props.lineHeight ?? ''; s.backgroundColor = props.backgroundColor ?? '';
+      const pg = toOrig ? info.priorPage : info.nextPage;
+      if (pg) setPage((p) => ({ ...p, ...pg }));
+    }
   }, [diffView, hasDiff]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { setPop(null); setWc(null); } };
@@ -414,9 +439,10 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   };
   const notify = (m: string): void => setToast(m);
   const refreshHasDiff = (): void => {
-    const n = edRef.current?.querySelectorAll('[data-cid]').length ?? 0;
+    const marks = edRef.current?.querySelectorAll('[data-cid]').length ?? 0;
+    const n = marks + docChgsRef.current.length; // 行内标记 + 全文/页面级 chip 都算改动
     setChgCount(n); setHasDiff(n > 0);
-    setStepPos((p) => (n === 0 ? 0 : Math.min(p, n - 1))); // 改动增删后钳制步进游标,计数器不指空
+    setStepPos((p) => (marks === 0 ? 0 : Math.min(p, marks - 1))); // 步进只在行内标记间走,钳制游标
   };
   /** 尊重系统"减少动态效果":滚动定位退化为瞬时。 */
   const smoothBehavior = (): ScrollBehavior => (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth');
@@ -478,31 +504,74 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       const blocks = Array.from(root.querySelectorAll('p,h1,h2,h3,h4,li,blockquote')) as HTMLElement[];
       if (!blocks.length) return root.innerText || '(空文档)';
       const fonts = new Set<string>(); const sizes = new Set<number>(); const colors = new Set<string>();
+      const heads: string[] = []; const bodyCombo = new Map<string, number>(); // 样式系统摘要的原料:标题树 + 正文基线组合
+      let truncated = 0;
       const lines = blocks.map((el, i) => {
         const b = fmtBrief(el);
         if (b.font) fonts.add(b.font); sizes.add(b.size); if (b.color !== '#000000' && b.color !== '#1f2430') colors.add(b.color);
         const tag = el.tagName.toLowerCase();
         const style = tag === 'h1' ? '标题1' : tag === 'h2' ? '标题2' : tag === 'h3' ? '标题3' : tag === 'h4' ? '标题4' : tag === 'blockquote' ? '引用' : tag === 'li' ? '列表项' : '正文';
         const txt = cleanBlockText(el).replace(/\s+/g, ' ').trim(); // 同样走清样投影,别把 del 旧文标进段落概览
+        if (/^标题/.test(style)) heads.push(`${'  '.repeat(parseInt(tag.slice(1), 10) - 1)}H${tag.slice(1)} 第${i + 1}段 ${txt.slice(0, 30)}`);
+        else if (style === '正文') bodyCombo.set(`${b.font} ${b.size}pt`, (bodyCombo.get(`${b.font} ${b.size}pt`) ?? 0) + 1);
         const marks = [style, `${b.font} ${b.size}pt`, b.color !== '#000000' && b.color !== '#1f2430' ? b.color : '', b.bold ? '加粗' : '', b.italic ? '斜体' : '', b.align !== '左对齐' ? b.align : ''].filter(Boolean).join(' · ');
-        return `第${i + 1}段 [${marks}]: ${txt.length > 90 ? txt.slice(0, 90) + '…' : txt}`;
+        const cut = txt.length > 300; if (cut) truncated++;
+        return `第${i + 1}段 [${marks}]: ${cut ? txt.slice(0, 300) + '…(已截断)' : txt}`;
       });
-      return `[Word 文档 · ${blocks.length} 段] 每段已标注它的样式/字体/字号/对齐/颜色;要改格式就据此下发 setStyle。\n格式概览: 字体 ${[...fonts].join('、')} | 字号 ${[...sizes].sort((a, b) => a - b).join('、')}pt${colors.size ? ' | 非黑颜色 ' + [...colors].join('、') : ''}\n逐段:\n${lines.join('\n')}`;
+      const baseline = [...bodyCombo].sort((a, b2) => b2[1] - a[1]);
+      const sys = `样式系统: ${heads.length ? '标题树 ' + heads.length + ' 个(' + heads.slice(0, 8).join(' / ') + (heads.length > 8 ? ' …' : '') + ')' : '无标题样式段落'};正文基线 ${baseline[0] ? baseline[0][0] + '(' + baseline[0][1] + ' 段)' : '(无)'}${baseline.length > 1 ? ',另有 ' + (baseline.length - 1) + ' 种偏离基线的正文排版 ⚠ 基线不统一' : ''}`;
+      const toolHint = truncated ? `\n(有 ${truncated} 段超长已截断:改写/引用前先用 read_blocks 取该段全文,quote 必须来自真实原文;检索用 find_text,大纲用 get_outline,排版审计用 get_style_usage。)` : '\n(可用工具:read_blocks 按段取全文、find_text 全文检索、get_outline 大纲、get_style_usage 样式分布。)';
+      return `[Word 文档 · ${blocks.length} 段] 每段已标注它的样式/字体/字号/对齐/颜色;要改格式就据此下发 setStyle。\n${sys}\n格式概览: 字体 ${[...fonts].join('、')} | 字号 ${[...sizes].sort((a, b) => a - b).join('、')}pt${colors.size ? ' | 非黑颜色 ' + [...colors].join('、') : ''}${toolHint}\n逐段:\n${lines.join('\n')}`;
+    },
+    getDocSnapshot: () => { // 全文快照(清样投影):serve 侧不进 prompt,只供 read_blocks/find_text/get_outline/get_style_usage 取数
+      const root = edRef.current; if (!root) return { blocks: [] };
+      const blocks = Array.from(root.querySelectorAll(BLOCK_SEL)) as HTMLElement[];
+      return {
+        blocks: blocks.map((el) => {
+          const b = fmtBrief(el);
+          const tag = el.tagName.toLowerCase();
+          const style = tag === 'h1' ? '标题1' : tag === 'h2' ? '标题2' : tag === 'h3' ? '标题3' : tag === 'h4' ? '标题4' : tag === 'blockquote' ? '引用' : tag === 'li' ? '列表项' : '正文';
+          return { style, text: cleanBlockText(el).replace(/\s+/g, ' ').trim(), font: b.font, size: b.size, align: b.align };
+        }),
+      };
     },
     applyEdit: (editId, quote, opts) => {
       const root = edRef.current;
       if (!root) return false;
       if (root.querySelector(`[data-cid="${cssq(editId)}"]`)) return true; // 幂等:同一改动只落一次(刷新后重复接受/重放不叠标记)
       const fmt = opts.fmt;
-      // 全文格式(无 quote):字符级改根内联样式;段落级(对齐/行距/底纹)也落根(继承给各段);block 对全文无意义,忽略
+      // 全文格式/页面级(无 quote):字符级改根内联样式(继承给各段);columns/margin/orient 落页面态;记 prior/next 供四态切换与还原
       if (!quote && fmt) {
+        if (undoMap.current.has(editId) || docChgsRef.current.some((c) => c.cid === editId)) return true; // 幂等(root 改动没有 data-cid 可查)
         const s = root.style;
-        undoMap.current.set(editId, { mode: 'root', priorProps: {
+        const snap = (): Record<string, string> => ({
           fontWeight: s.fontWeight, fontStyle: s.fontStyle, textDecoration: s.textDecoration, fontFamily: s.fontFamily, fontSize: s.fontSize, color: s.color,
           textAlign: s.textAlign, lineHeight: s.lineHeight, backgroundColor: s.backgroundColor,
-        } });
+        });
+        const priorProps = snap();
         styleSpan(root, fmt);
         styleBlockEl(root, fmt);
+        const nextProps = snap();
+        const cur = pageRef.current;
+        const priorPage: PageState = { columns: cur.columns, margin: cur.margin, orient: cur.orient };
+        let nextPage: PageState | undefined;
+        if (PAGE_FMT(fmt)) {
+          nextPage = {
+            columns: fmt.columns != null ? fmt.columns : cur.columns,
+            margin: fmt.margin ? MARGIN_KEY[fmt.margin] : cur.margin,
+            orient: fmt.orient ?? cur.orient,
+          };
+          setPage((p) => ({ ...p, ...nextPage }));
+        }
+        undoMap.current.set(editId, { mode: 'root', priorProps, nextProps, priorPage, ...(nextPage ? { nextPage } : {}) });
+        const label = [
+          fmt.font, fmt.size ? fmt.size + 'pt' : '', fmt.bold != null ? (fmt.bold ? '加粗' : '取消加粗') : '', fmt.color ?? '',
+          fmt.align === 'justify' ? '两端对齐' : fmt.align === 'center' ? '居中' : '', fmt.lineSpacing ? '行距 ' + fmt.lineSpacing : '',
+          fmt.columns != null ? (fmt.columns <= 1 ? '单栏' : fmt.columns + ' 栏') : '', fmt.margin ? (MARGIN_KEY[fmt.margin] ?? fmt.margin) + '边距' : '',
+          fmt.orient ? (fmt.orient === 'landscape' ? '横向纸张' : '纵向纸张') : '',
+        ].filter(Boolean).join(' · ');
+        setDocChanges([...docChgsRef.current, { cid: editId, label: label || '全文格式' }]);
+        refreshHasDiff();
         persist();
         return true;
       }
@@ -577,6 +646,8 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
           s.fontWeight = pp.fontWeight ?? ''; s.fontStyle = pp.fontStyle ?? ''; s.textDecoration = pp.textDecoration ?? '';
           s.fontFamily = pp.fontFamily ?? ''; s.fontSize = pp.fontSize ?? ''; s.color = pp.color ?? '';
           s.textAlign = pp.textAlign ?? ''; s.lineHeight = pp.lineHeight ?? ''; s.backgroundColor = pp.backgroundColor ?? '';
+          if (info.priorPage) setPage((p) => ({ ...p, ...info.priorPage })); // 页面级(分栏/边距/方向)一并回退
+          setDocChanges(docChgsRef.current.filter((c) => c.cid !== editId));
         } else if (info.mode === 'block') {
           const cur = info.el && root.contains(info.el) ? info.el : root.querySelector(`[data-edit-block="${cssq(editId)}"]`);
           if (cur && cur.parentNode) cur.parentNode.replaceChild(info.prior.cloneNode(true), cur);
@@ -624,6 +695,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       const root = edRef.current; if (!root) return;
       root.querySelectorAll('.is-linked').forEach((e) => e.classList.remove('is-linked'));
       if (cid) root.querySelector(`[data-cid="${cssq(cid)}"]`)?.classList.add('is-linked');
+      setLinkedCid(cid); // 全文级 chip 的联动点亮
     },
     activateChange: (cid) => {
       const root = edRef.current; if (!root) return;
@@ -636,6 +708,22 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     },
     markResolved: (cid, state) => {
       const root = edRef.current; if (!root) return;
+      // 全文/页面级改动:接受=chip 收起、确保停在"改后"状态(可能正停在原文视图);undoMap 保留供整轮撤销
+      if (docChgsRef.current.some((c) => c.cid === cid)) {
+        if (state !== 'accepted') return;
+        const info = undoMap.current.get(cid);
+        if (info && info.mode === 'root' && info.nextProps) {
+          const s = root.style; const np = info.nextProps;
+          s.fontWeight = np.fontWeight ?? ''; s.fontStyle = np.fontStyle ?? ''; s.textDecoration = np.textDecoration ?? '';
+          s.fontFamily = np.fontFamily ?? ''; s.fontSize = np.fontSize ?? ''; s.color = np.color ?? '';
+          s.textAlign = np.textAlign ?? ''; s.lineHeight = np.lineHeight ?? ''; s.backgroundColor = np.backgroundColor ?? '';
+          if (info.nextPage) setPage((p) => ({ ...p, ...info.nextPage }));
+        }
+        setDocChanges(docChgsRef.current.filter((c) => c.cid !== cid));
+        refreshHasDiff();
+        persist();
+        return;
+      }
       const els = Array.from(root.querySelectorAll(`[data-cid="${cssq(cid)}"]`)) as HTMLElement[];
       if (!els.length) return;
       if (state !== 'accepted') { els.forEach((e) => e.classList.remove('is-accepted', 'is-rejected')); return; }
@@ -663,13 +751,14 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       refreshHasDiff();
       persist();
     },
-    closeUndoWindow: () => { // 新提案到达=上一轮撤销窗口关闭:剥 data-undo,裸 span 顺手解包,文档零残留
+    closeUndoWindow: () => { // 新提案到达=上一轮撤销窗口关闭:剥 data-undo,裸 span 顺手解包;残留的全文级 chip 视为默认定稿
       const root = edRef.current; if (!root) return;
       root.querySelectorAll('[data-undo]').forEach((el) => {
         el.removeAttribute('data-undo');
         if (el.tagName === 'SPAN' && !el.attributes.length) el.replaceWith(...Array.from(el.childNodes));
       });
       undoMap.current.clear();
+      if (docChgsRef.current.length) { setDocChanges([]); refreshHasDiff(); }
       persist();
     },
   }), []);
@@ -1587,6 +1676,14 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
               <button className="rd-dt-step" onMouseDown={(e) => { e.preventDefault(); step(-1); }} aria-label="上一处" title="上一处">‹</button>
               <button className="rd-dt-step" onMouseDown={(e) => { e.preventDefault(); step(1); }} aria-label="下一处" title="下一处">›</button>
             </span>
+            {docChgs.map((c) => (
+              <span key={c.cid} className={'rd-dt-docchg' + (linkedCid === c.cid ? ' is-linked' : '')} title={'全文/版面改动:' + c.label}>
+                <span className="rd-dt-docchg-glyph">¶</span>
+                <span className="rd-dt-docchg-lb">{c.label}</span>
+                <button className="rd-dt-docchg-btn no" onMouseDown={(e) => { e.preventDefault(); resolveCb.current?.(c.cid, 'reject'); }} aria-label="拒绝该全文改动" title="拒绝">✕</button>
+                <button className="rd-dt-docchg-btn ok" onMouseDown={(e) => { e.preventDefault(); resolveCb.current?.(c.cid, 'accept'); }} aria-label="接受该全文改动" title="接受">✓</button>
+              </span>
+            ))}
           </div>
         ) : null}
         {page.nav ? (

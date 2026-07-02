@@ -7,7 +7,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
-    "test": "node --import tsx --test src/agent.test.ts src/sheet-tools.test.ts src/json-salvage.test.ts src/word-verify.test.ts"
+    "test": "node --import tsx --test src/agent.test.ts src/sheet-tools.test.ts src/json-salvage.test.ts src/word-verify.test.ts src/doc-tools.test.ts src/drawio-verify.test.ts"
   },
   "dependencies": {
     "@otterpatch/core": "0.0.1",

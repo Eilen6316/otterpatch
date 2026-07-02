@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "node --import tsx --test src/runtime.test.ts"
+    "test": "node --import tsx --test src/runtime.test.ts src/selfcheck.test.ts"
   },
   "dependencies": {
     "@otterpatch/core": "0.0.1",

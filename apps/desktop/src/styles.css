@@ -399,6 +399,16 @@ svg { display: block; }
 .rd-dt-nav { display: flex; gap: 1px; }
 .rd-dt-step { width: 22px; height: 22px; border: 0; background: transparent; color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 15px; line-height: 1; }
 .rd-dt-step:hover { background: var(--fill); color: var(--accent); }
+/* 全文/页面级改动 chip(无行内锚点的改动在切换条上呈现,可就地 ✓/✕) */
+.rd-dt-docchg { display: inline-flex; align-items: center; gap: 5px; max-width: 300px; padding: 3px 5px 3px 8px; background: var(--chg-fmt-bg); border: 1px solid rgba(37,99,235,.22); border-radius: 999px; font-size: 11.5px; color: var(--text-soft); transition: background var(--dur-micro), border-color var(--dur-micro); }
+.rd-dt-docchg.is-linked { background: rgba(37,99,235,.14); border-color: var(--accent); }
+.rd-dt-docchg-glyph { font: 600 10px/1 var(--sans); color: var(--chg-fmt); }
+.rd-dt-docchg-lb { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd-dt-docchg-btn { width: 18px; height: 18px; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; line-height: 1; }
+.rd-dt-docchg-btn.ok:hover { background: var(--add-bg); color: var(--add); }
+.rd-dt-docchg-btn.no:hover { background: var(--del-bg); color: var(--del); }
+/* 分批续接按钮(已采纳行内,主视觉引导下一步) */
+.rv-next { height: 26px; padding: 0 12px; font-size: 12px; margin-right: 8px; }
 .gd-hunk.is-linked { background: rgba(37,99,235,.05); }
 @media (prefers-reduced-motion: reduce) {
   .rd-chg, .rd-page ins.rd-ins, .rd-page del.rd-del, .rd-dt-thumb, .rd-card, .rd-flash, .rd-settle, .rd-page span[data-undo].rd-settle { transition: none !important; animation: none !important; }
