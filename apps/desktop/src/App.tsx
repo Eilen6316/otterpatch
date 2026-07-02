@@ -20,6 +20,10 @@ interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bol
 interface CellState { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean }
 /** accepted 记账键:跨回合唯一(LLM 惯用 e0/e1,裸 editId 必撞名)。与 Word 的 domId 同构。 */
 const akey = (csId: string, editId: string): string => csId + '::' + editId;
+/** plan 是否声明了"分批"意图(超长输出的串行续批协议)。 */
+const BATCH_RX = /先做|第一批|前\s*\d+\s*[项处条个批]|下一批|分批|其余|剩余/;
+/** 自动续批的连续批次上限(防 plan 一直说"下一批"造成无限循环)。 */
+const AUTO_BATCH_CAP = 5;
 
 /** 由 applyExcelStructure 直接落网格的"结构/对象操作"kind —— 这些【不能】被 diffToOps 当作写单元格值
  *  (否则会把"插入图表"等的摘要文字写进格子);它们走 applyExcelStructure,不进 playOps。 */
@@ -589,6 +593,10 @@ export function App() {
   useEffect(() => { // 接受率遥测读取口:控制台 __otterTelemetry() 看 格式×改动类型 的 accept/reject 分布
     (window as unknown as { __otterTelemetry?: () => unknown }).__otterTelemetry = () => { try { return JSON.parse(localStorage.getItem('oa.telemetry') ?? '{}'); } catch { return {}; } };
   }, []);
+  // 自动续批(opt-in):plan 声明分批 + 用户开着开关 → 全部接受后自动续发"下一批";每批仍走完整 propose→verify→审阅,写是串行的
+  const [autoBatch, setAutoBatch] = useState(() => localStorage.getItem('oa.autobatch') === '1');
+  useEffect(() => { try { localStorage.setItem('oa.autobatch', autoBatch ? '1' : '0'); } catch { /* 忽略 */ } }, [autoBatch]);
+  const autoBatchRun = useRef(0); // 连续自动批次计数(手动指令即清零,上限 AUTO_BATCH_CAP)
   const [fileB64, setFileB64] = useState('');
   const [fileName, setFileName] = useState('');
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -764,6 +772,7 @@ export function App() {
     if (sendingRef.current) return; // 同步拦截同一帧内的连发,避免把 thread 写成背靠背同角色
     const theIntent = (intentOverride ?? intent).trim();
     if (!theIntent) return; // 空指令不发(否则产生空 user 消息污染历史)
+    if (theIntent !== '下一批') autoBatchRun.current = 0; // 手动指令 = 新任务,自动续批计数清零
     if (intentOverride && intentOverride !== intent) setIntent(intentOverride);
     // Excel:永远主动拉整张表(概览+数据+焦点),与是否圈选无关 —— 没圈选也能看全局、也有 read_range/aggregate 工具
     const sheetSnap = isExcel ? (univerRef.current?.getSheet() ?? uniSel) : null;
@@ -1247,6 +1256,12 @@ export function App() {
     markCommitted(ti, all.length);
     if (isExcel && fileB64) void doCommit(all); // 有上传文件 → 外科写回并下载
     else notify((fmt === 'drawio' ? t('已采纳到画板') : fmt === 'word' ? t('已采纳到文档') : t('已采纳到表格')) + ' · ' + all.length + ' ' + t('处'));
+    // 自动续批:plan 声明了分批 + 开关开着 → 采纳后自动续发(串行,每批重新锚定+校验+审阅;上限防失控)
+    if (autoBatch && BATCH_RX.test(turn.diff.intent ?? '')) {
+      if (autoBatchRun.current >= AUTO_BATCH_CAP) { notify(t('自动续批已达上限,请确认后手动继续')); return; }
+      autoBatchRun.current++;
+      window.setTimeout(() => { void send('下一批'); }, 900);
+    }
   };
   /** 读入要写回的真实文件(.xlsx/.docx/.pdf/.drawio)为 base64。 */
   const onFile = (f: File | undefined): void => {
@@ -1636,9 +1651,14 @@ export function App() {
                               <div className="rv-empty">{t('Agent 未提出改动')}</div>
                             ) : turn.committed ? (
                               <div className="rv-final ok"><IconCheck size={15} /> {t('已采纳')}{turn.committedCount ? ` · ${turn.committedCount} ${t('处')}` : ''}<span className="grow" />
-                                {/* 分批任务不断链:plan 说了"先做第一批/前 N 处"之类,采纳后给一键续发,loop 不断 */}
-                                {/先做|第一批|前\s*\d+\s*[项处条个批]|下一批|分批|其余|剩余/.test(d.intent ?? '') ? (
-                                  <button className="btn solid rv-next" onClick={() => { void send('下一批'); }}>{t('继续下一批')} ›</button>
+                                {/* 分批任务不断链:plan 说了"先做第一批/前 N 处"之类,采纳后一键续发或开自动续批 */}
+                                {BATCH_RX.test(d.intent ?? '') ? (
+                                  <>
+                                    <label className="rv-auto" title={t('接受后自动续发"下一批",每批仍逐条可审')}>
+                                      <input type="checkbox" checked={autoBatch} onChange={(e) => setAutoBatch(e.target.checked)} />⚡{t('自动续批')}
+                                    </label>
+                                    <button className="btn solid rv-next" onClick={() => { void send('下一批'); }}>{t('继续下一批')} ›</button>
+                                  </>
                                 ) : null}
                                 <button className="link-btn" onClick={() => revertTurn(i)}>{t('撤销')}</button></div>
                             ) : turn.reverted ? (
@@ -1673,6 +1693,11 @@ export function App() {
                                   <button className="btn no" onClick={() => rejectItem(turn, ridx)}><IconX size={14} /> {t('拒绝')}</button>
                                   <button className="btn ok" onClick={() => acceptItem(turn, ridx)}><IconCheck size={14} /> {t('接受')}</button>
                                   <span className="grow" />
+                                  {BATCH_RX.test(d.intent ?? '') ? (
+                                    <label className="rv-auto" title={t('接受后自动续发"下一批",每批仍逐条可审')}>
+                                      <input type="checkbox" checked={autoBatch} onChange={(e) => setAutoBatch(e.target.checked)} />⚡{t('自动续批')}
+                                    </label>
+                                  ) : null}
                                   <button className="btn solid" onClick={() => acceptAll(turn, i)}>{t('全部接受')}{total > 1 ? ` · ${total}` : ''}</button>
                                 </div>
                               </>

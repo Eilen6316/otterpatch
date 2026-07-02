@@ -20,6 +20,13 @@ rest stays byte-identical.
 Validated on a real 531 KB `.docx`: surgical write-back kept **30/31 parts byte-identical**,
 whereas a model round-trip rewrote 11/31. See `packages/writeback-surgical`.
 
+## Docs
+
+Contributor/integrator documentation lives in [`docs/`](./docs/README.md):
+[architecture](./docs/architecture.md) · [agent loop](./docs/agent.md) ·
+[skills & playbooks](./docs/skills.md) · [review UX](./docs/review-ux.md) ·
+[testing](./docs/testing.md)
+
 ## Structure
 
 ```text
@@ -94,6 +101,12 @@ npm test -w @otterpatch/writeback-surgical
 - [x] Ribbon formatting applies to the live selection (bold/italic/colors/align/number-format)
 - [x] Electron desktop shell + electron-builder packaging config (12-language UI)
 - [x] Closed write-back loop in the cockpit (otterpatch-serve): load a file → propose → review diff (per-item accept/reject) → accept subset → surgical write-back → download the edited file
+- [x] Word: full Office-style six-tab ribbon + **inline tracked-change review** — per-change hover cards, 4-state view toggle (original/markup/clean/final), flatten-on-accept (accepting physically finalizes; no markup pollution)
+- [x] Agent read tools — Excel `read_range`/`aggregate`; Word `read_blocks`/`find_text`/`get_outline`/`get_style_usage` (full-doc snapshot, both model channels)
+- [x] Domain playbooks with progressive disclosure (`load_skill`): GB/T 9704 official-document layout, financial-sheet rules, chart selection
+- [x] Shadow-verification registry (Excel recompute · Word anchor landability · drawio topology) with in-turn repair + final semantic self-check; prompt caching on the Anthropic channel
+- [x] Page-level layout ops (columns/margins/orientation — two-column IEEE layouts) + doc-level change chips with true before/after toggling
+- [x] Batch continuation ("next batch" button + opt-in auto-continue, serial & re-anchored); per-edit acceptance telemetry; key-gated capability bench (`test/expert-bench.mjs`)
 
 ## License
 
