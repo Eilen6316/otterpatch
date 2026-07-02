@@ -161,7 +161,10 @@ svg { display: block; }
 /* 渲染区铺满:Excel 满幅网格 / drawio 画板 / Word·PPT 页面 */
 .canvas.excel { padding: 0; background-color: var(--surface); background-image: none; place-items: stretch; overflow: hidden; position: relative; }
 /* Excel 的"原文/改后"速览:浮在网格底部栏之上,避开 Univer 顶部工具条(z-index 需高过 Univer 画布层) */
-.excel-difftoggle { top: auto; bottom: 48px; z-index: 1000; pointer-events: auto; }
+/* Must out-specify the later .rd-difftoggle base rule (top:10px): with equal specificity the
+ * base won and the pill got anchored to BOTH top and bottom, stretching into a full-height
+ * blur overlay (caught by live screenshot eval, invisible to DOM-only asserts). */
+.rd-difftoggle.excel-difftoggle { top: auto; bottom: 48px; z-index: 1000; pointer-events: auto; }
 .canvas.worddoc { padding: 0; background-color: var(--surface); background-image: none; place-items: stretch; overflow: hidden; }
 /* 自控富文本「Word」编辑器 */
 .rd-wrap { display: flex; flex-direction: column; width: 100%; height: 100%; overflow: hidden; background: #eef0f2; }

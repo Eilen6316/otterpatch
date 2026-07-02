@@ -269,9 +269,12 @@ function styleSpan(span: HTMLElement, fmt: DocFmt): void {
   if (fmt.color) span.style.color = fmt.color;
 }
 
-/** 段落级样式(对齐/行距/底纹)落到块元素上;block(标题/正文/引用)换标签由调用方处理。 */
+/** 段落级样式(对齐/行距/底纹)落到块元素上;block(标题/正文/引用)换标签由调用方处理。
+ *  Word semantics: "justify" never stretches the last line (that's 分散对齐/distribute) —
+ *  setting textAlignLast:justify here stretched headings and every paragraph's last line
+ *  across the full width (caught by live screenshot eval). Always pin last-line to auto. */
 function styleBlockEl(el: HTMLElement, fmt: DocFmt): void {
-  if (fmt.align) { el.style.textAlign = fmt.align; if (fmt.align === 'justify') el.style.textAlignLast = 'justify'; }
+  if (fmt.align) { el.style.textAlign = fmt.align; el.style.textAlignLast = 'auto'; }
   if (fmt.lineSpacing) el.style.lineHeight = String(fmt.lineSpacing);
   if (fmt.bgColor) el.style.backgroundColor = fmt.bgColor;
 }
