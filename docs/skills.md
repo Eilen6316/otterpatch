@@ -10,7 +10,9 @@ core prompts so it can grow without bloating every request.
 | **Capability cards** | `xlsx`, `docx`, `pptx`, `pdf`, `drawio` | one-line "what this format supports" | L0: name + description in the system prompt |
 | **Playbooks** (打法手册) | `docx-gongwen`, `xlsx-financial`, `chart-selection` | checklists + changeset idioms + anti-patterns | L0 card, tagged 【有打法手册】; full text on demand via `load_skill` |
 
-Built-in playbooks (`packages/skills/src/playbooks.ts`):
+Built-in playbooks live as **real SKILL.md files** under `packages/skills/skills/<name>/SKILL.md`
+(Anthropic Agent Skills directory convention — one folder per skill, YAML frontmatter for L0,
+markdown body for L1). `playbooks.ts` is just a loader; edit the markdown, no code changes needed:
 
 - **`docx-gongwen`** — GB/T 9704 official-document layout: title/body font-size system (二号小标宋
   title, 三号仿宋 body), the 一、/(一)/1./(1) heading-number hierarchy, full-width punctuation,

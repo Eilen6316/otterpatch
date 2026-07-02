@@ -3,9 +3,16 @@ import assert from 'node:assert/strict';
 import { defaultLibrary } from './catalog.js';
 import { PLAYBOOK_SKILLS } from './playbooks.js';
 
-test('playbook:三篇打法手册都带 L1 正文', () => {
-  assert.equal(PLAYBOOK_SKILLS.length, 3);
+test('playbook:全部打法手册都带 L1 正文', () => {
+  assert.equal(PLAYBOOK_SKILLS.length, 7);
   for (const c of PLAYBOOK_SKILLS) assert.ok((c.instructions ?? '').length > 200, c.name + ' 手册太薄');
+});
+
+test('意图匹配:写作/建模/PPT 类请求命中对应新手册', () => {
+  const lib = defaultLibrary();
+  assert.equal(lib.match('帮我起草一份项目报告', 'word')[0]?.name, 'docx-coauthoring');
+  assert.equal(lib.match('这个模型的公式帮我规范化,别硬编码', 'excel')[0]?.name, 'xlsx-authoring');
+  assert.equal(lib.match('这页幻灯片配色帮我美化一下', 'ppt')[0]?.name, 'pptx-design');
 });
 
 test('意图匹配:公文类请求命中 docx-gongwen 且排最前', () => {

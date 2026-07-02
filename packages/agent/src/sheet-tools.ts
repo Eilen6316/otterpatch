@@ -8,8 +8,9 @@ import { safeParse } from './json-salvage.js';
 import { ROUTING_PREAMBLE, TOO_MANY_STEPS_MSG, ANSWER_USER_DESC, ASK_USER_DESC, READ_RANGE_DESC, AGGREGATE_DESC } from './prompts/index.js';
 import { DOC_TOOL_DEFS, execDocTool, type DocSnapshot } from './doc-tools.js';
 
-/** 多步 loop 的步数上限(含一轮影子校验修复)。提示词均在 ./prompts(按场景分文件)。 */
-export const STEP_LIMIT = 8;
+/** 多步 loop 的步数上限。取数四件套 + load_skill + 影子修复 + 收尾自检都各占一步,
+ *  8 步在"加载手册→审计样式→读段→提案→修复→自检→重交"的专家流程里会被吃满(bench 实测 w-gongwen 撞限),放宽到 12。 */
+export const STEP_LIMIT = 12;
 export { ROUTING_PREAMBLE, TOO_MANY_STEPS_MSG };
 
 /** respond 系统提示拆两段:stable(路由前导+方言+技能,跨轮不变→可挂 prompt cache)与 volatile(当前文档/选区快照,每轮都变)。 */

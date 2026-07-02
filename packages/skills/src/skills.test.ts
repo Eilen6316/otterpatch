@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { parseSkillMd } from './parse.js';
 import { SkillLibrary } from './library.js';
 import { defaultLibrary, BUILTIN_SKILLS } from './catalog.js';
+import { PLAYBOOK_SKILLS } from './playbooks.js';
 
 const SKILL_MD = `---
 name: academic-paper-docx
@@ -25,7 +26,7 @@ test('parseSkillMd: 解析 frontmatter + 折叠 description + 正文', () => {
 });
 
 test('内置=通用技能 + 跨行业打法手册,不含行业专用模板技能', () => {
-  const builtin = ['xlsx', 'docx', 'pptx', 'pdf', 'drawio', 'docx-gongwen', 'xlsx-financial', 'chart-selection'];
+  const builtin = [...BUILTIN_SKILLS.map((c) => c.name), ...PLAYBOOK_SKILLS.map((c) => c.name)];
   assert.ok(defaultLibrary().all().every((c) => builtin.includes(c.name)));
   assert.equal(
     defaultLibrary().match('写课程论文 三线表', 'word').some((c) => c.name === 'academic-paper-docx'),
@@ -58,6 +59,6 @@ test('add 去重 + toMcpTools', () => {
   lib.add(BUILTIN_SKILLS[0]!).add(BUILTIN_SKILLS[0]!);
   assert.equal(lib.all().length, 1);
   const tools = defaultLibrary().toMcpTools();
-  assert.equal(tools.length, BUILTIN_SKILLS.length + 3); // 通用卡片 + 3 篇打法手册
+  assert.equal(tools.length, BUILTIN_SKILLS.length + PLAYBOOK_SKILLS.length); // 通用卡片 + 全部打法手册
   assert.ok(tools.every((t) => t.name.startsWith('skill__')));
 });
