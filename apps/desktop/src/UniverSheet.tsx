@@ -37,10 +37,12 @@ export interface SheetHandle {
   setFontColor(a1: string, color: string): void;
   setBold(a1: string, on?: boolean): void;
   setNumberFormat(a1: string, pattern: string): void;
+  /** null = 清掉显式对齐,回到 Univer 默认(文本左/数字右)。 */
+  setAlign(a1: string, align: 'left' | 'center' | 'right' | null): void;
   focus(a1: string): void;
   getValue(a1: string): unknown;
-  /** 整格改前状态(值/公式/填充/字色/加粗)——供"拒绝/原文视图"维度级精确还原。 */
-  getCellState(a1: string): { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean };
+  /** 整格改前状态(值/公式/填充/字色/加粗/对齐)——供"拒绝/原文视图"维度级精确还原。 */
+  getCellState(a1: string): { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean; align?: 'left' | 'center' | 'right' | null };
   /** 整张表的全局快照(概览 + 数据 + 焦点),与是否圈选无关。 */
   getSheet(): UniSel | null;
   // 结构性操作(Agent 赋能:插删行列 / 合并 / 冻结 / 清空)——驱动真实 Univer 网格
@@ -99,6 +101,7 @@ interface FRangeOps {
   setFontColor(c: string): void;
   setFontWeight(w: string): void;
   setNumberFormat(p: string): void;
+  setHorizontalAlignment(a: string | null): void;
   getValue(): unknown;
   getValues(): unknown[][];
   setValues(v: unknown[][]): void;
@@ -298,17 +301,19 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
       setFontColor: (a1, c) => safe(() => sheet()?.getRange(a1).setFontColor(c)),
       setBold: (a1, on = true) => safe(() => sheet()?.getRange(a1).setFontWeight(on ? 'bold' : 'normal')),
       setNumberFormat: (a1, p) => safe(() => sheet()?.getRange(a1).setNumberFormat(p)),
+      // Univer facade 怪癖:水平对齐取值 left|center|normal,'normal' 才是右对齐;null 走 SetStyleCommand 清 ht
+      setAlign: (a1, align) => safe(() => sheet()?.getRange(a1).setHorizontalAlignment(align === 'right' ? 'normal' : align)),
       focus: (a1) => safe(() => { const s = sheet(); if (s) s.setActiveRange(s.getRange(a1)); }),
       getValue: (a1) => { let v: unknown; safe(() => { v = sheet()?.getRange(a1).getValue(); }); return v; },
       getCellState: (a1) => { // 尽力而为:facade 缺哪个 getter 就少采哪个维度(revert 有兜底默认值)
-        const st: { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean } = {};
+        const st: { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean; align?: 'left' | 'center' | 'right' | null } = {};
         safe(() => {
           const r = sheet()?.getRange(a1); if (!r) return;
           st.v = r.getValue();
           const f = (r as { getFormulas?: () => string[][] }).getFormulas?.()?.[0]?.[0];
           st.f = f && String(f).startsWith('=') ? String(f) : null;
-          const sd = (r as { getCellStyleData?: () => { bg?: { rgb?: string } | null; cl?: { rgb?: string } | null; bl?: number | null } | null }).getCellStyleData?.();
-          if (sd) { st.bg = sd.bg?.rgb ?? null; st.color = sd.cl?.rgb ?? null; st.bold = sd.bl === 1; }
+          const sd = (r as { getCellStyleData?: () => { bg?: { rgb?: string } | null; cl?: { rgb?: string } | null; bl?: number | null; ht?: number | null } | null }).getCellStyleData?.();
+          if (sd) { st.bg = sd.bg?.rgb ?? null; st.color = sd.cl?.rgb ?? null; st.bold = sd.bl === 1; st.align = sd.ht === 1 ? 'left' : sd.ht === 2 ? 'center' : sd.ht === 3 ? 'right' : null; }
         });
         return st;
       },

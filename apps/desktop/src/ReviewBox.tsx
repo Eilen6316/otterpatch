@@ -63,12 +63,22 @@ export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBat
               const newV = w ? (w.replacement ?? '') : (it.after ?? '');
               const fmtDesc = it.after || (w?.style ? Object.keys(w.style).join('/') : '') || t('改格式');
               const curHunk = active && k === ridx;
+              const acc = accepted.has(akey(d.changeSetId, it.editId));
+              const seen = active && k < ridx; // 游标已过 = 已处置,行尾亮出处置结果
               return (
-                <div key={it.editId} data-cid={w?.domId} className={'gd-hunk' + (curHunk ? ' cur' : '') + (w && hoverCid && hoverCid === w.domId ? ' is-linked' : '') + (accepted.has(akey(d.changeSetId, it.editId)) ? '' : ' gd-rej')}
+                <div key={it.editId} data-cid={w?.domId} className={'gd-hunk' + (curHunk ? ' cur' : '') + (w && hoverCid && hoverCid === w.domId ? ' is-linked' : '') + (acc ? '' : ' gd-rej')}
                   onMouseEnter={() => { if (w) { onHoverCid(w.domId); wordRef.current?.linkChange(w.domId); } }}
                   onMouseLeave={() => { onHoverCid(null); wordRef.current?.linkChange(null); }}
                   onClick={() => { if (active) onSetReviewIdx(k); if (w) wordRef.current?.activateChange(w.domId); }} title={it.label}>
-                  <div className="gd-ref"><span className="gd-at">@@</span> {refShort} <span className="gd-lbl">{it.label}</span></div>
+                  <div className="gd-ref"><span className="gd-at">@@</span> {refShort} <span className="gd-lbl">{it.label}</span>
+                    {active ? (
+                      <span className="gd-acts" onClick={(e) => e.stopPropagation()}>
+                        {seen ? <span className={'gd-state ' + (acc ? 'ok' : 'no')}>{acc ? '✓' : '✕'}</span> : null}
+                        <button className="gd-btn no" title={t('拒绝')} aria-label={t('拒绝')} onClick={() => onReject(k)}><IconX size={11} /></button>
+                        <button className="gd-btn ok" title={t('接受')} aria-label={t('接受')} onClick={() => onAccept(k)}><IconCheck size={11} /></button>
+                      </span>
+                    ) : null}
+                  </div>
                   {isFmt ? (
                     <div className="gd-line fmt"><span className="gd-sign">~</span>{fmtDesc}{oldV ? <span className="gd-ctx">　「{oldV.length > 42 ? oldV.slice(0, 42) + '…' : oldV}」</span> : null}</div>
                   ) : (<>
@@ -100,43 +110,20 @@ export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBat
       ) : turn.reverted ? (
         <div className="rv-final dim">↩ {t('已撤销')}</div>
       ) : cur ? (
-        <>
-          <div className={'rv-card' + (accepted.has(akey(d.changeSetId, cur.editId)) ? '' : ' rejected')}>
-            <div className="rv-card-h">
-              <span className={'rv-badge ' + cur.badge}>{badgeText(cur.badge)}</span>
-              <span className="rv-ref">{cur.ref}</span>
-            </div>
-            {(() => {
-              if (cur.style) return cur.after ? <div className="rv-fmt">{cur.after}</div> : null; // format-only edit: show the format description
-              const op = turn.ops.find((o) => o.editId === cur.editId);
-              const w = turn.word?.find((x) => x.editId === cur.editId);
-              const before = w ? w.quote : op?.before;
-              const after = w ? w.replacement : cur.after;
-              const hasOld = cur.badge !== 'add' && before != null && String(before) !== '';
-              const hasNew = cur.badge !== 'remove' && after != null;
-              if (!hasOld && !hasNew) return null;
-              return (
-                <div className="rv-diff">
-                  {hasOld ? <div className="rv-old"><span className="rv-sign">−</span>{String(before)}</div> : null}
-                  {hasNew ? <div className="rv-new"><span className="rv-sign">+</span>{after}</div> : null}
-                </div>
-              );
-            })()}
-            <div className="rv-why">{cur.label}</div>
-          </div>
-          <div className="rv-acts">
-            <button className="rv-step" disabled={ridx <= 0} onClick={() => onSetReviewIdx(Math.max(0, ridx - 1))} title={t('上一处')}><IconChevron size={14} /></button>
-            <button className="btn no" onClick={() => onReject(ridx)}><IconX size={14} /> {t('拒绝')}</button>
-            <button className="btn ok" onClick={() => onAccept(ridx)}><IconCheck size={14} /> {t('接受')}</button>
-            <span className="grow" />
-            {BATCH_RX.test(d.intent ?? '') ? (
-              <label className="rv-auto" title={t('接受后自动续发"下一批",每批仍逐条可审')}>
-                <input type="checkbox" checked={autoBatch} onChange={(e) => onSetAutoBatch(e.target.checked)} />⚡{t('自动续批')}
-              </label>
-            ) : null}
-            <button className="btn solid" onClick={onAcceptAll}>{t('全部接受')}{total > 1 ? ` · ${total}` : ''}</button>
-          </div>
-        </>
+        // 单一交互面:列表里当前行即"审阅卡"(高亮展开),这里只留固定位置的动作条(串行审阅零鼠标位移)
+        <div className="rv-acts">
+          <button className="rv-step" disabled={ridx <= 0} onClick={() => onSetReviewIdx(Math.max(0, ridx - 1))} title={t('上一处')}><IconChevron size={14} /></button>
+          <span className={'rv-badge ' + cur.badge}>{badgeText(cur.badge)}</span>
+          <button className="btn no" onClick={() => onReject(ridx)}><IconX size={14} /> {t('拒绝')}</button>
+          <button className="btn ok" onClick={() => onAccept(ridx)}><IconCheck size={14} /> {t('接受')}</button>
+          <span className="grow" />
+          {BATCH_RX.test(d.intent ?? '') ? (
+            <label className="rv-auto" title={t('接受后自动续发"下一批",每批仍逐条可审')}>
+              <input type="checkbox" checked={autoBatch} onChange={(e) => onSetAutoBatch(e.target.checked)} />⚡{t('自动续批')}
+            </label>
+          ) : null}
+          <button className="btn solid" onClick={onAcceptAll}>{t('全部接受')}{total > 1 ? ` · ${total}` : ''}</button>
+        </div>
       ) : active ? (
         <div className="rv-acts done">
           <span className="rv-donen">{t('已逐条过完')} · {d.items.filter((x) => accepted.has(akey(d.changeSetId, x.editId))).length}/{total}</span>

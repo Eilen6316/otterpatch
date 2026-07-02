@@ -7,6 +7,7 @@
  */
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
 import { useT } from './i18n.js';
+import { DiffToggle } from './DiffToggle.js';
 import {
   IconUndo, IconRedo, IconClipboard, IconScissors, IconCopy, IconFormatBrush,
   IconFontGrow, IconFontShrink, IconChangeCase, IconClearFormat, IconStrikethrough,
@@ -52,8 +53,9 @@ export interface RichDocHandle {
   getContext(): string;
   /** 全文快照(逐段全文+样式,清样投影)——随请求上送 serve,供 read_blocks/find_text 等工具按需取,不进 prompt。 */
   getDocSnapshot(): { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string }> };
-  /** 落一条 Agent 改动(文本改写 replacement 或格式 fmt),按 editId 包裹,可还原。 */
-  applyEdit(editId: string, quote: string, opts: { replacement?: string; fmt?: DocFmt }): boolean;
+  /** 落一条 Agent 改动(文本改写 replacement / 格式 fmt / 删段 removeBlock),按 editId 包裹,可还原。
+   *  blockIdx=段号锚(0-based,与 getContext/getDocSnapshot 的"第N段"同序):quote 定位失败或空段落时的兜底通道。 */
+  applyEdit(editId: string, quote: string, opts: { replacement?: string; fmt?: DocFmt; blockIdx?: number; removeBlock?: boolean }): boolean;
   /** 按 editId 精确还原该条改动(undoMap 缺失时按 DOM 现场兜底);false=完全找不到可还原目标。 */
   revert(editId: string): boolean;
   /** 选中/滚动到某条改动。 */
@@ -69,8 +71,9 @@ export interface RichDocHandle {
   /** 载入外部 HTML(真实 docx 导入):替换正文、清空修订/撤销状态并持久化。 */
   loadHTML(html: string): void;
 }
-/** 上抛给 App 的 Word 选区(与 Excel 的 UniSel 对等,供输入区显示"已选"芯片 + 喂给 Agent 聚焦,含选区格式)。 */
-export interface WordSel { text: string; block: string; chars: number; font?: string; size?: number; bold?: boolean; italic?: boolean; align?: string }
+/** 上抛给 App 的 Word 选区(与 Excel 的 UniSel 对等,供输入区显示"已选"芯片 + 喂给 Agent 聚焦,含选区格式)。
+ *  para:选中目标所在段号(1-based)——图片等非文字目标靠它告诉 Agent 位置。 */
+export interface WordSel { text: string; block: string; chars: number; font?: string; size?: number; bold?: boolean; italic?: boolean; align?: string; para?: number }
 
 /** props 全可选(避免 Record<string,never> 与 ref 冲突)。 */
 export interface RichDocProps {
@@ -178,6 +181,10 @@ function cleanClone(el: HTMLElement): HTMLElement {
   return c;
 }
 const cleanBlockText = (el: HTMLElement): string => cleanClone(el).textContent ?? '';
+/** 审阅可见块列表(排除待删段):getContext/getDocSnapshot/applyEdit(blockIdx) 共用同一序,Agent 拿到的段号才不会漂移。 */
+const visibleBlocks = (root: HTMLElement): HTMLElement[] => (Array.from(root.querySelectorAll(BLOCK_SEL)) as HTMLElement[]).filter((el) => el.getAttribute('data-kind') !== 'remove');
+/** 块内图片摘要([图片 alt 宽×高]):进上下文/快照,Agent 才感知得到图片、才不会把含图段当纯空段清理。 */
+const imgBrief = (el: HTMLElement): string => Array.from(el.querySelectorAll('img')).map((im) => `[图片${im.alt ? ' ' + im.alt : ''}${im.width ? ' ' + im.width + '×' + im.height : ''}]`).join('');
 
 /** 在 root 的文本里找到 quote 的 Range(跨文本节点);from=起始字符偏移(供"查找下一个");跨块命中自动跳到下一处。 */
 function findRange(root: HTMLElement, quote: string, from = 0): Range | null {
@@ -345,6 +352,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
         const blockLabel = /^H[1-3]$/.test(tag) ? '标题' : tag === 'BLOCKQUOTE' ? '引用' : tag === 'LI' ? '列表项' : '正文';
         let ae: Node | null = s.anchorNode; if (ae && ae.nodeType === 3) ae = ae.parentElement;
         const fb = ae instanceof HTMLElement ? fmtBrief(ae) : null;
+        edRef.current.querySelectorAll('.rd-img-sel').forEach((el2) => el2.classList.remove('rd-img-sel')); // 文字选区替代图片选中
         selCb.current?.({ text: selTxt.length > 400 ? selTxt.slice(0, 400) + '…' : selTxt, block: blockLabel, chars: selTxt.length, ...(fb ? { font: fb.font, size: fb.size, bold: fb.bold, italic: fb.italic, align: fb.align } : {}) });
       } else selCb.current?.(null);
       try {
@@ -500,13 +508,13 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   useImperativeHandle(ref, (): RichDocHandle => ({
     getText: () => { // 清样投影:喂给 Agent 的永远是"改后本体",del 里的旧文不进上下文(否则新旧连体会污染下一轮的 quote)
       const root = edRef.current; if (!root) return '';
-      const blocks = Array.from(root.querySelectorAll(BLOCK_SEL)) as HTMLElement[];
+      const blocks = visibleBlocks(root);
       if (!blocks.length) return (cleanClone(root).textContent ?? '').trim();
       return blocks.map((b) => cleanBlockText(b).replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
     },
     getContext: () => {
       const root = edRef.current; if (!root) return '(空文档)';
-      const blocks = Array.from(root.querySelectorAll('p,h1,h2,h3,h4,li,blockquote')) as HTMLElement[];
+      const blocks = visibleBlocks(root); // 与 getDocSnapshot/applyEdit(blockIdx) 同一序,"第N段"编号三处一致
       if (!blocks.length) return root.innerText || '(空文档)';
       const fonts = new Set<string>(); const sizes = new Set<number>(); const colors = new Set<string>();
       const heads: string[] = []; const bodyCombo = new Map<string, number>(); // 样式系统摘要的原料:标题树 + 正文基线组合
@@ -517,11 +525,12 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
         const tag = el.tagName.toLowerCase();
         const style = tag === 'h1' ? '标题1' : tag === 'h2' ? '标题2' : tag === 'h3' ? '标题3' : tag === 'h4' ? '标题4' : tag === 'blockquote' ? '引用' : tag === 'li' ? '列表项' : '正文';
         const txt = cleanBlockText(el).replace(/\s+/g, ' ').trim(); // 同样走清样投影,别把 del 旧文标进段落概览
+        const img = imgBrief(el); // 图片可感知:含图段标出 [图片 alt 宽×高],空段才真算空
         if (/^标题/.test(style)) heads.push(`${'  '.repeat(parseInt(tag.slice(1), 10) - 1)}H${tag.slice(1)} 第${i + 1}段 ${txt.slice(0, 30)}`);
         else if (style === '正文') bodyCombo.set(`${b.font} ${b.size}pt`, (bodyCombo.get(`${b.font} ${b.size}pt`) ?? 0) + 1);
         const marks = [style, `${b.font} ${b.size}pt`, b.color !== '#000000' && b.color !== '#1f2430' ? b.color : '', b.bold ? '加粗' : '', b.italic ? '斜体' : '', b.align !== '左对齐' ? b.align : ''].filter(Boolean).join(' · ');
         const cut = txt.length > 300; if (cut) truncated++;
-        return `第${i + 1}段 [${marks}]: ${cut ? txt.slice(0, 300) + '…(已截断)' : txt}`;
+        return `第${i + 1}段 [${marks}]: ${img}${cut ? txt.slice(0, 300) + '…(已截断)' : txt || (img ? '' : '(空段)')}`;
       });
       const baseline = [...bodyCombo].sort((a, b2) => b2[1] - a[1]);
       const sys = `样式系统: ${heads.length ? '标题树 ' + heads.length + ' 个(' + heads.slice(0, 8).join(' / ') + (heads.length > 8 ? ' …' : '') + ')' : '无标题样式段落'};正文基线 ${baseline[0] ? baseline[0][0] + '(' + baseline[0][1] + ' 段)' : '(无)'}${baseline.length > 1 ? ',另有 ' + (baseline.length - 1) + ' 种偏离基线的正文排版 ⚠ 基线不统一' : ''}`;
@@ -530,13 +539,13 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     },
     getDocSnapshot: () => { // 全文快照(清样投影):serve 侧不进 prompt,只供 read_blocks/find_text/get_outline/get_style_usage 取数
       const root = edRef.current; if (!root) return { blocks: [] };
-      const blocks = Array.from(root.querySelectorAll(BLOCK_SEL)) as HTMLElement[];
+      const blocks = visibleBlocks(root);
       return {
         blocks: blocks.map((el) => {
           const b = fmtBrief(el);
           const tag = el.tagName.toLowerCase();
           const style = tag === 'h1' ? '标题1' : tag === 'h2' ? '标题2' : tag === 'h3' ? '标题3' : tag === 'h4' ? '标题4' : tag === 'blockquote' ? '引用' : tag === 'li' ? '列表项' : '正文';
-          return { style, text: cleanBlockText(el).replace(/\s+/g, ' ').trim(), font: b.font, size: b.size, align: b.align };
+          return { style, text: imgBrief(el) + cleanBlockText(el).replace(/\s+/g, ' ').trim(), font: b.font, size: b.size, align: b.align };
         }),
       };
     },
@@ -545,8 +554,8 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       if (!root) return false;
       if (root.querySelector(`[data-cid="${cssq(editId)}"]`)) return true; // 幂等:同一改动只落一次(刷新后重复接受/重放不叠标记)
       const fmt = opts.fmt;
-      // 全文格式/页面级(无 quote):字符级改根内联样式(继承给各段);columns/margin/orient 落页面态;记 prior/next 供四态切换与还原
-      if (!quote && fmt) {
+      // 全文格式/页面级(无 quote 且无段号锚):字符级改根内联样式(继承给各段);columns/margin/orient 落页面态;记 prior/next 供四态切换与还原
+      if (!quote && fmt && opts.blockIdx == null && !opts.removeBlock) {
         if (undoMap.current.has(editId) || docChgsRef.current.some((c) => c.cid === editId)) return true; // 幂等(root 改动没有 data-cid 可查)
         const s = root.style;
         const snap = (): Record<string, string> => ({
@@ -580,11 +589,29 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
         persist();
         return true;
       }
-      const range = findRangeLoose(root, quote); // 宽松定位:容忍模型 quote 的空白/换行差异,edit 才真落地
+      // 双通道锚定:先按 quote 宽松定位(容忍模型 quote 的空白/换行差异);失败或空 quote 落到段号锚(空段落也能锚住)
+      let range = quote ? findRangeLoose(root, quote) : null;
+      if (!range && opts.blockIdx != null) {
+        const blk = visibleBlocks(root)[opts.blockIdx];
+        if (blk) { range = document.createRange(); range.selectNodeContents(blk); }
+      }
       if (!range) return false;
       // 拒绝落进未定修订内部:嵌套标记会毁掉 flatten/revert 的对称性(服务端锚点校验负责修复此类 quote)
       const inRev = (nd: Node): boolean => { let e: Node | null = nd; while (e && e !== root) { if (e instanceof HTMLElement && (e.classList.contains('rd-chg') || e.tagName === 'DEL' || e.tagName === 'INS')) return true; e = e.parentNode; } return false; };
       if (inRev(range.startContainer) || inRev(range.endContainer)) return false;
+      // 删段(结构操作):整段打 remove 修订标记 —— mark 视图红删除线、clean/final 视图整段隐藏;接受才物理移除
+      if (opts.removeBlock) {
+        let blk: Node | null = range.startContainer;
+        while (blk && blk !== root) { if (blk instanceof HTMLElement && BLOCK_TAGS.test(blk.tagName)) break; blk = blk.parentNode; }
+        if (!(blk instanceof HTMLElement) || blk === root) return false;
+        const prior = blk.cloneNode(true) as Element;
+        blk.classList.add('rd-chg-blkdel');
+        blk.setAttribute('data-edit-block', editId); blk.setAttribute('data-cid', editId); blk.setAttribute('data-kind', 'remove'); blk.setAttribute('data-glyph', '✕段');
+        undoMap.current.set(editId, { mode: 'block', prior, el: blk });
+        refreshHasDiff();
+        persist();
+        return true;
+      }
       // 段落级格式(且非文本改写):快照整段以便还原,套用后打 data-edit-block 标记
       if (opts.replacement == null && fmt && BLOCK_FMT(fmt)) {
         let blk: Node | null = range.startContainer;
@@ -673,6 +700,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       for (const el of els) {
         if (el.hasAttribute('data-edit-block')) {
           ['data-edit-block', 'data-cid', 'data-kind', 'data-glyph'].forEach((a) => el.removeAttribute(a));
+          el.classList.remove('rd-chg-blkdel'); // 删段兜底还原:剥标记即让整段复现
           el.style.textAlign = ''; el.style.textAlignLast = ''; el.style.lineHeight = ''; el.style.backgroundColor = '';
         } else if (el.classList.contains('rd-fmt')) {
           el.replaceWith(...Array.from(el.childNodes));
@@ -735,6 +763,9 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       // 接受=物理定稿(不是加类化妆):del 删掉、ins 解包,修订标识剥净 —— 文档回归本体,上下文/字数/查找全部自然干净
       const stripRev = (el: HTMLElement): void => { ['data-edit', 'data-cid', 'data-kind', 'data-glyph', 'tabindex', 'contenteditable', 'aria-label'].forEach((a) => el.removeAttribute(a)); };
       for (const el of els) {
+        if (el.getAttribute('data-kind') === 'remove') {
+          el.remove(); continue; // 删段:接受=物理移除整段
+        }
         if (el.hasAttribute('data-edit-block')) {
           el.removeAttribute('data-edit-block'); stripRev(el); // 段落样式已在块上,剥标记即定稿
         } else if (el.classList.contains('rd-fmt')) {
@@ -758,6 +789,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     },
     closeUndoWindow: () => { // 新提案到达=上一轮撤销窗口关闭:剥 data-undo,裸 span 顺手解包;残留的全文级 chip 视为默认定稿
       const root = edRef.current; if (!root) return;
+      root.querySelectorAll('[data-kind="remove"]').forEach((el) => el.remove()); // 上一轮未决的删段默认定稿(物理移除)——否则新一轮的段号会和 Agent 快照错位
       root.querySelectorAll('[data-undo]').forEach((el) => {
         el.removeAttribute('data-undo');
         if (el.tagName === 'SPAN' && !el.attributes.length) el.replaceWith(...Array.from(el.childNodes));
@@ -955,10 +987,18 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     edRef.current?.classList.add('rd-painting');
     notify(t('格式刷已就绪,划选目标文字套用'));
   };
-  // 点选图片/对象时记住它,作为「排列」命令(旋转/位置/层次…)的目标
+  // 点选图片/对象时记住它,作为「排列」命令的目标;图片同时作为圈选目标上抛(此前图片点了没反应、选不到)
   const onEdClick = (e: React.MouseEvent): void => {
+    const root = edRef.current;
     const hit = (e.target as HTMLElement | null)?.closest?.('img,svg,.rd-textbox');
-    if (hit && edRef.current?.contains(hit)) lastImg.current = hit as HTMLElement;
+    if (!hit || !root?.contains(hit)) return;
+    lastImg.current = hit as HTMLElement;
+    if (hit instanceof HTMLImageElement) {
+      root.querySelectorAll('.rd-img-sel').forEach((el) => el.classList.remove('rd-img-sel'));
+      hit.classList.add('rd-img-sel');
+      const bi = visibleBlocks(root).findIndex((b) => b.contains(hit)); // 与 Agent 上下文同一"第N段"序
+      selCb.current?.({ text: `[图片${hit.alt ? ' ' + hit.alt : ''}${hit.width ? ' ' + hit.width + '×' + hit.height : ''}]`, block: '图片', chars: 0, ...(bi >= 0 ? { para: bi + 1 } : {}) });
+    }
   };
   const onEdMouseUp = (): void => {
     const fmt = painter.current;
@@ -1677,19 +1717,19 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       {page.ruler ? <div className="rd-ruler" /> : null}
       <div className="rd-stage">
         {hasDiff ? (
-          <div className="rd-difftoggle" role="group" aria-label="Agent 修订视图">
-            <span className="rd-dt-lb"><span className="rd-dt-dot" />Agent 修订</span>
-            {chgCount > 0 ? <span className="rd-dt-count">{Math.min(stepPos + 1, chgCount)}<i>/</i>{chgCount}</span> : null}
-            <div className="rd-dt-seg-wrap" data-active={diffView}>
-              <span className="rd-dt-thumb" />
-              {([['orig', '原文'], ['mark', '修订'], ['clean', '清样'], ['final', '改后']] as const).map(([v, lb]) => (
-                <button key={v} className={'rd-dt-seg' + (diffView === v ? ' on' : '')} onMouseDown={(e) => { e.preventDefault(); setDiffView(v); }} title={v === 'orig' ? '只看改前' : v === 'mark' ? '红删绿增对照' : v === 'clean' ? '清样:只留改后 + 左侧改动条' : '只看改后'}>{lb}</button>
-              ))}
-            </div>
-            <span className="rd-dt-nav">
-              <button className="rd-dt-step" onMouseDown={(e) => { e.preventDefault(); step(-1); }} aria-label="上一处" title="上一处">‹</button>
-              <button className="rd-dt-step" onMouseDown={(e) => { e.preventDefault(); step(1); }} aria-label="下一处" title="下一处">›</button>
-            </span>
+          <DiffToggle<'orig' | 'mark' | 'clean' | 'final'>
+            label="Agent 修订"
+            segs={[
+              { v: 'orig', label: '原文', title: '只看改前' },
+              { v: 'mark', label: '修订', title: '红删绿增对照' },
+              { v: 'clean', label: '清样', title: '清样:只留改后 + 左侧改动条' },
+              { v: 'final', label: '改后', title: '只看改后' },
+            ] as const}
+            active={diffView}
+            count={chgCount > 0 ? { pos: stepPos, total: chgCount } : null}
+            onPick={setDiffView}
+            onStep={step}
+          >
             {docChgs.map((c) => (
               <span key={c.cid} className={'rd-dt-docchg' + (linkedCid === c.cid ? ' is-linked' : '')} title={'全文/版面改动:' + c.label}>
                 <span className="rd-dt-docchg-glyph">¶</span>
@@ -1698,7 +1738,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
                 <button className="rd-dt-docchg-btn ok" onMouseDown={(e) => { e.preventDefault(); resolveCb.current?.(c.cid, 'accept'); }} aria-label="接受该全文改动" title="接受">✓</button>
               </span>
             ))}
-          </div>
+          </DiffToggle>
         ) : null}
         {page.nav ? (
           <aside className="rd-nav">
