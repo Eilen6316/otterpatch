@@ -15,6 +15,7 @@ import { docxToHtml } from './docximport.js';
 import { akey, BATCH_RX, AUTO_BATCH_CAP } from './review-shared.js';
 import { ReviewBox } from './ReviewBox.js';
 import { AgentHome } from './AgentHome.js';
+import { Composer } from './Composer.js';
 import { Markdown } from './Markdown.js';
 import { chartToPngDataUrl, gridToChartSpec, buildChartGrid, specFromInline } from './chart.js';
 
@@ -1616,112 +1617,48 @@ export function App() {
               )}
             </div>
 
-            <div className="composer">
-              {cfgOpen && (
-                <div className="modelcfg">
-                  <h4>{t('模型')} · BYOK</h4>
-                  <div className="prov">
-                    {MODEL_PROVIDERS.map((p) => (
-                      <button
-                        key={p.id}
-                        className={'pchip' + (p.id === provider ? ' on' : '')}
-                        onClick={() => pickProvider(p.id)}
-                      >
-                        {p.label}
-                      </button>
-                    ))}
-                  </div>
-                  <label>{t('模型')}</label>
-                  <input
-                    value={model}
-                    onChange={(e) => {
-                      setModel(e.target.value);
-                      lsSet('oa.model', e.target.value);
-                    }}
-                    placeholder={curProvider.model}
-                  />
-                  <label>API Key(BYOK)</label>
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => {
-                      setApiKey(e.target.value);
-                      lsSet('oa.apiKey', e.target.value);
-                    }}
-                    placeholder="sk-..."
-                  />
-                  <label>{t('本机服务地址(默认即可,一般无需修改)')}</label>
-                  <input
-                    className="dim"
-                    value={server}
-                    onChange={(e) => {
-                      setServer(e.target.value);
-                      lsSet('oa.server', e.target.value);
-                    }}
-                    placeholder="http://localhost:4319"
-                  />
-                  <div className="note">
-                    <IconHelp size={13} /> {t('密钥只存在你的浏览器本地,绝不上传服务器;桌面版会自动启动本机服务。')}
-                  </div>
-                </div>
-              )}
-              <div className="box">
-                <div className="selchip">
-                  <span className="dot" />{' '}
-                  {isExcel ? (
-                    uniSel ? (
-                      <>
-                        {t('已选')} <b>{uniSel.a1}</b> · {uniSel.rows}×{uniSel.cols}
-                      </>
-                    ) : (
-                      <span className="muted">{t('未选区域 · 将基于整张表理解')}</span>
-                    )
-                  ) : fmt === 'drawio' && boardSel ? (
-                    <>{boardSel.chip}</>
-                  ) : fmt === 'word' ? (
-                    wordSel ? (
-                      <>
-                        {t('已选')} <b>{wordSel.chars} {t('字')}</b> · <span className="sel-quote">{wordSel.text}</span>
-                      </>
-                    ) : (
-                      <span className="muted">{t('未选文字 · 将基于整篇文档理解')}</span>
-                    )
+            <Composer
+              cfgOpen={cfgOpen}
+              onToggleCfg={() => setCfgOpen((v) => !v)}
+              providers={MODEL_PROVIDERS}
+              providerId={provider}
+              providerLabel={curProvider.label}
+              defaultModel={curProvider.model}
+              onPickProvider={pickProvider}
+              model={model}
+              onModel={(v) => { setModel(v); lsSet('oa.model', v); }}
+              apiKey={apiKey}
+              onApiKey={(v) => { setApiKey(v); lsSet('oa.apiKey', v); }}
+              server={server}
+              onServer={(v) => { setServer(v); lsSet('oa.server', v); }}
+              selChip={
+                isExcel ? (
+                  uniSel ? (
+                    <>{t('已选')} <b>{uniSel.a1}</b> · {uniSel.rows}×{uniSel.cols}</>
                   ) : (
-                    <>
-                      {t('当前')} <b>{t(curFmt.label)}</b> {t('工作区')}
-                    </>
-                  )}
-                </div>
-                <textarea
-                  value={intent}
-                  onChange={(e) => setIntent(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                      e.preventDefault();
-                      if (!busy) void send();
-                    }
-                  }}
-                  placeholder={t(PLACEHOLDERS[fmt])}
-                  rows={1}
-                />
-                <div className="row">
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    accept=".xlsx,.docx,.pdf,.drawio"
-                    data-role="attach"
-                    style={{ display: 'none' }}
-                    onChange={(e) => onFile(e.target.files?.[0] ?? undefined)}
-                  />
-                  <button className={'iconbtn plus' + (fileName ? ' on' : '')} title={fileName || t('附件')} onClick={() => fileRef.current?.click()}><IconPlus size={16} /></button>
-                  <span className="grow" />
-                  <button className={'model' + (cfgOpen ? ' on' : '')} onClick={() => setCfgOpen((v) => !v)}>
-                    {curProvider.label} <IconChevron size={13} />
-                  </button>
-                  <button className="send" title={t('发送')} onClick={() => void send()} disabled={busy}><IconSend size={16} /></button>
-                </div>
-              </div>
-            </div>
+                    <span className="muted">{t('未选区域 · 将基于整张表理解')}</span>
+                  )
+                ) : fmt === 'drawio' && boardSel ? (
+                  <>{boardSel.chip}</>
+                ) : fmt === 'word' ? (
+                  wordSel ? (
+                    <>{t('已选')} <b>{wordSel.chars} {t('字')}</b> · <span className="sel-quote">{wordSel.text}</span></>
+                  ) : (
+                    <span className="muted">{t('未选文字 · 将基于整篇文档理解')}</span>
+                  )
+                ) : (
+                  <>{t('当前')} <b>{t(curFmt.label)}</b> {t('工作区')}</>
+                )
+              }
+              intent={intent}
+              onIntent={setIntent}
+              placeholder={t(PLACEHOLDERS[fmt])}
+              busy={busy}
+              onSend={() => { void send(); }}
+              fileRef={fileRef}
+              fileName={fileName}
+              onFile={onFile}
+            />
           </aside>
         </main>
         {drop && DROPDOWNS[drop.key] && (
