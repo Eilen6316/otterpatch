@@ -228,8 +228,7 @@ svg { display: block; }
 .rd-tip { position: fixed; z-index: 210; transform: translateX(-50%); background: #303133; color: #fff; font-size: 12px; line-height: 1.3; padding: 5px 10px; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.22); pointer-events: none; white-space: nowrap; max-width: 260px; animation: rdTip 0.09s ease; }
 .rd-tip::before { content: ""; position: absolute; left: 50%; top: -4px; transform: translateX(-50%); border: 4px solid transparent; border-top: 0; border-bottom-color: #303133; }
 @keyframes rdTip { from { opacity: 0; transform: translateX(-50%) translateY(-2px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
-/* Agent 段落级改动的轻标记(与行内 [data-edit] 呼应) */
-.rd-page [data-edit-block] { box-shadow: inset 3px 0 0 rgba(37,99,235,0.35); }
+/* Agent 段落级改动:左侧改动条统一走下方 ::before gutter 体系,不再单独画蓝条 */
 /* 输入区"已选"芯片里的原文片段:单行省略 */
 .sel-quote { display: inline-block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; color: var(--text-soft); }
 /* 字数统计弹窗 */
@@ -265,7 +264,6 @@ svg { display: block; }
 .rd-page .rd-tbl { border-collapse: collapse; width: 100%; margin: 12px 0; }
 .rd-page .rd-tbl td, .rd-page .rd-tbl th { border: 1px solid #c9ced6; padding: 6px 9px; min-width: 40px; vertical-align: top; }
 .rd-page.rd-painting { cursor: cell; }
-.rd-page [data-edit] { background: rgba(37,99,235,0.06); border-radius: 2px; }
 .rd-flash { animation: rdflash 1.2s ease; }
 @keyframes rdflash { 0%, 100% { background: rgba(37,99,235,0.06); } 30% { background: #fde68a; } }
 
@@ -349,25 +347,26 @@ svg { display: block; }
 .rd-chg.is-active del.rd-del { opacity: .9; }
 .rd-chg.is-active ins.rd-ins { box-shadow: inset 0 -2px 0 var(--chg-ins-line); }
 /* 四态:orig 只旧 / mark 红删绿增 / clean 只新+改动条 / final 只新(平滑收起 del) */
-.rd-page.rd-diff-final del.rd-del, .rd-page.rd-diff-clean del.rd-del, .rd-page.rd-hide-markup del { display: inline-block; max-inline-size: 0; opacity: 0; overflow: hidden; white-space: nowrap; vertical-align: text-bottom; }
-.rd-page.rd-diff-final ins.rd-ins, .rd-page.rd-diff-clean ins.rd-ins, .rd-page.rd-hide-markup ins { color: inherit; text-decoration: none; background: transparent; box-shadow: none; }
+.rd-page.rd-diff-final del.rd-del, .rd-page.rd-diff-clean del.rd-del { display: inline-block; max-inline-size: 0; opacity: 0; overflow: hidden; white-space: nowrap; vertical-align: text-bottom; }
+.rd-page.rd-diff-final ins.rd-ins, .rd-page.rd-diff-clean ins.rd-ins { color: inherit; text-decoration: none; background: transparent; box-shadow: none; }
 .rd-page.rd-diff-clean .rd-fmt { text-decoration: none; }
 .rd-page.rd-diff-clean .rd-fmt::after, .rd-page.rd-diff-orig .rd-fmt::after { display: none; }
 .rd-page.rd-diff-orig ins.rd-ins { display: none; }
 .rd-page.rd-diff-orig del.rd-del { display: inline; color: inherit; text-decoration: none; background: transparent; opacity: 1; }
 .rd-page.rd-diff-orig .rd-fmt { text-decoration: none; }
-/* 接受=收起 del + ins 定格;新到达=一次注意脉冲 */
-.rd-chg.is-accepted del.rd-del { display: inline-block; max-inline-size: 0; opacity: 0; margin: 0; overflow: hidden; white-space: nowrap; vertical-align: text-bottom; }
-.rd-chg.is-accepted ins.rd-ins { animation: rdSettle var(--dur-move) var(--ease-out) forwards; }
+/* 接受=物理定稿(JS 删 del/解包 ins),壳短暂带 .rd-settle 播放定格动画;新到达=一次注意脉冲 */
+.rd-page span[data-undo].rd-settle, .rd-page .rd-settle { animation: rdSettle var(--dur-move) var(--ease-out); }
 @keyframes rdSettle { from { background: var(--chg-ins-bg); box-shadow: inset 0 -1px 0 var(--chg-ins-line); } to { background: transparent; box-shadow: none; color: inherit; } }
 .rd-chg.is-new { animation: rdArrive var(--dur-pulse) var(--ease-out); }
 @keyframes rdArrive { 0% { background: rgba(37,99,235,.18); } 100% { background: transparent; } }
 /* 改动块左侧改动条(:has) —— 最省的"这里有改动"提示 */
 .rd-page :is(p,h1,h2,h3,h4,li,blockquote):has(.rd-chg), .rd-page [data-edit-block] { position: relative; }
 .rd-page :is(p,h1,h2,h3,h4,li,blockquote):has(.rd-chg)::before, .rd-page [data-edit-block]::before { content: ""; position: absolute; left: -20px; top: .15em; bottom: .15em; width: 2px; border-radius: 2px; background: var(--line-2); transition: background var(--dur-micro), width var(--dur-micro), box-shadow var(--dur-micro); }
-.rd-page :is(p,h1,h2,h3,h4,li,blockquote):has(.rd-chg.is-active)::before, .rd-page [data-edit-block].is-active::before { width: 3px; background: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.10); }
-/* 逐条改动悬浮卡(类型 · 旧→新 · ✓/✕) */
+.rd-page :is(p,h1,h2,h3,h4,li,blockquote):has(.rd-chg.is-active)::before, .rd-page [data-edit-block].is-active::before, .rd-page :is(p,h1,h2,h3,h4,li,blockquote):has(.rd-chg.is-linked)::before, .rd-page [data-edit-block].is-linked::before { width: 3px; background: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.10); }
+.rd-page [data-edit-block].is-linked { background: rgba(37,99,235,.04); }
+/* 逐条改动悬浮卡(类型 · 旧→新 · ✓/✕);.below=视口顶端放不下时翻到改动下方 */
 .rd-cardwrap { position: fixed; z-index: 40; transform: translate(-50%,-100%); padding-bottom: 8px; }
+.rd-cardwrap.below { transform: translate(-50%, 0); padding-bottom: 0; padding-top: 8px; }
 .rd-card { min-width: 200px; max-width: 320px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r); box-shadow: 0 8px 28px rgba(20,22,28,.16); padding: 9px 11px; font-size: 12px; animation: rdCardIn var(--dur-micro) var(--ease-out); }
 @keyframes rdCardIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 .rd-card-h { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; margin-bottom: 6px; }
@@ -402,8 +401,17 @@ svg { display: block; }
 .rd-dt-step:hover { background: var(--fill); color: var(--accent); }
 .gd-hunk.is-linked { background: rgba(37,99,235,.05); }
 @media (prefers-reduced-motion: reduce) {
-  .rd-chg, .rd-page ins.rd-ins, .rd-page del.rd-del, .rd-dt-thumb, .rd-card { transition: none !important; animation: none !important; }
-  .rd-chg.is-accepted del.rd-del, .rd-page.rd-diff-final del.rd-del, .rd-page.rd-diff-clean del.rd-del { max-inline-size: 0; opacity: 0; }
+  .rd-chg, .rd-page ins.rd-ins, .rd-page del.rd-del, .rd-dt-thumb, .rd-card, .rd-flash, .rd-settle, .rd-page span[data-undo].rd-settle { transition: none !important; animation: none !important; }
+  .rd-page.rd-diff-final del.rd-del, .rd-page.rd-diff-clean del.rd-del { max-inline-size: 0; opacity: 0; }
+}
+/* 打印:按"改后"清样出纸 —— 修订痕迹/浮层全部不上纸 */
+@media print {
+  .rd-difftoggle, .rd-cardwrap, .rd-tip, .rd-toast, .rd-nav, .rd-ruler { display: none !important; }
+  .rd-page del.rd-del { display: none !important; }
+  .rd-page ins.rd-ins { color: inherit !important; text-decoration: none !important; background: transparent !important; box-shadow: none !important; }
+  .rd-page .rd-fmt { text-decoration: none !important; }
+  .rd-page .rd-fmt::after { display: none !important; }
+  .rd-page :is(p,h1,h2,h3,h4,li,blockquote)::before { display: none !important; }
 }
 /* 网格 / 行号 */
 .rd-page.rd-grid { background-image: linear-gradient(var(--line-2) 1px, transparent 1px), linear-gradient(90deg, var(--line-2) 1px, transparent 1px); background-size: 24px 24px; }

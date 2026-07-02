@@ -47,16 +47,18 @@ export interface RichDocHandle {
   getContext(): string;
   /** 落一条 Agent 改动(文本改写 replacement 或格式 fmt),按 editId 包裹,可还原。 */
   applyEdit(editId: string, quote: string, opts: { replacement?: string; fmt?: DocFmt }): boolean;
-  /** 按 editId 精确还原该条改动。 */
-  revert(editId: string): void;
+  /** 按 editId 精确还原该条改动(undoMap 缺失时按 DOM 现场兜底);false=完全找不到可还原目标。 */
+  revert(editId: string): boolean;
   /** 选中/滚动到某条改动。 */
   highlight(editId: string): void;
   /** rail 悬停某条 → 点亮文档里对应改动(cid);null 清除。 */
   linkChange(cid: string | null): void;
   /** 滚动定位到该改动并闪一下(rail 点击 / 步进导航)。 */
   activateChange(cid: string): void;
-  /** 标记已接受/拒绝态(接受收起 del、拒绝收起 ins);null 复原。 */
-  markResolved(cid: string, state: 'accepted' | 'rejected' | null): void;
+  /** 接受=物理定稿:删 del、解包 ins、剥修订标识(壳降级 <span data-undo> 保住撤销窗口);null 清除态类。 */
+  markResolved(cid: string, state: 'accepted' | null): void;
+  /** 新提案到达=上一轮撤销窗口关闭:剥 data-undo、清 undoMap,文档回归纯净本体。 */
+  closeUndoWindow(): void;
 }
 /** 上抛给 App 的 Word 选区(与 Excel 的 UniSel 对等,供输入区显示"已选"芯片 + 喂给 Agent 聚焦,含选区格式)。 */
 export interface WordSel { text: string; block: string; chars: number; font?: string; size?: number; bold?: boolean; italic?: boolean; align?: string }
@@ -146,34 +148,53 @@ interface PageState {
   size?: string; orient?: 'portrait' | 'landscape'; margin?: string; columns?: number;
   writing?: 'v'; hyphens?: boolean; lineNums?: boolean; grid?: boolean; ruler?: boolean;
   nav?: boolean; zoom?: number; view?: 'read' | 'web' | 'outline'; spell?: boolean;
-  hideComments?: boolean; track?: boolean; hideMarkup?: boolean; lang?: string;
+  hideComments?: boolean; track?: boolean; lang?: string;
 }
 interface CmdState { bold: boolean; italic: boolean; underline: boolean; strike: boolean; ul: boolean; ol: boolean; align: string; font: string; size: number }
 
 /** HTML 转义(用户输入拼进 innerHTML 前必转,避免破坏 DOM/注入)。 */
 const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] ?? c));
+/** CSS 属性选择器安全转义(domId 里可能出现任意字符)。 */
+const cssq = (s: string): string => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"'));
+/** 最近块祖先(跨块命中要拒绝:deleteContents 会把两段搅成一段)。 */
+function blockOf(n: Node, root: HTMLElement): Node | null {
+  let e: Node | null = n;
+  while (e && e !== root) { if (e instanceof HTMLElement && BLOCK_TAGS.test(e.tagName)) return e; e = e.parentNode; }
+  return null;
+}
+/** 去修订投影:克隆后删掉 del(未定的旧文不属于文档本体),其余原样(ins 即"改后")。 */
+function cleanClone(el: HTMLElement): HTMLElement {
+  const c = el.cloneNode(true) as HTMLElement;
+  c.querySelectorAll('del').forEach((d) => d.remove());
+  return c;
+}
+const cleanBlockText = (el: HTMLElement): string => cleanClone(el).textContent ?? '';
 
-/** 在 root 的文本里找到 quote 的 Range(跨文本节点);from=起始字符偏移(供"查找下一个")。 */
+/** 在 root 的文本里找到 quote 的 Range(跨文本节点);from=起始字符偏移(供"查找下一个");跨块命中自动跳到下一处。 */
 function findRange(root: HTMLElement, quote: string, from = 0): Range | null {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const nodes: { node: Text; start: number }[] = [];
   let acc = '';
   let n: Node | null;
   while ((n = walker.nextNode())) { nodes.push({ node: n as Text, start: acc.length }); acc += (n as Text).data; }
-  const idx = acc.indexOf(quote, from);
-  if (idx < 0) return null;
-  const end = idx + quote.length;
-  let sNode: Text | undefined, sOff = 0, eNode: Text | undefined, eOff = 0;
-  for (const { node, start } of nodes) {
-    const len = node.data.length;
-    if (sNode === undefined && idx >= start && idx < start + len) { sNode = node; sOff = idx - start; }
-    if (end > start && end <= start + len) { eNode = node; eOff = end - start; }
+  let idx = acc.indexOf(quote, from);
+  while (idx >= 0) {
+    const end = idx + quote.length;
+    let sNode: Text | undefined, sOff = 0, eNode: Text | undefined, eOff = 0;
+    for (const { node, start } of nodes) {
+      const len = node.data.length;
+      if (sNode === undefined && idx >= start && idx < start + len) { sNode = node; sOff = idx - start; }
+      if (end > start && end <= start + len) { eNode = node; eOff = end - start; }
+    }
+    if (sNode && eNode && blockOf(sNode, root) === blockOf(eNode, root)) { // 同块才算命中:文本节点拼接没有段界,"上段尾+下段头"会假匹配
+      const r = document.createRange();
+      r.setStart(sNode, sOff);
+      r.setEnd(eNode, eOff);
+      return r;
+    }
+    idx = acc.indexOf(quote, idx + 1);
   }
-  if (!sNode || !eNode) return null;
-  const r = document.createRange();
-  r.setStart(sNode, sOff);
-  r.setEnd(eNode, eOff);
-  return r;
+  return null;
 }
 
 /** 宽松定位:先精确;失败则按"空白折叠"匹配(容忍换行/多空格差异),把归一化命中映射回原始 Range。 */
@@ -194,14 +215,19 @@ function findRangeLoose(root: HTMLElement, quote: string): Range | null {
     if (/\s/.test(ch)) { if (!prevWs) { norm += ' '; map.push(i); } prevWs = true; }
     else { norm += ch; map.push(i); prevWs = false; }
   }
-  const idx = norm.indexOf(nq);
-  if (idx < 0) return null;
-  const startCell = cells[map[idx]!]!;
-  const endCell = cells[map[idx + nq.length - 1]!]!;
-  const r = document.createRange();
-  r.setStart(startCell.node, startCell.off);
-  r.setEnd(endCell.node, endCell.off + 1);
-  return r;
+  let idx = norm.indexOf(nq);
+  while (idx >= 0) {
+    const startCell = cells[map[idx]!]!;
+    const endCell = cells[map[idx + nq.length - 1]!]!;
+    if (blockOf(startCell.node, root) === blockOf(endCell.node, root)) { // 同块守卫(与 findRange 一致)
+      const r = document.createRange();
+      r.setStart(startCell.node, startCell.off);
+      r.setEnd(endCell.node, endCell.off + 1);
+      return r;
+    }
+    idx = norm.indexOf(nq, idx + 1);
+  }
+  return null;
 }
 
 /** rgb(…) → #rrggbb(供喂给 Agent 的格式概览)。 */
@@ -277,7 +303,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   const [hasDiff, setHasDiff] = useState(false); // 文档里是否存在 Agent 改动(决定是否显示修订切换条)
   const [chgCount, setChgCount] = useState(0); // 改动条数(计数器)
   const [stepPos, setStepPos] = useState(0); // 步进导航当前位置(0 基)
-  const [hoverCard, setHoverCard] = useState<{ cid: string; kind: string; oldText: string; newText: string; glyph: string; x: number; y: number } | null>(null); // 逐条改动悬浮卡
+  const [hoverCard, setHoverCard] = useState<{ cid: string; kind: string; oldText: string; newText: string; glyph: string; x: number; y: number; below: boolean } | null>(null); // 逐条改动悬浮卡
   const cardTimer = useRef<number | null>(null);
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null); // Office 式即时悬浮提示
   const tipTimer = useRef<number | null>(null);
@@ -350,7 +376,6 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     el.classList.toggle('rd-linenumbers', !!page.lineNums);
     el.classList.toggle('rd-hide-comments', !!page.hideComments);
     el.classList.toggle('rd-track', !!page.track);
-    el.classList.toggle('rd-hide-markup', !!page.hideMarkup);
     // 缩放:用 CSS zoom(Chromium/Electron 原生),真实参与布局与滚动,避免 transform 的水平裁剪/滚动长度失真
     const z = page.zoom && page.zoom > 0 ? page.zoom : 1;
     el.style.zoom = z !== 1 ? String(z) : '';
@@ -369,6 +394,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
+  useEffect(() => () => { if (cardTimer.current) window.clearTimeout(cardTimer.current); if (tipTimer.current) window.clearTimeout(tipTimer.current); }, []); // 卸载清定时器,别在幽灵上开卡
 
   const restoreSel = (): void => {
     edRef.current?.focus();
@@ -378,27 +404,46 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     s?.removeAllRanges();
     s?.addRange(r);
   };
-  const persist = (): void => { try { if (edRef.current) localStorage.setItem(STORAGE_KEY, edRef.current.innerHTML); } catch { /* 配额满忽略 */ } };
+  const persist = (): void => {
+    try {
+      const el = edRef.current; if (!el) return;
+      const c = el.cloneNode(true) as HTMLElement; // 存洗净克隆:瞬态类(到达脉冲/高亮/联动)不进持久层,重开不复播
+      c.querySelectorAll('.is-new, .is-active, .is-linked, .rd-flash, .rd-settle').forEach((x) => x.classList.remove('is-new', 'is-active', 'is-linked', 'rd-flash', 'rd-settle'));
+      localStorage.setItem(STORAGE_KEY, c.innerHTML);
+    } catch { /* 配额满忽略 */ }
+  };
   const notify = (m: string): void => setToast(m);
-  const refreshHasDiff = (): void => { const n = edRef.current?.querySelectorAll('[data-cid]').length ?? 0; setChgCount(n); setHasDiff(n > 0); };
+  const refreshHasDiff = (): void => {
+    const n = edRef.current?.querySelectorAll('[data-cid]').length ?? 0;
+    setChgCount(n); setHasDiff(n > 0);
+    setStepPos((p) => (n === 0 ? 0 : Math.min(p, n - 1))); // 改动增删后钳制步进游标,计数器不指空
+  };
+  /** 尊重系统"减少动态效果":滚动定位退化为瞬时。 */
+  const smoothBehavior = (): ScrollBehavior => (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth');
   // 逐条改动的悬浮卡(复用 .rd-tip 心智):悬停一处改动 → 卡片显示 类型·旧→新·✓/✕
   const openCardFor = (g: HTMLElement): void => {
+    if (!g.isConnected) return; // 120ms 延迟里改动可能已被还原,别在脱离节点上开卡(rect 会落到左上角)
     const cid = g.getAttribute('data-cid'); if (!cid) return;
     const kind = g.getAttribute('data-kind') ?? 'replace';
     const del = g.querySelector('del'); const ins = g.querySelector('ins');
     const r = g.getBoundingClientRect();
     const cut = (s: string): string => (s.length > 48 ? s.slice(0, 48) + '…' : s);
-    setHoverCard({ cid, kind, oldText: cut(del?.textContent ?? ''), newText: cut(kind === 'format' ? (g.textContent ?? '') : (ins?.textContent ?? '')), glyph: g.getAttribute('data-glyph') ?? '', x: Math.round(r.left + r.width / 2), y: Math.round(r.top) });
+    const below = r.top < 150; // 视口顶端放不下 → 卡片翻到改动下方
+    setHoverCard({ cid, kind, oldText: cut(del?.textContent ?? ''), newText: cut(kind === 'format' ? (g.textContent ?? '') : (ins?.textContent ?? '')), glyph: g.getAttribute('data-glyph') ?? '', x: Math.round(r.left + r.width / 2), y: Math.round(below ? r.bottom : r.top), below });
     hoverCb.current?.(cid);
   };
   const onDocOver = (e: React.MouseEvent): void => {
-    const g = (e.target as HTMLElement).closest?.('.rd-chg') as HTMLElement | null;
+    const g = (e.target as HTMLElement).closest?.('.rd-chg, [data-edit-block]') as HTMLElement | null; // 块级改动同样有卡片
     if (!g) return;
     if (cardTimer.current) window.clearTimeout(cardTimer.current);
     cardTimer.current = window.setTimeout(() => openCardFor(g), 120);
   };
+  const onEdKey = (e: React.KeyboardEvent): void => { // 键盘可达:Tab 到改动壳(contenteditable=false 可聚焦)后 Enter/空格开卡
+    const g = (e.target as HTMLElement).closest?.('.rd-chg') as HTMLElement | null;
+    if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openCardFor(g); }
+  };
   const onDocOut = (e: React.MouseEvent): void => {
-    const from = (e.target as HTMLElement).closest?.('.rd-chg');
+    const from = (e.target as HTMLElement).closest?.('.rd-chg, [data-edit-block]');
     const to = e.relatedTarget as Node | null;
     if (from && to && from.contains(to)) return;
     if (to instanceof HTMLElement && to.closest?.('.rd-cardwrap')) return; // 移到卡片上,别关
@@ -417,12 +462,17 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     root.querySelectorAll('.is-active').forEach((e) => e.classList.remove('is-active'));
     const el = list[next]!;
     el.classList.add('is-active');
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.scrollIntoView({ behavior: smoothBehavior(), block: 'center' });
     el.classList.add('rd-flash'); setTimeout(() => el.classList.remove('rd-flash'), 1200);
   };
 
   useImperativeHandle(ref, (): RichDocHandle => ({
-    getText: () => edRef.current?.innerText ?? '',
+    getText: () => { // 清样投影:喂给 Agent 的永远是"改后本体",del 里的旧文不进上下文(否则新旧连体会污染下一轮的 quote)
+      const root = edRef.current; if (!root) return '';
+      const blocks = Array.from(root.querySelectorAll(BLOCK_SEL)) as HTMLElement[];
+      if (!blocks.length) return (cleanClone(root).textContent ?? '').trim();
+      return blocks.map((b) => cleanBlockText(b).replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+    },
     getContext: () => {
       const root = edRef.current; if (!root) return '(空文档)';
       const blocks = Array.from(root.querySelectorAll('p,h1,h2,h3,h4,li,blockquote')) as HTMLElement[];
@@ -433,7 +483,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
         if (b.font) fonts.add(b.font); sizes.add(b.size); if (b.color !== '#000000' && b.color !== '#1f2430') colors.add(b.color);
         const tag = el.tagName.toLowerCase();
         const style = tag === 'h1' ? '标题1' : tag === 'h2' ? '标题2' : tag === 'h3' ? '标题3' : tag === 'h4' ? '标题4' : tag === 'blockquote' ? '引用' : tag === 'li' ? '列表项' : '正文';
-        const txt = (el.innerText || '').replace(/\s+/g, ' ').trim();
+        const txt = cleanBlockText(el).replace(/\s+/g, ' ').trim(); // 同样走清样投影,别把 del 旧文标进段落概览
         const marks = [style, `${b.font} ${b.size}pt`, b.color !== '#000000' && b.color !== '#1f2430' ? b.color : '', b.bold ? '加粗' : '', b.italic ? '斜体' : '', b.align !== '左对齐' ? b.align : ''].filter(Boolean).join(' · ');
         return `第${i + 1}段 [${marks}]: ${txt.length > 90 ? txt.slice(0, 90) + '…' : txt}`;
       });
@@ -442,6 +492,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     applyEdit: (editId, quote, opts) => {
       const root = edRef.current;
       if (!root) return false;
+      if (root.querySelector(`[data-cid="${cssq(editId)}"]`)) return true; // 幂等:同一改动只落一次(刷新后重复接受/重放不叠标记)
       const fmt = opts.fmt;
       // 全文格式(无 quote):字符级改根内联样式;段落级(对齐/行距/底纹)也落根(继承给各段);block 对全文无意义,忽略
       if (!quote && fmt) {
@@ -457,6 +508,9 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       }
       const range = findRangeLoose(root, quote); // 宽松定位:容忍模型 quote 的空白/换行差异,edit 才真落地
       if (!range) return false;
+      // 拒绝落进未定修订内部:嵌套标记会毁掉 flatten/revert 的对称性(服务端锚点校验负责修复此类 quote)
+      const inRev = (nd: Node): boolean => { let e: Node | null = nd; while (e && e !== root) { if (e instanceof HTMLElement && (e.classList.contains('rd-chg') || e.tagName === 'DEL' || e.tagName === 'INS')) return true; e = e.parentNode; } return false; };
+      if (inRev(range.startContainer) || inRev(range.endContainer)) return false;
       // 段落级格式(且非文本改写):快照整段以便还原,套用后打 data-edit-block 标记
       if (opts.replacement == null && fmt && BLOCK_FMT(fmt)) {
         let blk: Node | null = range.startContainer;
@@ -474,7 +528,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
             blk.replaceWith(target);
           }
           styleBlockEl(target, fmt);
-          target.setAttribute('data-edit-block', editId); target.setAttribute('data-cid', editId);
+          target.setAttribute('data-edit-block', editId); target.setAttribute('data-cid', editId); target.setAttribute('data-kind', 'format'); target.setAttribute('data-glyph', '¶');
           undoMap.current.set(editId, { mode: 'block', prior, el: target }); // 存 el:同段多次改 或 跨回合 editId 撞名时仍能精确还原
           persist();
           return true;
@@ -484,10 +538,13 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       // 文本改写 → 一个 .rd-chg 组(data-edit/data-cid 只打在组上,revert 才干净)含 del(旧)+ ins(新);纯字符级格式 → .rd-chg.rd-fmt 第三通道
       const prior = range.cloneContents();
       const oldText = range.toString();
+      const cutA = (s: string): string => (s.length > 60 ? s.slice(0, 60) + '…' : s);
       if (opts.replacement != null) {
         const kind = oldText && opts.replacement ? 'replace' : opts.replacement ? 'insert' : 'delete';
         const grp = document.createElement('span');
         grp.className = 'rd-chg is-new'; grp.setAttribute('data-edit', editId); grp.setAttribute('data-cid', editId); grp.setAttribute('data-kind', kind); grp.setAttribute('tabindex', '0');
+        grp.setAttribute('contenteditable', 'false'); // 原子化:光标进不去,打字/Ctrl+Z 不会撕开修订对
+        grp.setAttribute('aria-label', `${kind === 'replace' ? '替换' : kind === 'insert' ? '插入' : '删除'}:${cutA(oldText)}${oldText && opts.replacement ? ' → ' : ''}${cutA(opts.replacement)}`);
         if (oldText) { const del = document.createElement('del'); del.className = 'rd-del'; del.textContent = oldText; grp.appendChild(del); }
         if (opts.replacement) { const ins = document.createElement('ins'); ins.className = 'rd-ins'; if (fmt) styleSpan(ins, fmt); ins.textContent = opts.replacement; grp.appendChild(ins); }
         range.deleteContents();
@@ -498,9 +555,10 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
         const glyph = fmt?.bold ? 'B' : fmt?.italic ? 'I' : fmt?.underline ? 'U' : fmt?.strike ? 'S' : (fmt?.color || fmt?.bgColor) ? '◆' : fmt?.size ? 'A±' : fmt?.font ? 'A' : '~';
         const span = document.createElement('span');
         span.className = 'rd-chg rd-fmt is-new'; span.setAttribute('data-edit', editId); span.setAttribute('data-cid', editId); span.setAttribute('data-kind', 'format'); span.setAttribute('data-glyph', glyph); span.setAttribute('tabindex', '0');
+        span.setAttribute('contenteditable', 'false');
+        span.setAttribute('aria-label', `改格式(${glyph}):${cutA(oldText || quote)}`);
         if (fmt) styleSpan(span, fmt);
-        span.textContent = oldText || quote;
-        range.deleteContents();
+        span.appendChild(range.extractContents()); // 搬移而非重建文本:quote 里的链接/加粗/脚注等内联结构原样保留
         range.insertNode(span);
         undoMap.current.set(editId, { mode: 'span', prior, el: span });
         window.setTimeout(() => span.classList.remove('is-new'), 1000);
@@ -511,55 +569,108 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     },
     revert: (editId) => {
       const root = edRef.current;
+      if (!root) return false;
       const info = undoMap.current.get(editId);
-      if (!root || !info) return;
-      if (info.mode === 'root') {
-        const s = root.style; const pp = info.priorProps;
-        s.fontWeight = pp.fontWeight ?? ''; s.fontStyle = pp.fontStyle ?? ''; s.textDecoration = pp.textDecoration ?? '';
-        s.fontFamily = pp.fontFamily ?? ''; s.fontSize = pp.fontSize ?? ''; s.color = pp.color ?? '';
-        s.textAlign = pp.textAlign ?? ''; s.lineHeight = pp.lineHeight ?? ''; s.backgroundColor = pp.backgroundColor ?? '';
-      } else if (info.mode === 'block') {
-        const cur = info.el && root.contains(info.el) ? info.el : root.querySelector(`[data-edit-block="${editId}"]`);
-        if (cur && cur.parentNode) cur.parentNode.replaceChild(info.prior.cloneNode(true), cur);
-      } else {
-        // 文本改动可能是一对 del+ins(同一 data-edit),整体用原片段替回
-        const els = Array.from(root.querySelectorAll(`[data-edit="${editId}"]`)) as HTMLElement[];
-        if (els.length && els[0]!.parentNode) { els[0]!.parentNode.insertBefore(info.prior.cloneNode(true), els[0]!); els.forEach((e) => e.remove()); }
-        else if (info.el && info.el.parentNode) { info.el.parentNode.insertBefore(info.prior.cloneNode(true), info.el); info.el.remove(); }
+      if (info) {
+        if (info.mode === 'root') {
+          const s = root.style; const pp = info.priorProps;
+          s.fontWeight = pp.fontWeight ?? ''; s.fontStyle = pp.fontStyle ?? ''; s.textDecoration = pp.textDecoration ?? '';
+          s.fontFamily = pp.fontFamily ?? ''; s.fontSize = pp.fontSize ?? ''; s.color = pp.color ?? '';
+          s.textAlign = pp.textAlign ?? ''; s.lineHeight = pp.lineHeight ?? ''; s.backgroundColor = pp.backgroundColor ?? '';
+        } else if (info.mode === 'block') {
+          const cur = info.el && root.contains(info.el) ? info.el : root.querySelector(`[data-edit-block="${cssq(editId)}"]`);
+          if (cur && cur.parentNode) cur.parentNode.replaceChild(info.prior.cloneNode(true), cur);
+        } else {
+          // 文本改动可能是一对 del+ins(同一 data-edit),整体用原片段替回;定稿后(data-undo)el 引用仍指向同一节点
+          const els = Array.from(root.querySelectorAll(`[data-edit="${cssq(editId)}"], [data-undo="${cssq(editId)}"]`)) as HTMLElement[];
+          if (els.length && els[0]!.parentNode) { els[0]!.parentNode.insertBefore(info.prior.cloneNode(true), els[0]!); els.forEach((e) => e.remove()); }
+          else if (info.el && info.el.parentNode) { info.el.parentNode.insertBefore(info.prior.cloneNode(true), info.el); info.el.remove(); }
+        }
+        undoMap.current.delete(editId);
+        refreshHasDiff();
+        persist();
+        return true;
       }
-      undoMap.current.delete(editId);
+      // 兜底(刷新后 undoMap 已失):按 DOM 现场退回——文本=回 del 旧文;格式=解包放弃;块级=剥标记清样式(尽力而为)
+      const els = Array.from(root.querySelectorAll(`[data-cid="${cssq(editId)}"]`)) as HTMLElement[];
+      if (!els.length) return false;
+      for (const el of els) {
+        if (el.hasAttribute('data-edit-block')) {
+          ['data-edit-block', 'data-cid', 'data-kind', 'data-glyph'].forEach((a) => el.removeAttribute(a));
+          el.style.textAlign = ''; el.style.textAlignLast = ''; el.style.lineHeight = ''; el.style.backgroundColor = '';
+        } else if (el.classList.contains('rd-fmt')) {
+          el.replaceWith(...Array.from(el.childNodes));
+        } else {
+          const del = el.querySelector('del');
+          if (del) el.replaceWith(...Array.from(del.childNodes)); else el.remove();
+        }
+      }
       refreshHasDiff();
       persist();
+      return true;
     },
     highlight: (editId) => {
       const root = edRef.current; if (!root) return;
       root.querySelectorAll('.is-active').forEach((e) => e.classList.remove('is-active'));
       const info = undoMap.current.get(editId);
-      const el = (info && 'el' in info && info.el && root.contains(info.el) ? info.el : root.querySelector(`[data-cid="${editId}"], [data-edit="${editId}"], [data-edit-block="${editId}"]`)) as HTMLElement | null;
+      const el = (info && 'el' in info && info.el && root.contains(info.el) ? info.el : root.querySelector(`[data-cid="${cssq(editId)}"], [data-edit="${cssq(editId)}"], [data-edit-block="${cssq(editId)}"]`)) as HTMLElement | null;
       if (!el) return;
       el.classList.add('is-active');
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.scrollIntoView({ behavior: smoothBehavior(), block: 'center' });
       el.classList.add('rd-flash');
       setTimeout(() => el.classList.remove('rd-flash'), 1200);
     },
     linkChange: (cid) => {
       const root = edRef.current; if (!root) return;
       root.querySelectorAll('.is-linked').forEach((e) => e.classList.remove('is-linked'));
-      if (cid) root.querySelector(`[data-cid="${cid}"]`)?.classList.add('is-linked');
+      if (cid) root.querySelector(`[data-cid="${cssq(cid)}"]`)?.classList.add('is-linked');
     },
     activateChange: (cid) => {
       const root = edRef.current; if (!root) return;
       root.querySelectorAll('.is-active').forEach((e) => e.classList.remove('is-active'));
-      const el = root.querySelector(`[data-cid="${cid}"]`) as HTMLElement | null;
+      const el = root.querySelector(`[data-cid="${cssq(cid)}"]`) as HTMLElement | null;
       if (!el) return;
       el.classList.add('is-active');
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.scrollIntoView({ behavior: smoothBehavior(), block: 'center' });
       el.classList.add('rd-flash'); setTimeout(() => el.classList.remove('rd-flash'), 1200);
     },
     markResolved: (cid, state) => {
-      const el = edRef.current?.querySelector(`[data-cid="${cid}"]`) as HTMLElement | null; if (!el) return;
-      el.classList.remove('is-accepted', 'is-rejected');
-      if (state) el.classList.add('is-' + state);
+      const root = edRef.current; if (!root) return;
+      const els = Array.from(root.querySelectorAll(`[data-cid="${cssq(cid)}"]`)) as HTMLElement[];
+      if (!els.length) return;
+      if (state !== 'accepted') { els.forEach((e) => e.classList.remove('is-accepted', 'is-rejected')); return; }
+      // 接受=物理定稿(不是加类化妆):del 删掉、ins 解包,修订标识剥净 —— 文档回归本体,上下文/字数/查找全部自然干净
+      const stripRev = (el: HTMLElement): void => { ['data-edit', 'data-cid', 'data-kind', 'data-glyph', 'tabindex', 'contenteditable', 'aria-label'].forEach((a) => el.removeAttribute(a)); };
+      for (const el of els) {
+        if (el.hasAttribute('data-edit-block')) {
+          el.removeAttribute('data-edit-block'); stripRev(el); // 段落样式已在块上,剥标记即定稿
+        } else if (el.classList.contains('rd-fmt')) {
+          stripRev(el); // 格式:退化成普通样式 span;data-undo 保住"整轮撤销"窗口
+          el.className = 'rd-settle'; el.setAttribute('data-undo', cid);
+          window.setTimeout(() => el.classList.remove('rd-settle'), 400);
+        } else {
+          el.querySelectorAll('del').forEach((d) => d.remove());
+          el.querySelectorAll('ins').forEach((i) => {
+            const st = i.getAttribute('style'); // 带样式的 ins 降级成样式 span,不带的直接解包
+            if (st) { const sp = document.createElement('span'); sp.setAttribute('style', st); while (i.firstChild) sp.appendChild(i.firstChild); i.replaceWith(sp); }
+            else i.replaceWith(...Array.from(i.childNodes));
+          });
+          stripRev(el);
+          el.className = 'rd-settle'; el.setAttribute('data-undo', cid);
+          window.setTimeout(() => el.classList.remove('rd-settle'), 400);
+        }
+      }
+      refreshHasDiff();
+      persist();
+    },
+    closeUndoWindow: () => { // 新提案到达=上一轮撤销窗口关闭:剥 data-undo,裸 span 顺手解包,文档零残留
+      const root = edRef.current; if (!root) return;
+      root.querySelectorAll('[data-undo]').forEach((el) => {
+        el.removeAttribute('data-undo');
+        if (el.tagName === 'SPAN' && !el.attributes.length) el.replaceWith(...Array.from(el.childNodes));
+      });
+      undoMap.current.clear();
+      persist();
     },
   }), []);
 
@@ -720,7 +831,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const texts: Text[] = [];
     let n: Node | null;
-    while ((n = walker.nextNode())) texts.push(n as Text);
+    while ((n = walker.nextNode())) { const p = (n as Text).parentElement; if (p && p.closest('del')) continue; texts.push(n as Text); } // 已删除的旧文不参与替换
     let count = 0;
     for (const tn of texts) if (tn.data.includes(find)) { count += tn.data.split(find).length - 1; tn.data = tn.data.split(find).join(repl); }
     persist();
@@ -1058,7 +1169,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   const openWordCount = (): void => {
     const root = edRef.current; if (!root) return;
     const sel = savedRange.current?.toString() ?? '';
-    const txt = sel || root.innerText;
+    const txt = sel || (cleanClone(root).textContent ?? ''); // 字数按清样投影算,del 旧文不虚增
     const noSpace = txt.replace(/\s/g, '');
     const cjk = (txt.match(/[一-龥]/g) ?? []).length;
     const words = cjk + (txt.replace(/[一-龥]/g, ' ').match(/[A-Za-z0-9]+/g) ?? []).length;
@@ -1186,7 +1297,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       case '下一条': navComment(1); break;
       case '显示批注': setPage((p) => ({ ...p, hideComments: !p.hideComments })); break;
       case '修订': setPage((p) => ({ ...p, track: !p.track })); notify(t('修订标记视图') + ' · ' + (page.track ? t('关') : t('开'))); break;
-      case '显示标记': setPage((p) => ({ ...p, hideMarkup: !p.hideMarkup })); break;
+      case '显示标记': setDiffView((v) => (v === 'final' ? 'mark' : 'final')); break; // 与四态切换条同一状态源,不再双头管理
       case '接受': resolveChange(true); break;
       case '拒绝': resolveChange(false); break;
       case '阅读视图': setView('read'); break;
@@ -1447,7 +1558,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
         <div className="ribbon-tabs">
           {TABS.map((tb, i) => <button key={tb.name} className={'rtab' + (i === tab ? ' on' : '')} onClick={() => { setTab(i); localStorage.setItem(TAB_KEY, String(i)); }}>{t(tb.name)}</button>)}
           <span className="rd-tabs-grow" />
-          <button className="rd-chip" aria-label={t('字数统计')} data-cmd="字数统计" onMouseDown={(e) => { e.preventDefault(); openWordCount(); }}><IconWordCountRb size={13} />{t('字数')} {(edRef.current?.innerText.replace(/\s/g, '').length ?? 0)}</button>
+          <button className="rd-chip" aria-label={t('字数统计')} data-cmd="字数统计" onMouseDown={(e) => { e.preventDefault(); openWordCount(); }}><IconWordCountRb size={13} />{t('字数')} {(edRef.current ? (cleanClone(edRef.current).textContent ?? '').replace(/\s/g, '').length : 0)}</button>
           <button className="rd-chip" aria-label={t('缩放')} data-cmd="缩放" onMouseDown={(e) => { e.preventDefault(); openPop('缩放', e.currentTarget); }}>{zoomPct}%</button>
         </div>
         <div className="ribbon-bar">
@@ -1486,8 +1597,8 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
             </div>
           </aside>
         ) : null}
-        <div className="rd-scroll">
-          <div className="rd-page" ref={edRef} contentEditable suppressContentEditableWarning onInput={() => { persist(); refreshHasDiff(); if (page.nav) refreshNav(); }} onMouseUp={onEdMouseUp} onClick={onEdClick} onMouseOver={onDocOver} onMouseOut={onDocOut} />
+        <div className="rd-scroll" onScroll={() => { setTip(null); if (cardTimer.current) window.clearTimeout(cardTimer.current); setHoverCard(null); }}>
+          <div className="rd-page" ref={edRef} contentEditable suppressContentEditableWarning onInput={() => { persist(); refreshHasDiff(); if (page.nav) refreshNav(); }} onMouseUp={onEdMouseUp} onClick={onEdClick} onMouseOver={onDocOver} onMouseOut={onDocOut} onKeyDown={onEdKey} />
         </div>
       </div>
 
@@ -1512,7 +1623,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       ) : null}
 
       {hoverCard ? (
-        <div className="rd-cardwrap" style={{ left: hoverCard.x, top: hoverCard.y }} onMouseEnter={keepCard} onMouseLeave={closeCard}>
+        <div className={'rd-cardwrap' + (hoverCard.below ? ' below' : '')} style={{ left: hoverCard.x, top: hoverCard.y }} onMouseEnter={keepCard} onMouseLeave={closeCard}>
           <div className="rd-card">
             <div className="rd-card-h"><span className="rd-card-dot" /><span className="rd-card-kind">{({ replace: '替换', insert: '插入', delete: '删除', format: '改格式' } as Record<string, string>)[hoverCard.kind] ?? '改动'}</span></div>
             {hoverCard.kind === 'format' ? (

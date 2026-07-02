@@ -15,7 +15,11 @@ import { Markdown } from './Markdown.js';
 import { chartToPngDataUrl, gridToChartSpec, buildChartGrid, specFromInline } from './chart.js';
 
 /** Agent 在网格上的一步操作(用于"边画边改"的可视化播放)。 */
-interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bold?: boolean; numFmt?: string; note: string; before?: unknown; editId?: string }
+interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bold?: boolean; numFmt?: string; note: string; before?: unknown; beforeState?: CellState; editId?: string }
+/** 提案到达时采集的整格改前状态(值/公式/填充/字色/加粗)——拒绝/原文视图按"改了哪个维度还原哪个维度"精确回放。 */
+interface CellState { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean }
+/** accepted 记账键:跨回合唯一(LLM 惯用 e0/e1,裸 editId 必撞名)。与 Word 的 domId 同构。 */
+const akey = (csId: string, editId: string): string => csId + '::' + editId;
 
 /** 由 applyExcelStructure 直接落网格的"结构/对象操作"kind —— 这些【不能】被 diffToOps 当作写单元格值
  *  (否则会把"插入图表"等的摘要文字写进格子);它们走 applyExcelStructure,不进 playOps。 */
@@ -580,7 +584,8 @@ export function App() {
   const [recent, setRecent] = useState<{ t: string; time: string }[]>([]);
   const [realDiff, setRealDiff] = useState<AgentDiff | null>(null);
   const [realCs, setRealCs] = useState<unknown>(null);
-  const [accepted, setAccepted] = useState<Set<string>>(new Set());
+  const [accepted, setAccepted] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('oa.accepted') ?? '[]') as string[]); } catch { return new Set(); } }); // 随 thread 持久化:刷新后审批处置不丢
+  useEffect(() => { try { localStorage.setItem('oa.accepted', JSON.stringify([...accepted])); } catch { /* 配额忽略 */ } }, [accepted]);
   const [fileB64, setFileB64] = useState('');
   const [fileName, setFileName] = useState('');
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -830,7 +835,7 @@ export function App() {
                 const cs = e.changeSet ?? null;
                 setRealCs(cs);
                 setRealDiff(diff);
-                setAccepted(new Set(diff.items.map((it) => it.editId)));
+                setAccepted((prev) => new Set([...prev, ...diff.items.map((it) => akey(diff.changeSetId, it.editId))])); // 合并而非覆写:老回合的处置不被新提案冲掉
                 setReviewIdx(0);
                 if (fmt === 'drawio') {
                   // drawio:先把【改/删/移动现有节点】落到画板;新增节点则复用流式已画的、或一次性补画
@@ -856,6 +861,7 @@ export function App() {
                     return { editId: it.editId, domId, quote, replacement: rec?.op?.text ?? (it.after ?? '') };
                   });
                   // 乐观落入文档(与 Excel playOps 一致);编辑器按 domId 包裹,拒绝可精确还原
+                  wordRef.current?.closeUndoWindow(); // 新提案=上一轮撤销窗口关闭,旧 data-undo 剥净后再落新标记
                   for (const w of wordEdits) wordRef.current?.applyEdit(w.domId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' });
                   setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], word: wordEdits, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                   setReviewIdx(0);
@@ -863,8 +869,9 @@ export function App() {
                 } else {
                   applyExcelStructure(cs); // 结构性操作(插删行列/合并/冻结/清空)先落,改变网格布局
                   const ops = diffToOps(diff);
-                  const api = univerRef.current; // 采集改前值,供 git-diff 展示 + "撤销/拒绝"还原
-                  if (api) for (const op of ops) { op.before = api.getValue(op.a1); }
+                  const api = univerRef.current; // 采集整格改前状态(值/公式/填充/字色/加粗),供 git-diff 展示 + "撤销/拒绝"精确还原
+                  if (api) for (const op of ops) { op.before = api.getValue(op.a1); op.beforeState = api.getCellState(op.a1); }
+                  setExcelDiff('final'); // 新提案到达,速览条回到"改后"基准
                   setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                   if (ops.length) void playOps(ops); // 边画边改
                 }
@@ -920,6 +927,8 @@ export function App() {
     setThread([]);
     resetDiff();
     setSendErr(null);
+    setAccepted(new Set()); // 处置记账随对话清零
+    wordRef.current?.closeUndoWindow();
   };
   /** 撤销某条改动:把该回合写过的格子还原到改前值,并清掉它加的底色。 */
   const revertTurn = (idx: number): void => {
@@ -928,16 +937,11 @@ export function App() {
     if (turn.board) {
       boardRef.current?.removeObjects(Object.values(turn.board.byEdit)); // drawio:从画板移除该回合对象
     } else if (turn.word) {
-      for (const w of turn.word) if (accepted.has(w.editId)) wordRef.current?.revert(w.domId); // 按 domId 精确还原每条
+      let missed = 0;
+      for (const w of turn.word) if (accepted.has(akey(turn.diff.changeSetId, w.editId))) { if (!wordRef.current?.revert(w.domId)) missed++; } // 按 domId 精确还原每条(undoMap 缺失走 DOM 兜底)
+      if (missed) notify(t('部分改动已定稿,无法自动回退') + ` · ${missed}`);
     } else {
-      const api = univerRef.current;
-      if (api) {
-        for (const op of turn.ops) {
-          if (op.value !== undefined) api.setCell(op.a1, op.before ?? '');
-          if (op.bg) api.setBackground(op.a1, null);
-          if (op.color) api.setFontColor(op.a1, '#1f2937');
-        }
-      }
+      for (const op of turn.ops) revertGridOp(op); // 走维度级精确回放(公式/填充/加粗不丢)
     }
     setThread((th) => th.map((tt, i) => (i === idx ? ({ ...tt, reverted: true } as Turn) : tt)));
     notify(t('已撤销该回合改动'));
@@ -1137,20 +1141,26 @@ export function App() {
     if (op.bold) api.setBold(op.a1);
     if (op.color) api.setFontColor(op.a1, op.color);
     if (op.numFmt) api.setNumberFormat(op.a1, op.numFmt);
-    api.setBackground(op.a1, op.bg ?? null);
+    if (op.bg != null) api.setBackground(op.a1, op.bg); // 只有真提了底色才动背景,别把用户原有填充抹掉
   };
   const revertGridOp = (op: GridOp): void => {
     const api = univerRef.current; if (!api) return;
-    if (op.value !== undefined) api.setCell(op.a1, op.before ?? '');
-    if (op.bg) api.setBackground(op.a1, null);
-    if (op.color) api.setFontColor(op.a1, '#1f2937');
+    const bs = op.beforeState; // 改了哪个维度还原哪个维度(两条 op 同格时互不误伤)
+    if (op.value !== undefined) { if (bs?.f) api.setCell(op.a1, bs.f); else api.setCell(op.a1, (bs ? bs.v : op.before) ?? ''); } // 公式格回公式,不落算后值
+    if (op.bg != null) api.setBackground(op.a1, bs?.bg ?? null);
+    if (op.color) api.setFontColor(op.a1, bs?.color ?? '#1f2937');
+    if (op.bold) api.setBold(op.a1, bs?.bold ?? false);
   };
-  /** Excel 改动的"原文/改后"速览:把最近一回合改动的格子在改前值/改后值间切换。 */
+  /** Excel 改动的"原文/改后"速览:原文=全部回改前;改后=按当前处置回放(被拒的不复活)。 */
   const applyExcelDiffView = (view: 'orig' | 'final'): void => {
     let turn: Extract<Turn, { kind: 'diff' }> | undefined;
     for (let i = thread.length - 1; i >= 0; i--) { const tt = thread[i]; if (tt && tt.role === 'assistant' && tt.kind === 'diff' && tt.ops.length) { turn = tt; break; } }
     if (!turn) return;
-    for (const op of turn.ops) { if (view === 'orig') revertGridOp(op); else applyGridOp(op); }
+    for (const op of turn.ops) {
+      if (view === 'orig') revertGridOp(op);
+      else if (op.editId && accepted.has(akey(turn.diff.changeSetId, op.editId))) applyGridOp(op);
+      else revertGridOp(op);
+    }
     setExcelDiff(view);
   };
   const reapplyBoardObj = (o: { node?: BNode; edge?: BEdge }): void =>
@@ -1162,45 +1172,51 @@ export function App() {
     else if (fmt === 'drawio') { const id = turn.board?.byEdit[item.editId]; if (id) boardRef.current?.highlight(id); }
     else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === item.editId); if (w) wordRef.current?.highlight(w.domId); } // 定位当前条
   };
-  const acceptItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number): void => {
+  const acceptItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number, silent = false): void => {
     const it = turn.diff.items[idx]; if (!it) return;
-    if (!accepted.has(it.editId)) { // 之前被拒 → 重新落回工作区
+    const k = akey(turn.diff.changeSetId, it.editId);
+    if (!accepted.has(k)) { // 之前被拒 → 重新落回工作区(applyEdit 幂等,重复接受不叠标记)
       if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
       else if (fmt === 'drawio') { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
       else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.domId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' }); }
-      toggleAccept(it.editId, true);
+      toggleAccept(k, true);
     }
-    if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.markResolved(w.domId, 'accepted'); } // 行内收起 del、定格改后
-    setReviewIdx(idx + 1);
+    if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.markResolved(w.domId, 'accepted'); } // 物理定稿:删 del、ins 落地
+    if (!silent) setReviewIdx(idx + 1);
   };
-  /** 行内卡片 ✓/✕ → 复用 rail 的接受/拒绝(按 domId 找回条目在 diff.items 的序号)。 */
+  /** 行内卡片 ✓/✕ → 复用 rail 的接受/拒绝(按 domId 找回条目);老回合的处置不动当前回合的审阅游标。 */
   const resolveByCid = (domId: string, verb: 'accept' | 'reject'): void => {
+    let lastDiff = -1;
+    for (let i = thread.length - 1; i >= 0; i--) { const tt = thread[i]; if (tt && tt.role === 'assistant' && tt.kind === 'diff') { lastDiff = i; break; } }
     for (let i = thread.length - 1; i >= 0; i--) {
       const tt = thread[i];
       if (!tt || tt.role !== 'assistant' || tt.kind !== 'diff' || !tt.word) continue;
       const w = tt.word.find((x) => x.domId === domId); if (!w) continue;
       const idx = tt.diff.items.findIndex((it) => it.editId === w.editId); if (idx < 0) return;
-      if (verb === 'accept') acceptItem(tt, idx); else rejectItem(tt, idx);
+      const silent = i !== lastDiff;
+      if (verb === 'accept') acceptItem(tt, idx, silent); else rejectItem(tt, idx, silent);
       return;
     }
   };
-  const rejectItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number): void => {
+  const rejectItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number, silent = false): void => {
     const it = turn.diff.items[idx]; if (!it) return;
+    const k = akey(turn.diff.changeSetId, it.editId);
     if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) revertGridOp(op); }
     else if (fmt === 'drawio') { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); }
-    else if (fmt === 'word' && accepted.has(it.editId)) { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.revert(w.domId); } // 之前已应用 → 精确还原该条
-    toggleAccept(it.editId, false);
-    setReviewIdx(idx + 1);
+    else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w && !wordRef.current?.revert(w.domId) && accepted.has(k)) notify(t('该改动已定稿,未找到可还原的位置')); } // undoMap 缺失时 revert 自带 DOM 兜底
+    toggleAccept(k, false);
+    if (!silent) setReviewIdx(idx + 1);
   };
   const acceptAll = (turn: Extract<Turn, { kind: 'diff' }>, ti: number): void => {
     for (const it of turn.diff.items) {
-      if (accepted.has(it.editId)) continue;
+      if (accepted.has(akey(turn.diff.changeSetId, it.editId))) continue;
       if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
       else if (fmt === 'drawio') { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
       else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.domId, w.quote, w.style ? { fmt: w.style } : { replacement: w.replacement ?? '' }); }
     }
+    if (fmt === 'word') for (const w of turn.word ?? []) wordRef.current?.markResolved(w.domId, 'accepted'); // 全部接受同样物理定稿,与逐条路径一致
     const all = turn.diff.items.map((x) => x.editId);
-    setAccepted(new Set(all));
+    setAccepted((prev) => new Set([...prev, ...turn.diff.items.map((x) => akey(turn.diff.changeSetId, x.editId))]));
     setReviewIdx(all.length);
     markCommitted(ti, all.length);
     if (isExcel && fileB64) void doCommit(all); // 有上传文件 → 外科写回并下载
@@ -1571,7 +1587,7 @@ export function App() {
                                     const fmtDesc = it.after || (w?.style ? Object.keys(w.style).join('/') : '') || t('改格式');
                                     const cur = active && k === ridx;
                                     return (
-                                      <div key={it.editId} data-cid={w?.domId} className={'gd-hunk' + (cur ? ' cur' : '') + (w && hoverCid && hoverCid === w.domId ? ' is-linked' : '') + (accepted.has(it.editId) ? '' : ' gd-rej')}
+                                      <div key={it.editId} data-cid={w?.domId} className={'gd-hunk' + (cur ? ' cur' : '') + (w && hoverCid && hoverCid === w.domId ? ' is-linked' : '') + (accepted.has(akey(d.changeSetId, it.editId)) ? '' : ' gd-rej')}
                                         onMouseEnter={() => { if (w) { setHoverCid(w.domId); wordRef.current?.linkChange(w.domId); } }}
                                         onMouseLeave={() => { setHoverCid(null); wordRef.current?.linkChange(null); }}
                                         onClick={() => { if (active) setReviewIdx(k); if (w) wordRef.current?.activateChange(w.domId); }} title={it.label}>
@@ -1598,7 +1614,7 @@ export function App() {
                               <div className="rv-final dim">↩ {t('已撤销')}</div>
                             ) : cur ? (
                               <>
-                                <div className={'rv-card' + (accepted.has(cur.editId) ? '' : ' rejected')}>
+                                <div className={'rv-card' + (accepted.has(akey(d.changeSetId, cur.editId)) ? '' : ' rejected')}>
                                   <div className="rv-card-h">
                                     <span className={'rv-badge ' + cur.badge}>{badgeText(cur.badge)}</span>
                                     <span className="rv-ref">{cur.ref}</span>
@@ -1631,7 +1647,7 @@ export function App() {
                               </>
                             ) : active ? (
                               <div className="rv-acts done">
-                                <span className="rv-donen">{t('已逐条过完')} · {accepted.size}/{total}</span>
+                                <span className="rv-donen">{t('已逐条过完')} · {d.items.filter((x) => accepted.has(akey(d.changeSetId, x.editId))).length}/{total}</span>
                                 <span className="grow" />
                                 <button className="rv-step" onClick={() => setReviewIdx(0)} title={t('重看')}><IconUndo size={14} /></button>
                                 <button className="btn solid" onClick={() => acceptAll(turn, i)}><IconCheck size={14} /> {t('全部接受')}</button>

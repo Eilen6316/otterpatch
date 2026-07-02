@@ -35,10 +35,12 @@ export interface SheetHandle {
   setCell(a1: string, value: unknown): void;
   setBackground(a1: string, color: string | null): void;
   setFontColor(a1: string, color: string): void;
-  setBold(a1: string): void;
+  setBold(a1: string, on?: boolean): void;
   setNumberFormat(a1: string, pattern: string): void;
   focus(a1: string): void;
   getValue(a1: string): unknown;
+  /** 整格改前状态(值/公式/填充/字色/加粗)——供"拒绝/原文视图"维度级精确还原。 */
+  getCellState(a1: string): { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean };
   /** 整张表的全局快照(概览 + 数据 + 焦点),与是否圈选无关。 */
   getSheet(): UniSel | null;
   // 结构性操作(Agent 赋能:插删行列 / 合并 / 冻结 / 清空)——驱动真实 Univer 网格
@@ -267,6 +269,14 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
   cb.current = onSelection;
 
   // 命令式句柄:App 用它驱动单元格(取值/写值/底色/字色/加粗/定位光标)
+  // e2e 测试钩子:让 Playwright 能读真实网格值(断言"拒绝后不复活/公式还在"),运行时无副作用
+  useEffect(() => {
+    (window as unknown as { __univerGet?: (a1: string) => unknown }).__univerGet = (a1: string) => {
+      try { return apiRef.current?.getActiveWorkbook?.()?.getActiveSheet?.()?.getRange(a1).getValue(); } catch { return undefined; }
+    };
+    return () => { delete (window as unknown as { __univerGet?: unknown }).__univerGet; };
+  }, []);
+
   useImperativeHandle(ref, () => {
     const sheet = (): FSheetOps | null => apiRef.current?.getActiveWorkbook?.()?.getActiveSheet?.() ?? null;
     const safe = (fn: () => void): void => {
@@ -286,10 +296,22 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
         }),
       setBackground: (a1, c) => safe(() => sheet()?.getRange(a1).setBackground(c)),
       setFontColor: (a1, c) => safe(() => sheet()?.getRange(a1).setFontColor(c)),
-      setBold: (a1) => safe(() => sheet()?.getRange(a1).setFontWeight('bold')),
+      setBold: (a1, on = true) => safe(() => sheet()?.getRange(a1).setFontWeight(on ? 'bold' : 'normal')),
       setNumberFormat: (a1, p) => safe(() => sheet()?.getRange(a1).setNumberFormat(p)),
       focus: (a1) => safe(() => { const s = sheet(); if (s) s.setActiveRange(s.getRange(a1)); }),
       getValue: (a1) => { let v: unknown; safe(() => { v = sheet()?.getRange(a1).getValue(); }); return v; },
+      getCellState: (a1) => { // 尽力而为:facade 缺哪个 getter 就少采哪个维度(revert 有兜底默认值)
+        const st: { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean } = {};
+        safe(() => {
+          const r = sheet()?.getRange(a1); if (!r) return;
+          st.v = r.getValue();
+          const f = (r as { getFormulas?: () => string[][] }).getFormulas?.()?.[0]?.[0];
+          st.f = f && String(f).startsWith('=') ? String(f) : null;
+          const sd = (r as { getCellStyleData?: () => { bg?: { rgb?: string } | null; cl?: { rgb?: string } | null; bl?: number | null } | null }).getCellStyleData?.();
+          if (sd) { st.bg = sd.bg?.rgb ?? null; st.color = sd.cl?.rgb ?? null; st.bold = sd.bl === 1; }
+        });
+        return st;
+      },
       insertRows: (row, count) => safe(() => sheet()?.insertRows(row, count)),
       deleteRows: (row, count) => safe(() => sheet()?.deleteRows(row, count)),
       insertCols: (col, count) => safe(() => sheet()?.insertColumns(col, count)),

@@ -46,12 +46,25 @@ try {
   await page.locator('.excel-difftoggle .rd-dt-seg', { hasText: '原文' }).click();
   await sleep(250);
   ok('切"原文"→ 按钮激活、无报错', await page.evaluate(() => !!document.querySelector('.excel-difftoggle .rd-dt-seg.on')));
+  ok('切"原文"→ 网格回改前值 120(真实读格)', await page.evaluate(() => window.__univerGet && Number(window.__univerGet('C2')) === 120));
   await page.locator('.excel-difftoggle .rd-dt-seg', { hasText: '改后' }).click();
   await sleep(250);
+  ok('切"改后"→ 网格回改后值 200', await page.evaluate(() => Number(window.__univerGet('C2')) === 200));
+
+  // 拒绝当前条(C2 值改)→ 网格回 120;再切"改后"不复活(速览按处置回放)
+  await page.locator('.reviewbox .btn.no').click();
+  await sleep(300);
+  ok('拒绝值改 → 网格回 120', await page.evaluate(() => Number(window.__univerGet('C2')) === 120));
+  await page.locator('.excel-difftoggle .rd-dt-seg', { hasText: '原文' }).click();
+  await sleep(200);
+  await page.locator('.excel-difftoggle .rd-dt-seg', { hasText: '改后' }).click();
+  await sleep(250);
+  ok('切"改后"→ 被拒的值不复活(仍 120)', await page.evaluate(() => Number(window.__univerGet('C2')) === 120));
 
   await page.locator('.reviewbox .btn.solid').click();
   await sleep(400);
   ok('全部接受 → 显示"已采纳"', await page.evaluate(() => /已采纳/.test(document.querySelector('.reviewbox')?.textContent || '')));
+  ok('全部接受 → 被拒项重新落格(C2=200)', await page.evaluate(() => Number(window.__univerGet('C2')) === 200));
 
   ok('无控制台报错', errors.length === 0, errors.join(' | '));
   console.log(`\nRESULT: ${pass} passed, ${fail} failed`);

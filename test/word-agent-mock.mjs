@@ -89,10 +89,13 @@ try {
   ok('git-diff 有格式改动行(~)', await page.evaluate(() => !!document.querySelector('.gd-line.fmt')));
   await page.screenshot({ path: `${process.env.SHOT_DIR || '.'}/word-gitdiff.png` });
 
-  // 全部接受
+  // 全部接受 → 物理定稿(flatten):不是 CSS 化妆,是真的删 del、解包 ins、剥标识
   await page.locator('.reviewbox .btn.solid').click();
   await sleep(400);
   ok('全部接受 → 显示"已采纳"', await page.evaluate(() => /已采纳/.test(document.querySelector('.reviewbox')?.textContent || '')));
+  ok('定稿 → 修订标记物理清零(无 del/ins/data-cid)', await page.evaluate(() => document.querySelectorAll('.rd-page del, .rd-page ins, .rd-page [data-cid]').length === 0));
+  ok('定稿 → 文本为改后本体,旧句不再存在', await page.evaluate(() => { const t2 = document.querySelector('.rd-page').innerText; return t2.includes('整体进度略超预期') && !t2.includes('整体进度符合预期'); }));
+  ok('定稿 → 四态切换条随之隐去', await page.evaluate(() => !document.querySelector('.rd-difftoggle')));
 
   // 请求体里的 context 应含【格式细节】(#1)与【选区】(#2)
   let ctx = '';
