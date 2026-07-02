@@ -20,10 +20,10 @@ Agent 不该直接改你的文件。在 OtterPatch 里,Agent 只**提议**一份
 
 ## 文档
 
-贡献者/集成者文档在 [`docs/`](./docs/README.md):
-[架构](./docs/architecture.md) · [Agent 循环](./docs/agent.md) ·
-[技能与打法手册](./docs/skills.md) · [审阅体验](./docs/review-ux.md) ·
-[测试](./docs/testing.md)
+文档在 [`docs/`](./docs/README.md)(五种语言):
+[架构](./docs/zh/architecture.md) · [Agent 循环](./docs/zh/agent.md) ·
+[技能与打法手册](./docs/zh/skills.md) · [审阅体验](./docs/zh/review-ux.md) ·
+[测试](./docs/zh/testing.md) · [能力基准](./docs/zh/bench.md)
 
 ## 结构
 

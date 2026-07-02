@@ -22,10 +22,10 @@ whereas a model round-trip rewrote 11/31. See `packages/writeback-surgical`.
 
 ## Docs
 
-Contributor/integrator documentation lives in [`docs/`](./docs/README.md):
-[architecture](./docs/architecture.md) · [agent loop](./docs/agent.md) ·
-[skills & playbooks](./docs/skills.md) · [review UX](./docs/review-ux.md) ·
-[testing](./docs/testing.md)
+Documentation lives in [`docs/`](./docs/README.md) (English · 中文 · 日本語 · Français · 한국어):
+[architecture](./docs/en/architecture.md) · [agent loop](./docs/en/agent.md) ·
+[skills & playbooks](./docs/en/skills.md) · [review UX](./docs/en/review-ux.md) ·
+[testing](./docs/en/testing.md) · [bench log](./docs/en/bench.md)
 
 ## Structure
 
