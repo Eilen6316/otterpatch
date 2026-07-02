@@ -7,7 +7,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
-    "test": "node --import tsx --test src/redline.test.ts src/document.test.ts src/writeback.test.ts"
+    "test": "node --import tsx --test src/redline.test.ts src/document.test.ts src/writeback.test.ts src/format.test.ts"
   },
   "dependencies": {
     "@otterpatch/core": "0.0.1",

@@ -6,6 +6,7 @@
  */
 import type { SkillCard } from './parse.js';
 import { SkillLibrary } from './library.js';
+import { PLAYBOOK_SKILLS } from './playbooks.js';
 
 const ANTHROPIC = 'anthropic/skills';
 
@@ -47,7 +48,7 @@ export const BUILTIN_SKILLS: SkillCard[] = [
   },
 ];
 
-/** 带内置(通用)目录的技能库。专用技能请 lib.install(SKILL.md 文本) 自行加载。 */
+/** 带内置目录的技能库:通用能力卡片 + 领域打法手册(playbook,带 L1 正文供 load_skill 拉取)。专用技能请 lib.install(SKILL.md 文本) 自行加载。 */
 export function defaultLibrary(): SkillLibrary {
-  return new SkillLibrary(BUILTIN_SKILLS);
+  return new SkillLibrary([...BUILTIN_SKILLS, ...PLAYBOOK_SKILLS]);
 }

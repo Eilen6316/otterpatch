@@ -10,3 +10,5 @@ export * from './openai-compat.js';
 export * from './providers.js';
 export * from './agent.js';
 export * from './word-verify.js';
+export * from './doc-tools.js';
+export * from './drawio-verify.js';

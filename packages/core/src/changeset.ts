@@ -42,8 +42,18 @@ export interface AbstractStyle {
   bgColor?: string;
   font?: string; // 字体名(如 宋体 / Arial)
   size?: number; // 字号(磅)
-  align?: 'left' | 'center' | 'right';
+  align?: 'left' | 'center' | 'right' | 'justify';
   numberFormat?: string;
+  /** Word 段落级:行距倍数(1 / 1.5 / 2 …)。Excel 忽略。 */
+  lineSpacing?: number;
+  /** Word 段落级:段落样式(标题/正文/引用)。Excel 忽略。 */
+  block?: 'h1' | 'h2' | 'h3' | 'p' | 'blockquote';
+  /** Word 页面级(须 all=true):分栏数 1/2/3 —— IEEE 双栏这类版式的关键参数。 */
+  columns?: number;
+  /** Word 页面级(须 all=true):页边距预设。 */
+  margin?: 'narrow' | 'normal' | 'moderate' | 'wide';
+  /** Word 页面级(须 all=true):纸张方向。 */
+  orient?: 'portrait' | 'landscape';
   /** 条件格式等高层意图,适配器决定原生 or 降级模拟。 */
   conditional?: { rule: string; format: AbstractStyle };
 }

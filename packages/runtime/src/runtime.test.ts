@@ -59,7 +59,7 @@ test('runtime: propose → diff → commit(excel) 端到端 + 事件流', async 
   }
 });
 
-test('runtime: verifyOpts 给 word 挂上影子自检、给 drawio 不挂', async () => {
+test('runtime: verifyOpts 给 word/drawio 挂上影子自检、未注册格式不挂', async () => {
   const rt = new OtterPatchRuntime();
   const captured: Array<RespondOptions | undefined> = [];
   const cap: ModelClient = {
@@ -74,8 +74,10 @@ test('runtime: verifyOpts 给 word 挂上影子自检、给 drawio 不挂', asyn
   const base = { hostId: 'h1', intent: 'x', baseRev: 0 as DocRev, anchors: [] };
   await rt.respondStream({ ...base, format: 'word', context: '全省财政收入逐年增长。' }, cap, () => {});
   await rt.respondStream({ ...base, format: 'drawio', context: '<mxGraphModel/>' }, cap, () => {});
+  await rt.respondStream({ ...base, format: 'pdf', context: 'AcroForm 字段…' }, cap, () => {});
   assert.ok(captured[0]?.verify, 'word 应挂上 verify(锚点可落地性自检)');
-  assert.equal(captured[1]?.verify, undefined, 'drawio 不走影子自检');
+  assert.ok(captured[1]?.verify, 'drawio 也应挂上 verify(拓扑完整性自检)');
+  assert.equal(captured[2]?.verify, undefined, '未注册校验器的格式(pdf)不挂');
 });
 
 test('runtime: 未注册格式 commit 抛错;已注册含 excel/word/pdf/ppt/drawio', async () => {

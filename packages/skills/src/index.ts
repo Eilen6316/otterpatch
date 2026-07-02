@@ -6,3 +6,4 @@
 export * from './parse.js';
 export * from './library.js';
 export * from './catalog.js';
+export * from './playbooks.js';

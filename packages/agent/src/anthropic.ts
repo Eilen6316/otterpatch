@@ -9,7 +9,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ChangeSet } from '@otterpatch/core';
 import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
-import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, execSheetTool, parseClarify, recentHistory, respondSystem } from './sheet-tools.js';
+import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, execReadTool, parseClarify, recentHistory, respondSystemParts } from './sheet-tools.js';
 import { NUDGE_DIRECT, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
 import { salvageProposalArgs, salvageText } from './json-salvage.js';
 
@@ -21,8 +21,6 @@ export interface AnthropicOptions {
   baseURL?: string; // 中国线/代理可覆盖
   maxTokens?: number;
 }
-
-type ReadArgs = { a1?: string; column?: string; op?: string };
 
 /** 归一化历史:丢空、并相邻同角色、去掉开头的 assistant(Anthropic 要求 user 起头、角色交替)。 */
 function normalizeMessages(msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
@@ -51,15 +49,30 @@ export class AnthropicModelClient implements ModelClient {
     this.maxTokens = opts.maxTokens ?? 8192;
   }
 
-  private toolset(req: ProposeRequest, dialect: HostDialect): Anthropic.Tool[] {
-    const defs = [{ name: dialect.toolName, description: dialect.toolDescription, parameters: dialect.parameters }, ...auxToolDefs(!!req.sheet)];
+  private toolset(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Anthropic.Tool[] {
+    const defs = [{ name: dialect.toolName, description: dialect.toolDescription, parameters: dialect.parameters }, ...auxToolDefs(!!req.sheet, !!req.doc), ...(opts?.extraTools?.defs ?? [])];
     return defs.map((d) => ({ name: d.name, description: d.description, input_schema: d.parameters as unknown as Anthropic.Tool['input_schema'] }));
+  }
+  /** 只读工具统一执行:先给 extraTools(如 load_skill)机会,再路由到 sheet/doc 取数。 */
+  private execTool(name: string, input: unknown, req: ProposeRequest, opts?: RespondOptions): string {
+    const ex = opts?.extraTools?.exec(name, input);
+    if (ex !== null && ex !== undefined) return ex;
+    return execReadTool(name, (input ?? {}) as Record<string, unknown>, req);
   }
   private initMessages(req: ProposeRequest): Anthropic.MessageParam[] {
     return normalizeMessages([
       ...recentHistory(req).map((m) => ({ role: m.role, content: m.content })),
       { role: 'user', content: req.intent },
     ]);
+  }
+  /** system 拆两块并挂 prompt cache 断点:stable(方言+技能,跨轮不变)+ volatile(本轮文档快照)。
+   *  断点打在 volatile 末尾 → 同一轮的多步 loop(取数/修复,最多 8 步)每步都命中整段 system 缓存;跨轮至少命中 stable。 */
+  private systemBlocks(req: ProposeRequest, dialect: HostDialect): Array<Anthropic.TextBlockParam> {
+    const p = respondSystemParts(dialect, req);
+    return [
+      { type: 'text', text: p.stable, cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: p.volatile, cache_control: { type: 'ephemeral' } },
+    ];
   }
 
   async proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet> {
@@ -80,8 +93,8 @@ export class AnthropicModelClient implements ModelClient {
 
   /** 智能路由 + 多步 loop:answer_user / read_range / aggregate;提案后影子校验,不通过则回喂修正(propose→observe→repair)。 */
   async respond(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Promise<AgentResponse> {
-    const system = respondSystem(dialect, req);
-    const tools = this.toolset(req, dialect);
+    const system = this.systemBlocks(req, dialect);
+    const tools = this.toolset(req, dialect, opts);
     const messages = this.initMessages(req);
     let repairsLeft = opts?.maxRepairs ?? 1;
     let nudged = false;
@@ -120,15 +133,15 @@ export class AnthropicModelClient implements ModelClient {
 
       // 只读工具:回显 assistant 内容 + 逐 tool_result,继续 loop
       messages.push({ role: 'assistant', content: assistantBlocks(text, toolUses) });
-      messages.push({ role: 'user', content: toolUses.map((b) => ({ type: 'tool_result' as const, tool_use_id: b.id, content: execSheetTool(b.name, b.input as ReadArgs, req.sheet) })) });
+      messages.push({ role: 'user', content: toolUses.map((b) => ({ type: 'tool_result' as const, tool_use_id: b.id, content: this.execTool(b.name, b.input, req, opts) })) });
     }
     return { kind: 'answer', text: TOO_MANY_STEPS_MSG };
   }
 
   /** 流式版 respond:文本增量回调 answer(扩展思考开启时回调 reasoning)。多步 loop + 影子校验同 respond。 */
   async respondStream(req: ProposeRequest, dialect: HostDialect, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
-    const system = respondSystem(dialect, req);
-    const tools = this.toolset(req, dialect);
+    const system = this.systemBlocks(req, dialect);
+    const tools = this.toolset(req, dialect, opts);
     const messages = this.initMessages(req);
     let repairsLeft = opts?.maxRepairs ?? 1;
     let nudged = false;
@@ -203,7 +216,7 @@ export class AnthropicModelClient implements ModelClient {
         role: 'user',
         content: toolUses.map((b) => {
           onEvent({ type: 'tool', name: b.name });
-          return { type: 'tool_result' as const, tool_use_id: b.id, content: execSheetTool(b.name, b.input as ReadArgs, req.sheet) };
+          return { type: 'tool_result' as const, tool_use_id: b.id, content: this.execTool(b.name, b.input, req, opts) };
         }),
       });
     }

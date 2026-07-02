@@ -36,8 +36,11 @@ export class SkillLibrary {
       .map((c) => {
         let score = 0;
         if (format && c.formats.includes(format)) score += 3;
-        for (const k of c.keywords) if (k && lc.includes(k.toLowerCase())) score += 1;
+        let kw = 0;
+        for (const k of c.keywords) if (k && lc.includes(k.toLowerCase())) kw += 1;
+        score += kw;
         for (const f of c.formats) if (f.length > 1 && lc.includes(f)) score += 1;
+        if (kw > 0 && c.instructions) score += 0.5; // 意图真命中关键词时,带打法手册的更可执行 → 决胜优先;仅格式命中不加(通用卡片保持在前)
         return { c, score };
       })
       .filter((x) => x.score > 0)
@@ -45,13 +48,18 @@ export class SkillLibrary {
       .map((x) => x.c);
   }
 
-  /** 注入 Agent 系统提示的 L0 片段:列出最相关技能的 name+description。 */
+  /** 按名字取技能的 L1 正文(打法手册),供 load_skill 工具执行。 */
+  instructionsFor(name: string): string | undefined {
+    return this.cards.find((c) => c.name === name)?.instructions;
+  }
+
+  /** 注入 Agent 系统提示的 L0 片段:列出最相关技能的 name+description;带手册的标注可 load_skill。 */
   render(format?: string, intent?: string, limit = 5): string {
     const hit = this.match(intent ?? '', format);
     const list = hit.length ? hit : this.cards.filter((c) => !format || c.formats.includes(format));
     if (!list.length) return '';
-    const lines = list.slice(0, limit).map((c, i) => `- ${c.name}${i === 0 && hit.length ? '(最相关)' : ''}:${c.description}`);
-    return '可用技能(命中后按需展开其正文 instructions):\n' + lines.join('\n');
+    const lines = list.slice(0, limit).map((c, i) => `- ${c.name}${c.instructions ? '【有打法手册】' : ''}${i === 0 && hit.length ? '(最相关)' : ''}:${c.description}`);
+    return '可用技能:\n' + lines.join('\n') + (list.slice(0, limit).some((c) => c.instructions) ? '\n标注【有打法手册】的技能与当前任务相关时,【动手前先调 load_skill 加载其检查清单与惯用法】,按手册执行。' : '');
   }
 
   /** 技能即 MCP 工具:供 Agent/外部以工具形式调用。 */

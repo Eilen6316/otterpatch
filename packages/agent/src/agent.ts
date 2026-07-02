@@ -44,18 +44,39 @@ export class Agent {
     return parts.length > 1 ? { ...dialect, systemPrompt: parts.join('\n\n') } : dialect;
   }
 
+  /** 技能渐进披露 L1:库里有带手册的技能时,给 loop 追加 load_skill 工具(命中后拉全文,不预塞 prompt)。 */
+  private withSkillTools(opts?: RespondOptions): RespondOptions | undefined {
+    const lib = this.skills;
+    if (!lib || opts?.extraTools) return opts; // 调用方已带 extraTools 时不覆盖
+    const withBody = lib.all().filter((c) => c.instructions);
+    if (!withBody.length) return opts;
+    const extraTools: NonNullable<RespondOptions['extraTools']> = {
+      defs: [{
+        name: 'load_skill',
+        description: '按名字加载一个技能的完整打法手册(检查清单/惯用法/反例)。系统提示"可用技能"里标注【有打法手册】的技能与当前任务相关时,动手前先加载并按手册执行。',
+        parameters: { type: 'object', properties: { name: { type: 'string', description: '技能名,如 docx-gongwen' } }, required: ['name'] },
+      }],
+      exec: (name, args) => {
+        if (name !== 'load_skill') return null;
+        const n = String((args as { name?: unknown } | null)?.name ?? '');
+        return lib.instructionsFor(n) ?? `(未找到技能 "${n}";带手册的技能: ${withBody.map((c) => c.name).join('、')})`;
+      },
+    };
+    return { ...(opts ?? {}), extraTools };
+  }
+
   /** 智能路由:模型自行决定回答问题还是提出改动(回退到 propose)。 */
   async respond(req: ProposeRequest, opts?: RespondOptions): Promise<AgentResponse> {
     const d = this.dialectFor(req);
-    if (this.model.respond) return this.model.respond(req, d, opts);
+    if (this.model.respond) return this.model.respond(req, d, this.withSkillTools(opts));
     return { kind: 'changeset', changeSet: await this.model.proposeChangeSet(req, d) };
   }
 
   /** 流式路由:有 respondStream 则透传;否则回退到一次性结果并补发增量/done。 */
   async respondStream(req: ProposeRequest, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
     const d = this.dialectFor(req);
-    if (this.model.respondStream) return this.model.respondStream(req, d, onEvent, opts);
-    const r = this.model.respond ? await this.model.respond(req, d, opts) : { kind: 'changeset' as const, changeSet: await this.model.proposeChangeSet(req, d) };
+    if (this.model.respondStream) return this.model.respondStream(req, d, onEvent, this.withSkillTools(opts));
+    const r = this.model.respond ? await this.model.respond(req, d, this.withSkillTools(opts)) : { kind: 'changeset' as const, changeSet: await this.model.proposeChangeSet(req, d) };
     if (r.kind === 'answer') onEvent({ type: 'answer', delta: r.text });
     onEvent({ type: 'done', result: r });
     return r;
