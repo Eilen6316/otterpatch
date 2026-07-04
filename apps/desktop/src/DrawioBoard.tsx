@@ -248,6 +248,8 @@ export interface BoardHandle {
   loadBoard(nodes: BNode[], edges: BEdge[]): void;
   /** 整板读取(导出 .drawio)。 */
   getBoard(): { nodes: BNode[]; edges: BEdge[] };
+  /** 多页导入:整簿替换(页名保留),激活第一页。 */
+  loadPages(pages: Array<{ name: string; nodes: BNode[]; edges: BEdge[] }>): void;
   /** 按快照恢复/重放对象(存在则整体替换,被删则补回)。 */
   restoreObject(obj: { node?: BNode; edge?: BEdge }): void;
 }
@@ -408,15 +410,32 @@ const PORTS: XY[] = [{ x: 0.5, y: 0 }, { x: 1, y: 0.5 }, { x: 0.5, y: 1 }, { x: 
 
 /** 高度复刻 drawio 的交互画板:周界正交圆角连线、悬停连接点拖拽连线(绿色目标高亮)、8 缩放手柄、网格吸附、改名、删边删点、双击空白建节点。 */
 const BOARD_KEY = 'oa.board';
+export interface BoardPage { name: string; nodes: BNode[]; edges: BEdge[] }
+/** 读持久化画板(多页;兼容旧单页 {nodes,edges} 格式迁移)。 */
+function loadBoardStore(): { pages: BoardPage[]; cur: number } {
+  try {
+    const j = JSON.parse(localStorage.getItem(BOARD_KEY) ?? '{}') as { pages?: BoardPage[]; cur?: number; nodes?: BNode[]; edges?: BEdge[] };
+    if (Array.isArray(j.pages) && j.pages.length) return { pages: j.pages, cur: Math.min(Math.max(j.cur ?? 0, 0), j.pages.length - 1) };
+    if (j.nodes?.length || j.edges?.length) return { pages: [{ name: 'Page-1', nodes: j.nodes ?? [], edges: j.edges ?? [] }], cur: 0 };
+  } catch { /* 损坏则重建 */ }
+  return { pages: [{ name: 'Page-1', nodes: [], edges: [] }], cur: 0 };
+}
 export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel | null) => void }>(function DrawioBoard({ onBoardSel }, apiRef) {
   const t = useT();
-  // 持久化:画板内容落 localStorage(此前刷新即空,Excel/Word 都有持久化唯独流程图没有)
-  const [nodes, setNodes] = useState<BNode[]>(() => { try { return (JSON.parse(localStorage.getItem(BOARD_KEY) ?? '{}') as { nodes?: BNode[] }).nodes ?? []; } catch { return []; } });
-  const [edges, setEdges] = useState<BEdge[]>(() => { try { return (JSON.parse(localStorage.getItem(BOARD_KEY) ?? '{}') as { edges?: BEdge[] }).edges ?? []; } catch { return []; } });
+  // 多页 + 持久化:nodes/edges = 当前页工作集,非活动页存 stash;整簿(含页名/当前页)落 localStorage
+  const store0 = useRef(loadBoardStore()).current;
+  const [nodes, setNodes] = useState<BNode[]>(store0.pages[store0.cur]?.nodes ?? []);
+  const [edges, setEdges] = useState<BEdge[]>(store0.pages[store0.cur]?.edges ?? []);
+  const [pageNames, setPageNames] = useState<string[]>(store0.pages.map((p) => p.name));
+  const [curPage, setCurPage] = useState(store0.cur);
+  const stashRef = useRef<Array<{ nodes: BNode[]; edges: BEdge[] }>>(store0.pages.map((p) => ({ nodes: p.nodes, edges: p.edges })));
   useEffect(() => {
-    const timer = window.setTimeout(() => { try { localStorage.setItem(BOARD_KEY, JSON.stringify({ nodes, edges })); } catch { /* 配额满忽略 */ } }, 300);
+    stashRef.current[curPage] = { nodes, edges };
+    const timer = window.setTimeout(() => {
+      try { localStorage.setItem(BOARD_KEY, JSON.stringify({ pages: pageNames.map((name, i) => ({ name, ...(stashRef.current[i] ?? { nodes: [], edges: [] }) })), cur: curPage })); } catch { /* 配额满忽略 */ }
+    }, 300);
     return () => window.clearTimeout(timer);
-  }, [nodes, edges]);
+  }, [nodes, edges, pageNames, curPage]);
   const [selIds, setSelIds] = useState<Set<string>>(new Set());
   const [selEdge, setSelEdge] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
@@ -446,6 +465,15 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
     },
     highlight: (id) => { setHi(id); setSelIds(new Set([id])); setSelEdge(null); },
     loadBoard: (nn, ee) => { commit(); setNodes(nn); setEdges(ee); setSelIds(new Set()); setSelEdge(null); },
+    loadPages: (pgs) => {
+      const pages = pgs.length ? pgs : [{ name: 'Page-1', nodes: [], edges: [] }];
+      stashRef.current = pages.map((x) => ({ nodes: x.nodes, edges: x.edges }));
+      setPageNames(pages.map((x) => x.name));
+      setCurPage(0);
+      setNodes(pages[0]!.nodes); setEdges(pages[0]!.edges);
+      setSelIds(new Set()); setSelEdge(null);
+      past.current = []; future.current = []; // 换簿,撤销栈清零
+    },
     getBoard: () => ({ nodes: nodesRef.current.map((n) => ({ ...n })), edges: edgesRef.current.map((e) => ({ ...e })) }),
     getObject: (id) => {
       const n = nodesRef.current.find((x) => x.id === id);
@@ -516,6 +544,25 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
   };
   const nodeAt = (x: number, y: number, not?: string): BNode | undefined =>
     [...nodes].reverse().find((n) => n.id !== not && x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h);
+  const switchPage = (i: number): void => {
+    if (i === curPage || i < 0 || i >= pageNames.length) return;
+    stashRef.current[curPage] = { nodes, edges }; // 现值入栈
+    const tgt = stashRef.current[i] ?? { nodes: [], edges: [] };
+    setNodes(tgt.nodes); setEdges(tgt.edges);
+    setCurPage(i);
+    setSelIds(new Set()); setSelEdge(null);
+    past.current = []; future.current = []; // 撤销栈按页隔离:切页清空,避免跨页误撤
+  };
+  const addPage = (): void => {
+    stashRef.current[curPage] = { nodes, edges };
+    stashRef.current.push({ nodes: [], edges: [] });
+    const name = 'Page-' + (pageNames.length + 1);
+    setPageNames((ns) => [...ns, name]);
+    setNodes([]); setEdges([]);
+    setCurPage(pageNames.length);
+    setSelIds(new Set()); setSelEdge(null);
+    past.current = []; future.current = [];
+  };
   const addNode = (x: number, y: number, inner: string, label: string, kind?: string): void => {
     commit();
     const id = freshId('n');
@@ -1139,10 +1186,18 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
           })()
         : null}
       {nodes.length === 0 && <div className="board-hint">{t('从左侧拖拽形状到画板,或双击空白处新建;拖节点边缘圆点连线;框选多选;Ctrl+滚轮缩放')}</div>}
+      <div className="board-pages">
+        {pageNames.map((n, i) => (
+          <button key={i} className={'bp' + (i === curPage ? ' on' : '')} title={n} onClick={() => switchPage(i)}
+            onDoubleClick={() => { const v = window.prompt(t('页名'), n); if (v?.trim()) setPageNames((ns) => ns.map((x, k) => (k === i ? v.trim() : x))); }}>{n}</button>
+        ))}
+        <button className="bp add" title={t('新建页')} onClick={addPage}>+</button>
+      </div>
       {nodes.length > 0 && (
         <button className="board-export" title={t('导出为标准 .drawio 文件(drawio 可直接打开)')} onClick={() => {
           void import('./drawio-io.js').then(({ serializeDrawio }) => {
-            const xml = serializeDrawio(nodesRef.current, edgesRef.current);
+            stashRef.current[curPage] = { nodes: nodesRef.current, edges: edgesRef.current };
+            const xml = serializeDrawio(pageNames.map((name, i) => ({ name, ...(stashRef.current[i] ?? { nodes: [], edges: [] }) })));
             const a = document.createElement('a');
             a.href = URL.createObjectURL(new Blob([xml], { type: 'application/xml' }));
             a.download = '流程图.otterpatch.drawio';

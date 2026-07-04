@@ -980,21 +980,24 @@ export function App() {
     for (const e of c.edits) {
       const k = e.op?.kind ?? '';
       if (!ADV_KINDS.has(k)) continue;
-      const a1 = (c.anchors?.[e.target]?.portable?.a1 ?? 'A1').replace(/^.*!/, '');
+      const full = c.anchors?.[e.target]?.portable?.a1 ?? 'A1'; // 保留表名前缀:多 sheet 结构操作按前缀落目标表
+      const sheetName = /^([^!]+)!/.exec(full)?.[1];
+      const a1 = full.replace(/^.*!/, '');
+      const pa1 = sheetName ? `${sheetName}!${a1}` : a1;
       const { row, col } = a1RowCol(a1);
       const n = e.op?.count ?? 1;
-      if (k === 'insertRows') api.insertRows(e.op?.before === false ? row + 1 : row, n);
-      else if (k === 'deleteRows') api.deleteRows(row, n);
-      else if (k === 'insertCols') api.insertCols(e.op?.before === false ? col + 1 : col, n);
-      else if (k === 'deleteCols') api.deleteCols(col, n);
-      else if (k === 'mergeCells') api.mergeRange(a1);
-      else if (k === 'unmergeCells') api.unmergeRange(a1);
+      if (k === 'insertRows') api.insertRows(e.op?.before === false ? row + 1 : row, n, sheetName);
+      else if (k === 'deleteRows') api.deleteRows(row, n, sheetName);
+      else if (k === 'insertCols') api.insertCols(e.op?.before === false ? col + 1 : col, n, sheetName);
+      else if (k === 'deleteCols') api.deleteCols(col, n, sheetName);
+      else if (k === 'mergeCells') api.mergeRange(pa1);
+      else if (k === 'unmergeCells') api.unmergeRange(pa1);
       else if (k === 'freezePanes') api.freeze(e.op?.rows ?? 0, e.op?.cols ?? 0);
-      else if (k === 'sortRange') api.sortRange(a1, e.op?.by ?? 0, e.op?.asc ?? true);
-      else if (k === 'deleteRange') api.clearRange(a1);
-      else if (k === 'conditionalFormat') api.conditionalFormat(a1, { when: e.op?.when ?? 'notEmpty', v1: e.op?.v1, v2: e.op?.v2 }, e.op?.style ?? {});
-      else if (k === 'dataValidation') api.dataValidation(a1, { kind: e.op?.rule ?? 'list', list: e.op?.list, min: e.op?.min, max: e.op?.max, v: e.op?.v });
-      else if (k === 'autoFilter') api.createFilter(a1);
+      else if (k === 'sortRange') api.sortRange(pa1, e.op?.by ?? 0, e.op?.asc ?? true);
+      else if (k === 'deleteRange') api.clearRange(pa1);
+      else if (k === 'conditionalFormat') api.conditionalFormat(pa1, { when: e.op?.when ?? 'notEmpty', v1: e.op?.v1, v2: e.op?.v2 }, e.op?.style ?? {});
+      else if (k === 'dataValidation') api.dataValidation(pa1, { kind: e.op?.rule ?? 'list', list: e.op?.list, min: e.op?.min, max: e.op?.max, v: e.op?.v });
+      else if (k === 'autoFilter') api.createFilter(pa1);
       else if (k === 'insertChart') {
         const inline = (e.op?.categories?.length ?? 0) > 0;
         let spec = null;
@@ -1311,11 +1314,12 @@ export function App() {
         // 标准 .drawio 导入:mxGraphModel → 画板(压撤销栈,Ctrl+Z 可回导入前);Agent 拿到完整拓扑即可改
         try {
           const xml = decodeURIComponent(escape(atob(b64))); // base64 → UTF-8 文本
-          void import('./drawio-io.js').then(({ parseDrawio }) => {
-            const g = parseDrawio(xml);
-            if (!g.nodes.length && !g.edges.length) { notify(t('未解析出图形(不是有效的 .drawio?)')); return; }
-            boardRef.current?.loadBoard(g.nodes, g.edges);
-            notify(t('已载入并渲染') + ' · ' + f.name + ` (${g.nodes.length} ${t('节点')} · ${g.edges.length} ${t('连线')})`);
+          void import('./drawio-io.js').then(({ parseDrawioPages }) => {
+            const pages = parseDrawioPages(xml).filter((g) => g.nodes.length || g.edges.length);
+            if (!pages.length) { notify(t('未解析出图形(不是有效的 .drawio?)')); return; }
+            boardRef.current?.loadPages(pages);
+            const tn = pages.reduce((sum, g) => sum + g.nodes.length, 0); const te = pages.reduce((sum, g) => sum + g.edges.length, 0);
+            notify(t('已载入并渲染') + ' · ' + f.name + ` (${pages.length} ${t('页')} · ${tn} ${t('节点')} · ${te} ${t('连线')})`);
           });
           return;
         } catch (e) {

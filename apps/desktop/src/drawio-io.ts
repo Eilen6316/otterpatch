@@ -9,20 +9,23 @@ import { parseDrawioStyle, innerForStyle, cleanLabel, type BNode, type BEdge } f
 const unesc = (s: string): string => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d))).replace(/&amp;/g, '&');
 const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-/** 解出第一个 diagram 的 mxGraphModel XML(兼容未压缩与经典压缩两种保存格式)。 */
-function diagramXml(text: string): string {
-  if (!/<diagram/i.test(text)) return text; // 裸 mxGraphModel
-  const inner = /<diagram\b[^>]*>([\s\S]*?)<\/diagram>/i.exec(text)?.[1] ?? '';
-  if (/<mxGraphModel/i.test(inner)) return inner;
-  // 经典压缩:base64 → inflateRaw → URI 解码
-  try {
-    const bin = atob(inner.trim());
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return decodeURIComponent(strFromU8(inflateSync(bytes)));
-  } catch {
-    return '';
+/** 解出全部 diagram 页(兼容未压缩与经典压缩两种保存格式)。 */
+function diagramPages(text: string): Array<{ name: string; xml: string }> {
+  if (!/<diagram/i.test(text)) return [{ name: 'Page-1', xml: text }]; // 裸 mxGraphModel
+  const out: Array<{ name: string; xml: string }> = [];
+  for (const m of text.matchAll(/<diagram\b([^>]*)>([\s\S]*?)<\/diagram>/gi)) {
+    const name = /name="([^"]*)"/.exec(m[1] ?? '')?.[1] ?? `Page-${out.length + 1}`;
+    const inner = m[2] ?? '';
+    if (/<mxGraphModel/i.test(inner)) { out.push({ name: unesc(name), xml: inner }); continue; }
+    // 经典压缩:base64 → inflateRaw → URI 解码
+    try {
+      const bin = atob(inner.trim());
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      out.push({ name: unesc(name), xml: decodeURIComponent(strFromU8(inflateSync(bytes))) });
+    } catch { /* 该页解不开就跳过 */ }
   }
+  return out;
 }
 
 interface RawCell { id: string; value: string; style: string; vertex: boolean; edge: boolean; parent: string; source: string; target: string; x: number; y: number; w: number; h: number; points: Array<{ x: number; y: number }> }
@@ -33,9 +36,14 @@ function attrs(tag: string): Record<string, string> {
   return out;
 }
 
-/** .drawio 文本 → 画板对象。parent 相对坐标换算为绝对;边的 endArrow/dashed/strokeColor/航点保真。 */
+/** .drawio 文本 → 多页画板对象(每个 diagram 一页)。 */
+export function parseDrawioPages(text: string): Array<{ name: string; nodes: BNode[]; edges: BEdge[] }> {
+  return diagramPages(text).map((pg) => ({ name: pg.name, ...parseDrawio(pg.xml) }));
+}
+
+/** 单份 mxGraphModel XML → 画板对象。parent 相对坐标换算为绝对;边的 endArrow/dashed/strokeColor/航点保真。 */
 export function parseDrawio(text: string): { nodes: BNode[]; edges: BEdge[] } {
-  const xml = diagramXml(text);
+  const xml = /<diagram/i.test(text) ? (diagramPages(text)[0]?.xml ?? '') : text;
   const cells: RawCell[] = [];
   // mxCell 可能自闭合(无 geometry)或包 <mxGeometry …>(可含 <mxPoint> 航点)
   for (const m of xml.matchAll(/<mxCell\b([^>]*?)(?:\/>|>([\s\S]*?)<\/mxCell>)/g)) {
@@ -99,8 +107,7 @@ function nodeStyle(n: BNode): string {
 
 const ARROW_OUT: Record<string, string> = { classic: 'classic', open: 'open', diamond: 'diamond', circle: 'oval', none: 'none' };
 
-/** 画板 → 标准 .drawio(未压缩 mxfile,drawio 可直接打开)。 */
-export function serializeDrawio(nodes: BNode[], edges: BEdge[]): string {
+function pageModelXml(nodes: BNode[], edges: BEdge[]): string {
   const cells: string[] = ['<mxCell id="0"/>', '<mxCell id="1" parent="0"/>'];
   for (const n of nodes) {
     cells.push(`<mxCell id="${esc(n.id)}" value="${esc(n.label)}" style="${esc(nodeStyle(n))}" vertex="1" parent="1"><mxGeometry x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" as="geometry"/></mxCell>`);
@@ -110,5 +117,11 @@ export function serializeDrawio(nodes: BNode[], edges: BEdge[]): string {
     const pts = e.points?.length ? `<Array as="points">${e.points.map((p) => `<mxPoint x="${p.x}" y="${p.y}"/>`).join('')}</Array>` : '';
     cells.push(`<mxCell id="${esc(e.id)}" value="${esc(e.label ?? '')}" style="${esc(st)}" edge="1" parent="1" source="${esc(e.from)}" target="${esc(e.to)}"><mxGeometry relative="1" as="geometry">${pts}</mxGeometry></mxCell>`);
   }
-  return `<mxfile host="otterpatch" modified="1970-01-01T00:00:00Z" version="1.0"><diagram id="d1" name="Page-1"><mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="826" math="0" shadow="0"><root>${cells.join('')}</root></mxGraphModel></diagram></mxfile>`;
+  return `<mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="826" math="0" shadow="0"><root>${cells.join('')}</root></mxGraphModel>`;
+}
+
+/** 画板(多页) → 标准 .drawio(未压缩 mxfile,每页一个 diagram,drawio 可直接打开)。 */
+export function serializeDrawio(pages: Array<{ name: string; nodes: BNode[]; edges: BEdge[] }>): string {
+  const body = pages.map((pg, i) => `<diagram id="d${i + 1}" name="${esc(pg.name || 'Page-' + (i + 1))}">${pageModelXml(pg.nodes, pg.edges)}</diagram>`).join('');
+  return `<mxfile host="otterpatch" modified="1970-01-01T00:00:00Z" version="1.0">${body}</mxfile>`;
 }

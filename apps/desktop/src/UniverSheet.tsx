@@ -330,16 +330,16 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
         });
         return st;
       },
-      insertRows: (row, count) => safe(() => sheet()?.insertRows(row, count)),
-      deleteRows: (row, count) => safe(() => sheet()?.deleteRows(row, count)),
-      insertCols: (col, count) => safe(() => sheet()?.insertColumns(col, count)),
-      deleteCols: (col, count) => safe(() => sheet()?.deleteColumns(col, count)),
-      mergeRange: (a1) => safe(() => sheet()?.getRange(a1).merge()),
-      unmergeRange: (a1) => safe(() => sheet()?.getRange(a1).breakApart()),
+      insertRows: (row, count, sh) => safe(() => (sh ? sheetOf(sh + '!A1') : sheet())?.insertRows(row, count)),
+      deleteRows: (row, count, sh) => safe(() => (sh ? sheetOf(sh + '!A1') : sheet())?.deleteRows(row, count)),
+      insertCols: (col, count, sh) => safe(() => (sh ? sheetOf(sh + '!A1') : sheet())?.insertColumns(col, count)),
+      deleteCols: (col, count, sh) => safe(() => (sh ? sheetOf(sh + '!A1') : sheet())?.deleteColumns(col, count)),
+      mergeRange: (a1) => safe(() => rangeOf(a1)?.merge()),
+      unmergeRange: (a1) => safe(() => rangeOf(a1)?.breakApart()),
       freeze: (rows, cols) => safe(() => { const s = sheet(); if (!s) return; if (rows > 0 || cols > 0) s.setFreeze({ startRow: rows, startColumn: cols, xSplit: cols, ySplit: rows }); else s.cancelFreeze(); }),
-      clearRange: (a1) => safe(() => sheet()?.getRange(a1).clearContent()),
+      clearRange: (a1) => safe(() => rangeOf(a1)?.clearContent()),
       sortRange: (a1, by, asc) => safe(() => {
-        const r = sheet()?.getRange(a1);
+        const r = rangeOf(a1);
         if (!r) return;
         const num = (v: unknown): number => (typeof v === 'number' ? v : parseFloat(String(v).replace(/[,%¥$\s]/g, '')));
         const sorted = [...r.getValues()].sort((x, y) => {
@@ -385,12 +385,12 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
         s.getRange(a1).setDataValidation(b.build());
       }),
       createFilter: (a1) => safe(() => {
-        const r = sheet()?.getRange(a1);
+        const r = rangeOf(a1);
         if (!r) return;
         if (r.getFilter()) r.getFilter()?.remove(); // 已有则先清,避免重复
         r.createFilter();
       }),
-      readGrid: (a1) => { let v: unknown[][] = []; safe(() => { v = (sheet()?.getRange(a1).getValues() as unknown[][]) ?? []; }); return v; },
+      readGrid: (a1) => { let v: unknown[][] = []; safe(() => { v = (rangeOf(a1)?.getValues() as unknown[][]) ?? []; }); return v; },
       insertChartImage: (a1, dataUrl, width, height) => {
         // 异步:ECharts PNG → 浮动图片落到网格(builder 才能同时给位置+尺寸)
         void (async () => {
@@ -407,10 +407,25 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
         try {
           const s = snap(apiRef.current?.getActiveWorkbook?.() as unknown as FWorkbookLike | null);
           // 多 sheet 感知:告诉 Agent 工作簿里有哪些表(否则它不知道可以用 Sheet2! 前缀锚定)
-          const wb = apiRef.current?.getActiveWorkbook?.() as { getSheets?: () => Array<{ getSheetName?: () => string }>; getActiveSheet?: () => { getSheetName?: () => string } } | undefined;
-          const names = wb?.getSheets?.()?.map((x) => x.getSheetName?.() ?? '?') ?? [];
+          const wb = apiRef.current?.getActiveWorkbook?.() as { getSheets?: () => Array<{ getSheetName?: () => string; getRange?: (a1: string) => { getValues?: () => unknown[][] } }>; getActiveSheet?: () => { getSheetName?: () => string } } | undefined;
+          const shs = wb?.getSheets?.() ?? [];
           const cur = wb?.getActiveSheet?.()?.getSheetName?.() ?? '';
-          if (s && names.length > 1) s.text = `工作簿共 ${names.length} 张表: ${names.map((n) => (n === cur ? n + '(当前)' : n)).join('、')};跨表写值锚点用 表名!A1 前缀。\n` + s.text;
+          if (s && shs.length > 1) {
+            // 跨表感知:每张非当前表给内容概览(表头 + 前 2 行样本),Agent 才能有依据地跨表读写
+            const briefs = shs.map((x) => {
+              const n = x.getSheetName?.() ?? '?';
+              if (n === cur) return `${n}(当前,明细见下)`;
+              try {
+                const rows = (x.getRange?.('A1:H4')?.getValues?.() ?? []) as unknown[][];
+                const line = (r: unknown[]): string => r.map((v) => (v == null || v === '' ? '·' : String(v))).join(' | ').replace(/( \| ·)+$/, '');
+                const head = rows[0]?.some((v) => v != null && v !== '') ? line(rows[0]!) : '';
+                if (!head) return `${n}(空表)`;
+                const samples = rows.slice(1, 3).filter((r) => r.some((v) => v != null && v !== '')).map(line);
+                return `${n}: 表头[${head}]${samples.length ? ' 样本 ' + samples.join(' ;; ') : ''}`;
+              } catch { return n; }
+            });
+            s.text = `工作簿共 ${shs.length} 张表(跨表读写锚点用 表名!A1 前缀,插删行列等结构操作同样支持指定表):\n${briefs.map((b) => '  · ' + b).join('\n')}\n` + s.text;
+          }
           return s;
         } catch { return null; }
       },

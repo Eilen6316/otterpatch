@@ -9,7 +9,7 @@ const DRAWIO = `<mxfile host="app.diagrams.net"><diagram id="x" name="P1"><mxGra
 <mxCell id="u" value="用户" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;" vertex="1" parent="1"><mxGeometry x="480" y="90" width="110" height="60" as="geometry"/></mxCell>
 <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#dc2626;endArrow=open;" edge="1" parent="1" source="u" target="api"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="460" y="200"/></Array></mxGeometry></mxCell>
 <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="1" source="api" target="db"><mxGeometry relative="1" as="geometry"/></mxCell>
-</root></mxGraphModel></diagram></mxfile>`;
+</root></mxGraphModel></diagram><diagram id="y" name="部署页"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="k8s" value="K8s 集群" style="rounded=1;html=1;fillColor=#fff2cc;" vertex="1" parent="1"><mxGeometry x="100" y="100" width="160" height="60" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>`;
 
 const { page, teardown } = await openApp({ storage: { 'oa.fmt': 'drawio' } });
 const r = createReporter();
@@ -28,10 +28,21 @@ try {
   r.ok('导入渲染 4 节点', st.nodes === 4, `实际 ${st.nodes}`);
   r.ok('容器标签贴顶(verticalAlign=top 保真)', st.tops >= 1);
   r.ok('标签齐全', ['服务集群', 'API 网关', '订单库', '用户'].every((w) => st.labels.some((l) => l?.includes(w))), st.labels.join('|'));
-  const api = (st.saved.nodes ?? []).find((n) => n.id === 'api');
+  const api = (st.saved.pages?.[0]?.nodes ?? st.saved.nodes ?? []).find((n) => n.id === 'api');
   r.ok('容器相对坐标已换算为绝对(api: 80+20=100, 60+50=110)', api && api.x === 100 && api.y === 110, JSON.stringify(api && { x: api.x, y: api.y }));
-  const e1 = (st.saved.edges ?? []).find((e) => e.id === 'e1');
+  const e1 = (st.saved.pages?.[0]?.edges ?? st.saved.edges ?? []).find((e) => e.id === 'e1');
   r.ok('边样式保真(虚线/红色/open 箭头/航点)', e1 && e1.dash === true && e1.color === '#dc2626' && e1.arrow === 'open' && e1.points?.length === 1, JSON.stringify(e1));
+
+  // 多页:页签渲染 + 切页 + 内容隔离
+  const tabs = await page.evaluate(() => [...document.querySelectorAll('.board-pages .bp:not(.add)')].map((b) => b.textContent));
+  r.ok('多页页签(P1/部署页)', tabs.length === 2 && tabs[1] === '部署页', tabs.join('|'));
+  await page.locator('.board-pages .bp', { hasText: '部署页' }).click();
+  await sleep(400);
+  const pg2 = await page.evaluate(() => ({ n: document.querySelectorAll('.bnode').length, l: [...document.querySelectorAll('.bnode-label')].map((x) => x.textContent).join('|') }));
+  r.ok('切到第二页:1 节点(K8s 集群)', pg2.n === 1 && pg2.l.includes('K8s 集群'), JSON.stringify(pg2));
+  await page.locator('.board-pages .bp', { hasText: 'P1' }).click();
+  await sleep(400);
+  r.ok('切回第一页:4 节点', (await page.evaluate(() => document.querySelectorAll('.bnode').length)) === 4);
 
   // 导出 → 捕获下载 → 再解析比对
   const dlP = page.waitForEvent('download', { timeout: 15000 });
@@ -45,6 +56,7 @@ try {
   r.ok('节点 id/value/style 保真(cylinder3 仍在)', xml.includes('id="db"') && xml.includes('cylinder3') && xml.includes('订单库'));
   r.ok('边保真(dashed=1 + strokeColor + 航点)', /id="e1"[^>]*style="[^"]*dashed=1/.test(xml) && xml.includes('strokeColor=#dc2626') && /<mxPoint x="460" y="200"\/>/.test(xml));
   r.ok('连线端点保真(source/target)', /source="u" target="api"/.test(xml) && /source="api" target="db"/.test(xml));
+  r.ok('导出保留多页(两个 diagram,第二页含 K8s 集群)', (xml.match(/<diagram /g) ?? []).length === 2 && /name="部署页"/.test(xml) && xml.includes('K8s 集群'));
 } catch (e) {
   console.log('SCRIPT_ERROR:', e.message);
 } finally {

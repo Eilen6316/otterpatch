@@ -856,3 +856,9 @@ svg { display: block; }
 /* drawio 审阅高亮:当前对象脉冲描边 */
 .bnode.hi { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; animation: hipulse 1.1s ease-in-out infinite; }
 @keyframes hipulse { 0%, 100% { outline-color: rgba(37, 99, 235, 0.95); } 50% { outline-color: rgba(37, 99, 235, 0.2); } }
+/* drawio 多页页签(左下,drawio 同款位置) */
+.board-pages { position: absolute; left: 12px; bottom: 12px; z-index: 6; display: flex; gap: 4px; align-items: center; max-width: 60%; overflow-x: auto; }
+.board-pages .bp { padding: 4px 12px; border: 1px solid var(--line-2); border-radius: 7px; background: rgba(255,255,255,.92); font-size: 12px; color: var(--text-soft); cursor: pointer; white-space: nowrap; }
+.board-pages .bp.on { border-color: var(--accent); color: var(--accent); font-weight: 600; background: #eef3ff; }
+.board-pages .bp.add { width: 26px; padding: 4px 0; text-align: center; color: var(--muted); }
+.board-pages .bp:hover { border-color: var(--accent); }

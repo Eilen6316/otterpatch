@@ -15,7 +15,7 @@ try {
   await sleep(200);
   await page.keyboard.press('Escape');
   await sleep(600); // 等 300ms 防抖落盘
-  const saved = await page.evaluate(() => { try { return (JSON.parse(localStorage.getItem('oa.board') ?? '{}').nodes ?? []).length; } catch { return -1; } });
+  const saved = await page.evaluate(() => { try { return ((JSON.parse(localStorage.getItem('oa.board') ?? '{}').pages?.[0]?.nodes) ?? []).length; } catch { return -1; } });
   r.ok('建 2 节点已落 localStorage', saved === 2, `存了 ${saved}`);
 
   await page.reload({ waitUntil: 'networkidle' });
@@ -31,7 +31,7 @@ try {
   await sleep(600);
   const final = await page.evaluate(() => ({
     dom: document.querySelectorAll('.bnode').length,
-    ids: (() => { try { const ns = JSON.parse(localStorage.getItem('oa.board') ?? '{}').nodes ?? []; return new Set(ns.map((n) => n.id)).size === ns.length ? ns.length : -1; } catch { return -1; } })(),
+    ids: (() => { try { const ns = JSON.parse(localStorage.getItem('oa.board') ?? '{}').pages?.[0]?.nodes ?? []; return new Set(ns.map((n) => n.id)).size === ns.length ? ns.length : -1; } catch { return -1; } })(),
   }));
   r.ok('刷新后新建不撞 id(3 节点全在且 id 唯一)', final.dom === 3 && final.ids === 3, JSON.stringify(final));
 } catch (e) {
