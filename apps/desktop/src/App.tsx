@@ -777,9 +777,13 @@ export function App() {
                   setBoardDiff('final'); // 新提案到达,视图回到"改后"基准
                   const mut = applyDrawioMutations(cs);
                   let board: BoardPatch;
-                  if (streamObjsRef.current.length) {
+                  // 完整性守卫:长提案的流式解析可能截断(实测 18 处只吐出 8 个)——流式画的少于提案对象数,
+                  // 就清掉残画、按最终 changeSet 全量重画,别把"画了一半"当成品交付
+                  const addCount = ((cs as { edits?: Array<{ op?: { kind?: string } }> } | null)?.edits ?? []).filter((e) => e.op?.kind === 'addObject').length;
+                  if (streamObjsRef.current.length >= addCount && streamObjsRef.current.length > 0) {
                     board = { byEdit: { ...streamByEditRef.current, ...mut.byEdit }, objs: streamObjsRef.current, muts: mut.muts };
                   } else {
+                    if (streamObjsRef.current.length) boardRef.current?.removeObjects(Object.values(streamByEditRef.current));
                     const b = drawioCsToBoard(cs);
                     board = { byEdit: { ...b.byEdit, ...mut.byEdit }, objs: b.objs, muts: mut.muts };
                     if (b.nodes.length || b.edges.length) void playBoard(b.nodes, b.edges); // 兜底:逐个补图

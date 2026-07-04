@@ -24,7 +24,9 @@
     "eval:word:struct": "node test/eval-word-struct.mjs",
     "shot:review": "node test/review-shot.mjs",
     "eval:word:commit": "node test/eval-word-commit.mjs",
-    "eval:word:align": "node test/eval-word-align.mjs"
+    "eval:word:align": "node test/eval-word-align.mjs",
+    "eval:drawio:k8s": "node test/eval-drawio-k8s.mjs",
+    "eval:drawio:summary": "node test/eval-drawio-summary.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
