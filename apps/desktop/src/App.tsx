@@ -1043,7 +1043,7 @@ export function App() {
     d.items
       .filter((it) => it.ref && !ADV_KINDS.has(it.kind ?? '')) // 结构/对象操作(插图表/条件格式/筛选…)走 applyExcelStructure,别当单元格值写
       .map((it) => {
-        const a1 = it.ref.replace(/^.*!/, ''); // 去掉 Sheet1! 前缀,落到当前表
+        const a1 = it.ref; // 保留表名前缀(Sheet2!B3):多 sheet 锚定由 SheetHandle 按前缀解析目标表,不再一律落当前表
         const s = it.style;
         // 样式类改动(setStyle/setNumberFormat):只落样式维度、绝不写值 —— after 是给人读的摘要("对齐 left"),
         // 写进单元格就是拿摘要文字覆盖数据。未识别的样式维度宁可丢弃也不能掉到写值兜底。

@@ -282,6 +282,15 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
 
   useImperativeHandle(ref, () => {
     const sheet = (): FSheetOps | null => apiRef.current?.getActiveWorkbook?.()?.getActiveSheet?.() ?? null;
+    // 多 sheet 锚定:'Sheet2!B3' 解析到目标表(找不到落回当前表),不再一律剥前缀写当前表
+    const sheetOf = (a1: string): FSheetOps | null => {
+      const m = /^([^!]+)!/.exec(a1);
+      if (!m) return sheet();
+      const wb = apiRef.current?.getActiveWorkbook?.() as { getSheetByName?: (n: string) => FSheetOps | null } | undefined;
+      return wb?.getSheetByName?.(m[1]!) ?? sheet();
+    };
+    const bare = (a1: string): string => a1.replace(/^.*!/, '');
+    const rangeOf = (a1: string): FRangeOps | undefined => sheetOf(a1)?.getRange(bare(a1)) ?? undefined;
     const safe = (fn: () => void): void => {
       try {
         fn();
@@ -293,22 +302,26 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
       // 以 = 开头的字符串当公式写入(Univer 裸字符串会被存成文本,必须用 { f })
       setCell: (a1, v) =>
         safe(() => {
-          const r = sheet()?.getRange(a1);
+          const r = rangeOf(a1);
           if (typeof v === 'string' && v.trim().startsWith('=')) r?.setValue({ f: v.trim() });
           else r?.setValue(v);
         }),
-      setBackground: (a1, c) => safe(() => sheet()?.getRange(a1).setBackground(c)),
-      setFontColor: (a1, c) => safe(() => sheet()?.getRange(a1).setFontColor(c)),
-      setBold: (a1, on = true) => safe(() => sheet()?.getRange(a1).setFontWeight(on ? 'bold' : 'normal')),
-      setNumberFormat: (a1, p) => safe(() => sheet()?.getRange(a1).setNumberFormat(p)),
+      setBackground: (a1, c) => safe(() => rangeOf(a1)?.setBackground(c)),
+      setFontColor: (a1, c) => safe(() => rangeOf(a1)?.setFontColor(c)),
+      setBold: (a1, on = true) => safe(() => rangeOf(a1)?.setFontWeight(on ? 'bold' : 'normal')),
+      setNumberFormat: (a1, p) => safe(() => rangeOf(a1)?.setNumberFormat(p)),
       // Univer facade 怪癖:水平对齐取值 left|center|normal,'normal' 才是右对齐;null 走 SetStyleCommand 清 ht
-      setAlign: (a1, align) => safe(() => sheet()?.getRange(a1).setHorizontalAlignment(align === 'right' ? 'normal' : align)),
-      focus: (a1) => safe(() => { const s = sheet(); if (s) s.setActiveRange(s.getRange(a1)); }),
-      getValue: (a1) => { let v: unknown; safe(() => { v = sheet()?.getRange(a1).getValue(); }); return v; },
+      setAlign: (a1, align) => safe(() => rangeOf(a1)?.setHorizontalAlignment(align === 'right' ? 'normal' : align)),
+      focus: (a1) => safe(() => {
+        const s = sheetOf(a1); if (!s) return;
+        if (a1.includes('!')) (apiRef.current?.getActiveWorkbook?.() as { setActiveSheet?: (sh: FSheetOps) => void } | undefined)?.setActiveSheet?.(s); // 带前缀先切表,用户看得到落点
+        s.setActiveRange(s.getRange(bare(a1)));
+      }),
+      getValue: (a1) => { let v: unknown; safe(() => { v = rangeOf(a1)?.getValue(); }); return v; },
       getCellState: (a1) => { // 尽力而为:facade 缺哪个 getter 就少采哪个维度(revert 有兜底默认值)
         const st: { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean; align?: 'left' | 'center' | 'right' | null } = {};
         safe(() => {
-          const r = sheet()?.getRange(a1); if (!r) return;
+          const r = rangeOf(a1); if (!r) return;
           st.v = r.getValue();
           const f = (r as { getFormulas?: () => string[][] }).getFormulas?.()?.[0]?.[0];
           st.f = f && String(f).startsWith('=') ? String(f) : null;
@@ -390,7 +403,17 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
           } catch { /* drawing 预设未就绪 */ }
         })();
       },
-      getSheet: () => { try { return snap(apiRef.current?.getActiveWorkbook?.() as unknown as FWorkbookLike | null); } catch { return null; } },
+      getSheet: () => {
+        try {
+          const s = snap(apiRef.current?.getActiveWorkbook?.() as unknown as FWorkbookLike | null);
+          // 多 sheet 感知:告诉 Agent 工作簿里有哪些表(否则它不知道可以用 Sheet2! 前缀锚定)
+          const wb = apiRef.current?.getActiveWorkbook?.() as { getSheets?: () => Array<{ getSheetName?: () => string }>; getActiveSheet?: () => { getSheetName?: () => string } } | undefined;
+          const names = wb?.getSheets?.()?.map((x) => x.getSheetName?.() ?? '?') ?? [];
+          const cur = wb?.getActiveSheet?.()?.getSheetName?.() ?? '';
+          if (s && names.length > 1) s.text = `工作簿共 ${names.length} 张表: ${names.map((n) => (n === cur ? n + '(当前)' : n)).join('、')};跨表写值锚点用 表名!A1 前缀。\n` + s.text;
+          return s;
+        } catch { return null; }
+      },
     };
   }, []);
 
