@@ -134,6 +134,31 @@ function edgePts(a: BNode, b: BNode, style?: EdgeStyle, points?: XY[]): XY[] {
   if (points && points.length) return routeWaypoints(a, b, points);
   return style === 'straight' ? straightRoute(a, b) : ortho(a, b);
 }
+/** 中心连线是否穿过第三方节点矩形(采样粗判,覆盖同排横穿/同列竖穿的主场景)。 */
+function segCrossesRect(a: BNode, b: BNode, n: BNode): boolean {
+  const ax = a.x + a.w / 2, ay = a.y + a.h / 2, bx = b.x + b.w / 2, by = b.y + b.h / 2;
+  for (let t = 0.08; t < 0.95; t += 0.04) {
+    const x = ax + (bx - ax) * t, y = ay + (by - ay) * t;
+    if (x > n.x && x < n.x + n.w && y > n.y && y < n.y + n.h) return true;
+  }
+  return false;
+}
+/** 避障路由:直连会横穿其它节点时绕行(节点画在连线之上,穿过=视觉断线,长线看起来像相邻节点串联)。 */
+function avoidRoute(a: BNode, b: BNode, ed: { id: string; style?: EdgeStyle; points?: XY[] }, nodes: BNode[]): XY[] {
+  if (!ed.points?.length) {
+    // 容器(大框)与扁横条(分区标签)不算障碍:线从它们身上过是正常的;真正遮断视觉的是普通组件节点
+    const blockers = nodes.filter((n) => n.id !== a.id && n.id !== b.id && n.w >= 40 && n.h >= 40 && n.w * n.h <= 60000 && segCrossesRect(a, b, n));
+    if (blockers.length) {
+      const lane = 26 + (Math.abs([...ed.id].reduce((s, c) => s + c.charCodeAt(0), 0)) % 3) * 14; // 多条绕行线错开车道
+      const horiz = Math.abs((b.x + b.w / 2) - (a.x + a.w / 2)) >= Math.abs((b.y + b.h / 2) - (a.y + a.h / 2));
+      const wp: XY = horiz
+        ? { x: (a.x + a.w / 2 + b.x + b.w / 2) / 2, y: Math.min(a.y, b.y, ...blockers.map((n) => n.y)) - lane }
+        : { x: Math.max(a.x + a.w, b.x + b.w, ...blockers.map((n) => n.x + n.w)) + lane, y: (a.y + a.h / 2 + b.y + b.h / 2) / 2 };
+      return routeWaypoints(a, b, [wp]);
+    }
+  }
+  return edgePts(a, b, ed.style, ed.points);
+}
 const ARROWS: ArrowKind[] = ['classic', 'open', 'diamond', 'circle', 'none'];
 function arrowGlyph(ak: ArrowKind): ReactNode {
   const x2 = ak === 'none' ? 18 : 11;
@@ -821,7 +846,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
           const a = nodes.find((n) => n.id === ed.from);
           const b = nodes.find((n) => n.id === ed.to);
           if (!a || !b) return null;
-          const pts = edgePts(a, b, ed.style, ed.points);
+          const pts = avoidRoute(a, b, ed, nodes);
           const d = ed.style === 'straight' && !ed.points?.length ? `M ${pts[0]!.x} ${pts[0]!.y} L ${pts[1]!.x} ${pts[1]!.y}` : roundedPath(pts);
           const on = selEdge === ed.id;
           const arrow = ed.arrow ?? 'classic';

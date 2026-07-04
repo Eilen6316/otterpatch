@@ -44,6 +44,20 @@ export function buildDrawioVerifier(boardContext: string): (cs: ChangeSet) => Ve
       const inside = b.x >= a.x && b.y >= a.y && b.x + b.w <= a.x + a.w && b.y + b.h <= a.y + a.h && b.w * b.h < a.w * a.h * 0.8;
       if (inside && b.y - a.y < 36) warnings.push(`子节点 "${b.id}" 顶边距容器 "${a.id}" 顶部仅 ${Math.round(b.y - a.y)}px,会压住容器标题 —— 子节点 y 请从容器顶 +40 起排`);
     }
+    // 连线穿越:同组(同 parent,坐标可比)内,边的中心直线横穿第三方节点 → 视觉断线像"相邻串联",提醒改星型布局
+    for (const e of cs.edits) {
+      if (e.op.kind !== 'addObject') continue;
+      const p = e.op.payload as { id?: string; edge?: boolean; source?: string; target?: string };
+      if (!(p.edge || (p.source && p.target))) continue;
+      const s = boxes.find((x) => x.id === p.source); const t = boxes.find((x) => x.id === p.target);
+      if (!s || !t || (s.parent ?? '1') !== (t.parent ?? '1')) continue;
+      const cross = boxes.find((n) => n.id !== s.id && n.id !== t.id && (n.parent ?? '1') === (s.parent ?? '1') && n.w >= 40 && n.h >= 40 && (() => {
+        const ax = s.x + s.w / 2, ay = s.y + s.h / 2, bx = t.x + t.w / 2, by = t.y + t.h / 2;
+        for (let k = 0.08; k < 0.95; k += 0.04) { const x = ax + (bx - ax) * k, y = ay + (by - ay) * k; if (x > n.x && x < n.x + n.w && y > n.y && y < n.y + n.h) return true; }
+        return false;
+      })());
+      if (cross) warnings.push(`连线 "${p.id ?? '?'}" (${p.source}→${p.target}) 会横穿节点 "${cross.id}",视觉上像相邻串联 —— hub 节点建议放单独一行居中(星型布局),或调整节点顺序`);
+    }
     const touched = new Set<string>();
     for (const e of cs.edits) {
       const a = cs.anchors[e.target];
