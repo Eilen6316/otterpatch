@@ -20,3 +20,4 @@ experiments/surgical.*
 *.tmp
 # local helper / smoke scripts (not committed)
 /_*.mjs
+/1.txt
