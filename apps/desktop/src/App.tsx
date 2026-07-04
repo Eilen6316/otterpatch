@@ -19,7 +19,7 @@ import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
 import { Composer } from './Composer.js';
 import { TopBar } from './TopBar.js';
-import { DrawioBoard, DrawioToolbar, DrawioPalette, parseDrawioStyle, innerForStyle, snap, extractDrawioOps, makeRawBoardConv, boundingA1 } from './DrawioBoard.js';
+import { DrawioBoard, DrawioToolbar, DrawioPalette, parseDrawioStyle, innerForStyle, snap, cleanLabel, extractDrawioOps, makeRawBoardConv, boundingA1 } from './DrawioBoard.js';
 import type { BNode, BEdge, BoardSel, BoardHandle } from './DrawioBoard.js';
 import { ThinkingPanel, ClarifyCard } from './ThreadCards.js';
 import type { ClarifyQuestion } from './ThreadCards.js';
@@ -501,6 +501,7 @@ export function App() {
   const boardRef = useRef<BoardHandle>(null);
   const wordRef = useRef<RichDocHandle>(null);
   const applySeqRef = useRef(0);
+  const chartRects = useRef<Array<{ row: number; col: number }>>([]); // 已插入图表的锚点(会话级):新图撞上就下移,别叠在一起
   // drawio「边生成边画」流式状态
   const draftBufRef = useRef('');
   const drawnOpsRef = useRef(0);
@@ -1007,7 +1008,16 @@ export function App() {
             const ec = a1RowCol(end);
             place = colA(ec.col + 2) + (a1RowCol(a1.split(':')[0] ?? 'A1').row + 1);
           }
-          api.insertChartImage(place, png, 640, 400);
+          // 防撞:图表是 640×400 浮动图片(约 8 列×18 行),Agent 用单元格思维给锚点(如 G2、G7)会让第二张盖在第一张上——撞上就整体下移
+          const W = 8, H = 18;
+          let rc = a1RowCol(place);
+          for (let guard = 0; guard < 20; guard++) {
+            const hit = chartRects.current.find((r) => rc.row < r.row + H && r.row < rc.row + H && rc.col < r.col + W && r.col < rc.col + W);
+            if (!hit) break;
+            rc = { row: hit.row + H + 1, col: rc.col };
+          }
+          chartRects.current.push({ row: rc.row, col: rc.col });
+          api.insertChartImage(colA(rc.col) + (rc.row + 1), png, 640, 400);
         }
       }
     }
@@ -1044,9 +1054,10 @@ export function App() {
     const bid = (orig?: string): string => { const k = orig ?? ('?' + idMap.size); let v = idMap.get(k); if (!v) { v = `g${seq}_${idMap.size + 1}`; idMap.set(k, v); } return v; };
     const nodes: BNode[] = []; const edges: BEdge[] = []; const byEdit: Record<string, string> = {}; const objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> = [];
     let stackY = 60;
+    const byOrig = new Map<string, BNode>(); // 原始 cellId → 已建节点(parent 相对坐标换算用)
     for (const e of edits) {
       if (e.op?.kind !== 'addObject') continue;
-      const p = (e.op.payload ?? {}) as { id?: string; value?: string; style?: string; edge?: boolean; source?: string; target?: string; geometry?: { x?: number; y?: number; width?: number; height?: number } };
+      const p = (e.op.payload ?? {}) as { id?: string; value?: string; style?: string; edge?: boolean; source?: string; target?: string; parent?: string; geometry?: { x?: number; y?: number; width?: number; height?: number } };
       if (p.edge || (p.source && p.target)) {
         const id = bid(p.id ?? 'e_' + e.id);
         const edge: BEdge = { id, from: bid(p.source), to: bid(p.target), arrow: 'classic', style: 'ortho' };
@@ -1055,10 +1066,18 @@ export function App() {
         const id = bid(p.id ?? 'n_' + e.id);
         const g = p.geometry ?? {};
         const w = g.width ?? 160; const h = g.height ?? 48;
-        const x = g.x ?? 60; const y = g.y ?? stackY; stackY = Math.max(stackY, y) + h + 40;
+        let x = g.x ?? 60; let y = g.y ?? stackY;
+        // drawio 语义:带 parent 的子节点坐标【相对容器】——不换算成绝对坐标,不同容器的子节点会叠在同一处
+        if (p.parent && p.parent !== '1') {
+          const par = byOrig.get(p.parent)?.id ? byOrig.get(p.parent) : undefined;
+          const parAbs = par ?? boardRef.current?.getObject(p.parent)?.node;
+          if (parAbs) { x += parAbs.x; y += parAbs.y; }
+        }
+        stackY = Math.max(stackY, y) + h + 40;
         const st = parseDrawioStyle(p.style);
-        const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(p.style), label: String(p.value ?? ''), kind: st.text ? 'text' : 'agent', ...st };
+        const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(p.style), label: cleanLabel(p.value), kind: st.text ? 'text' : 'agent', ...st };
         nodes.push(node); byEdit[e.id] = id; objs.push({ editId: e.id, node });
+        if (p.id) byOrig.set(p.id, node);
       }
     }
     return { nodes, edges, byEdit, objs };

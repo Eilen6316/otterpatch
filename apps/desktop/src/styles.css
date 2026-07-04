@@ -477,6 +477,10 @@ svg { display: block; }
 .bnode.hover { outline: 1.5px solid var(--accent); outline-offset: 2px; }
 .bnode.tgt { outline: 2px solid #16a34a; outline-offset: 2px; }
 .bnode-label { position: relative; z-index: 1; font-size: 11px; color: var(--text); pointer-events: none; padding: 0 4px; text-align: center; max-width: 100%; overflow: hidden; white-space: nowrap; }
+/* 容器/泳道标签贴顶(drawio 语义):居中会压在子节点上 */
+.bnode-label.top { align-self: start; margin-top: 6px; }
+/* whiteSpace=wrap 的长文本节点:换行显示而非截断成"…" */
+.bnode-label.wrap { white-space: normal; line-height: 1.45; max-height: 100%; }
 .bnode-edit { position: relative; z-index: 1; width: 82%; border: 0; outline: 1px solid var(--accent); border-radius: 2px; font: inherit; font-size: 11px; text-align: center; background: #fff; }
 .bport { position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px; border-radius: 50%; background: #fff; border: 1.6px solid var(--accent); cursor: crosshair; z-index: 4; }
 .bport:hover { background: var(--accent); transform: scale(1.25); }

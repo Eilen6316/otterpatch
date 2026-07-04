@@ -27,6 +27,23 @@ export function buildDrawioVerifier(boardContext: string): (cs: ChangeSet) => Ve
         }
       }
     }
+    // 容器标题区遮挡:parent 子节点的 y 是【相对容器】的,y < 40 会压住容器标题(渲染层容器标题贴顶)
+    const boxes: Array<{ id: string; parent?: string; x: number; y: number; w: number; h: number }> = [];
+    for (const e of cs.edits) {
+      if (e.op.kind !== 'addObject') continue;
+      const p = e.op.payload as { id?: string; edge?: boolean; parent?: string; geometry?: { x?: number; y?: number; width?: number; height?: number } };
+      if (p.edge || !p.geometry || p.geometry.x == null || p.geometry.y == null) continue;
+      boxes.push({ id: String(p.id ?? '?'), ...(p.parent && p.parent !== '1' ? { parent: p.parent } : {}), x: p.geometry.x, y: p.geometry.y, w: p.geometry.width ?? 0, h: p.geometry.height ?? 0 });
+    }
+    for (const b of boxes) {
+      if (b.parent && boxes.some((a) => a.id === b.parent) && b.y < 36) warnings.push(`子节点 "${b.id}" 的相对 y=${Math.round(b.y)} 太小,会压住容器 "${b.parent}" 的标题 —— 子节点 y 请从 40 起排`);
+    }
+    // 无 parent 的绝对坐标节点:几何包含 + 顶边太近同样提醒
+    for (const a of boxes) for (const b of boxes) {
+      if (a.id === b.id || a.parent || b.parent) continue;
+      const inside = b.x >= a.x && b.y >= a.y && b.x + b.w <= a.x + a.w && b.y + b.h <= a.y + a.h && b.w * b.h < a.w * a.h * 0.8;
+      if (inside && b.y - a.y < 36) warnings.push(`子节点 "${b.id}" 顶边距容器 "${a.id}" 顶部仅 ${Math.round(b.y - a.y)}px,会压住容器标题 —— 子节点 y 请从容器顶 +40 起排`);
+    }
     const touched = new Set<string>();
     for (const e of cs.edits) {
       const a = cs.anchors[e.target];
