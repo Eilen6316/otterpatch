@@ -763,7 +763,7 @@ export function App() {
               }
               // 边生成边画:每到一段 propose 入参,抽出已闭合的 op 即时画到左侧画板
               draftBufRef.current += e.delta ?? '';
-              const conv = streamConvRef.current ?? (streamConvRef.current = makeRawBoardConv(++applySeqRef.current));
+              const conv = streamConvRef.current ?? (streamConvRef.current = makeRawBoardConv(++applySeqRef.current, (id) => !!boardRef.current?.getObject(id)));
               const ops = extractDrawioOps(draftBufRef.current);
               for (let k = drawnOpsRef.current; k < ops.length; k++) {
                 const r = conv(ops[k]!, k);
@@ -844,13 +844,14 @@ export function App() {
       } catch (e) {
         const m = e instanceof Error ? e.message : String(e);
         const refused = /failed to fetch|refused|ECONNREFUSED|networkerror|load failed/i.test(m);
-        // 回滚乐观追加的占位气泡 + user 气泡,避免 thread 残留(下次会拼成背靠背)
+        // 出错不回滚对话:此前把 user 气泡也删掉,用户看到"对话断开/消失"——改为把占位气泡定格成错误说明,
+        // 对话完整保留(user/assistant 交替不破坏),指令放回输入框方便重试
         setThread((th) => {
-          let r = th;
-          const last = r[r.length - 1];
-          if (last?.role === 'assistant' && last.kind === 'answer' && last.streaming) r = r.slice(0, -1);
-          if (r[r.length - 1]?.role === 'user') r = r.slice(0, -1);
-          return r;
+          const last = th[th.length - 1];
+          if (last?.role === 'assistant' && last.kind === 'answer' && last.streaming) {
+            return th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' && tt.kind === 'answer' ? { ...tt, streaming: false, text: (tt.text?.trim() ? tt.text + '\n\n' : '') + `⚠ 本轮请求中断(${refused ? '连不上本机 Agent 服务' : m}),对话已保留,可直接重发。` } : tt));
+          }
+          return th;
         });
         setIntent(theIntent); // 把指令放回输入框,方便重试
         setSendErr(
@@ -1066,7 +1067,14 @@ export function App() {
     const seq = ++applySeqRef.current;
     const edits = (cs as { edits?: Array<{ id: string; op: { kind: string; payload?: unknown } }> } | null)?.edits ?? [];
     const idMap = new Map<string, string>();
-    const bid = (orig?: string): string => { const k = orig ?? ('?' + idMap.size); let v = idMap.get(k); if (!v) { v = `g${seq}_${idMap.size + 1}`; idMap.set(k, v); } return v; };
+    // 保留 Agent 的 cellId(多轮连贯:下一批还能引用上一批的 n1),仅撞名才改;引用已有对象原名直连
+    const bid = (orig?: string): string => {
+      const k = orig ?? ('?' + idMap.size);
+      let v = idMap.get(k);
+      if (!v) { v = orig && !boardRef.current?.getObject(orig) ? orig : `${orig ?? 'g'}_${seq}_${idMap.size + 1}`; idMap.set(k, v); }
+      return v;
+    };
+    const refId = (orig?: string): string => (orig ? idMap.get(orig) ?? orig : bid(orig));
     const nodes: BNode[] = []; const edges: BEdge[] = []; const byEdit: Record<string, string> = {}; const objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> = [];
     let stackY = 60;
     const byOrig = new Map<string, BNode>(); // 原始 cellId → 已建节点(parent 相对坐标换算用)
@@ -1075,7 +1083,7 @@ export function App() {
       const p = (e.op.payload ?? {}) as { id?: string; value?: string; style?: string; edge?: boolean; source?: string; target?: string; parent?: string; geometry?: { x?: number; y?: number; width?: number; height?: number } };
       if (p.edge || (p.source && p.target)) {
         const id = bid(p.id ?? 'e_' + e.id);
-        const edge: BEdge = { id, from: bid(p.source), to: bid(p.target), arrow: 'classic', style: 'ortho' };
+        const edge: BEdge = { id, from: refId(p.source), to: refId(p.target), arrow: /endArrow=none/.test(p.style ?? '') ? 'none' : 'classic', style: 'ortho', ...(/dashed=1/.test(p.style ?? '') ? { dash: true } : {}), ...(/strokeColor=([^;]+)/.exec(p.style ?? '')?.[1] ? { color: /strokeColor=([^;]+)/.exec(p.style ?? '')![1]! } : {}) };
         edges.push(edge); byEdit[e.id] = id; objs.push({ editId: e.id, edge });
       } else {
         const id = bid(p.id ?? 'n_' + e.id);

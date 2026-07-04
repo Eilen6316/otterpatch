@@ -68,7 +68,7 @@ export function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
           <div className="pal-cat" key={cat.key}>
             <button className="pal-cat-h click" onClick={() => setOpen((o) => ({ ...o, [cat.key]: !(o[cat.key] !== false) }))}>
               <span className={'tri' + (isOpen ? ' open' : '')}>▸</span> {t(cat.label)}
-              <span className="pal-n">{DRAWIO_SHAPES[cat.key].length}</span>
+              <span className="pal-n">{shapes.length}</span>
             </button>
             {isOpen && (
               <div className="pal-grid">
@@ -98,7 +98,7 @@ interface XY { x: number; y: number }
 export interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string; kind?: string; rot?: number; fill?: string; stroke?: string; fontColor?: string; fontSize?: number; bold?: boolean; text?: boolean; vTop?: boolean; wrap?: boolean }
 type ArrowKind = 'classic' | 'open' | 'diamond' | 'circle' | 'none';
 type EdgeStyle = 'ortho' | 'straight';
-export interface BEdge { id: string; from: string; to: string; arrow?: ArrowKind; style?: EdgeStyle; points?: XY[] }
+export interface BEdge { id: string; from: string; to: string; arrow?: ArrowKind; style?: EdgeStyle; points?: XY[]; color?: string; width?: number; dash?: boolean; label?: string }
 /** 两节点周界直连(直线线型)。 */
 function straightRoute(a: BNode, b: BNode): XY[] {
   const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
@@ -314,16 +314,24 @@ export function extractDrawioOps(buf: string): RawDrawioOp[] {
   return out;
 }
 /** 流式画板转换器:把【原始 proposal op】逐个转成画板节点/连线(editId 'e'+index 与 buildChangeSet 对齐)。 */
-export function makeRawBoardConv(seq: number): (op: RawDrawioOp, index: number) => { editId: string; boardId: string; node?: BNode; edge?: BEdge } | null {
+export function makeRawBoardConv(seq: number, taken?: (id: string) => boolean): (op: RawDrawioOp, index: number) => { editId: string; boardId: string; node?: BNode; edge?: BEdge } | null {
   const idMap = new Map<string, string>();
-  const bid = (orig?: string): string => { const k = orig ?? ('?' + idMap.size); let v = idMap.get(k); if (!v) { v = `g${seq}_${idMap.size + 1}`; idMap.set(k, v); } return v; };
+  // 保留 Agent 给的 cellId(多轮连贯的关键:下一批还能用 n1 引用上一批画的节点);仅与画板已有对象撞名才改名
+  const bid = (orig?: string): string => {
+    const k = orig ?? ('?' + idMap.size);
+    let v = idMap.get(k);
+    if (!v) { v = orig && !taken?.(orig) ? orig : `${orig ?? 'g'}_${seq}_${idMap.size + 1}`; idMap.set(k, v); }
+    return v;
+  };
+  // 引用(edge 两端/parent):本批建过用映射名;否则当作画板已有对象,原名直连
+  const refId = (orig?: string): string => (orig ? idMap.get(orig) ?? orig : bid(orig));
   const made = new Map<string, BNode>(); // 原始 cellId → 节点(parent 相对坐标换算)
   let stackY = 60;
   return (op, index) => {
     if (op.op !== 'add') return null;
     if (op.edge || (op.source && op.target)) {
       const id = bid(op.cellId ?? 'e_' + index);
-      return { editId: 'e' + index, boardId: id, edge: { id, from: bid(op.source), to: bid(op.target), arrow: 'classic', style: 'ortho' } };
+      return { editId: 'e' + index, boardId: id, edge: { id, from: refId(op.source), to: refId(op.target), arrow: /endArrow=none/.test(op.style ?? '') ? 'none' : 'classic', style: 'ortho', ...(/dashed=1/.test(op.style ?? '') ? { dash: true } : {}), ...(/strokeColor=([^;]+)/.exec(op.style ?? '')?.[1] ? { color: /strokeColor=([^;]+)/.exec(op.style ?? '')![1]! } : {}) } };
     }
     const id = bid(op.cellId ?? 'n_' + index);
     const w = op.width ?? 160; const h = op.height ?? 48;
@@ -395,10 +403,16 @@ const HANDLES: { k: string; fx: number; fy: number }[] = [
 const PORTS: XY[] = [{ x: 0.5, y: 0 }, { x: 1, y: 0.5 }, { x: 0.5, y: 1 }, { x: 0, y: 0.5 }];
 
 /** 高度复刻 drawio 的交互画板:周界正交圆角连线、悬停连接点拖拽连线(绿色目标高亮)、8 缩放手柄、网格吸附、改名、删边删点、双击空白建节点。 */
+const BOARD_KEY = 'oa.board';
 export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel | null) => void }>(function DrawioBoard({ onBoardSel }, apiRef) {
   const t = useT();
-  const [nodes, setNodes] = useState<BNode[]>([]);
-  const [edges, setEdges] = useState<BEdge[]>([]);
+  // 持久化:画板内容落 localStorage(此前刷新即空,Excel/Word 都有持久化唯独流程图没有)
+  const [nodes, setNodes] = useState<BNode[]>(() => { try { return (JSON.parse(localStorage.getItem(BOARD_KEY) ?? '{}') as { nodes?: BNode[] }).nodes ?? []; } catch { return []; } });
+  const [edges, setEdges] = useState<BEdge[]>(() => { try { return (JSON.parse(localStorage.getItem(BOARD_KEY) ?? '{}') as { edges?: BEdge[] }).edges ?? []; } catch { return []; } });
+  useEffect(() => {
+    const timer = window.setTimeout(() => { try { localStorage.setItem(BOARD_KEY, JSON.stringify({ nodes, edges })); } catch { /* 配额满忽略 */ } }, 300);
+    return () => window.clearTimeout(timer);
+  }, [nodes, edges]);
   const [selIds, setSelIds] = useState<Set<string>>(new Set());
   const [selEdge, setSelEdge] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
@@ -458,6 +472,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
   const [pan, setPan] = useState<XY>({ x: 0, y: 0 });
   const ref = useRef<HTMLDivElement | null>(null);
   const idRef = useRef(0);
+  const freshId = (prefix: string): string => { let id = prefix + ++idRef.current; while (nodesRef.current.some((n) => n.id === id) || edgesRef.current.some((e) => e.id === id)) id = prefix + ++idRef.current; return id; }; // 持久化恢复后 idRef 归零,顺移到未占用 id
   const cb = useRef(onBoardSel);
   cb.current = onBoardSel;
 
@@ -497,7 +512,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
     [...nodes].reverse().find((n) => n.id !== not && x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h);
   const addNode = (x: number, y: number, inner: string, label: string, kind?: string): void => {
     commit();
-    const id = 'n' + ++idRef.current;
+    const id = freshId('n');
     setNodes((ns) => [...ns, { id, x: snap(x - 45), y: snap(y - 27), w: 90, h: 54, inner, label, ...(kind ? { kind } : {}) }]);
     setSelIds(new Set([id]));
     setSelEdge(null);
@@ -509,9 +524,9 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
     commit();
     const gap = 60;
     const off = dir === 'up' ? { dx: 0, dy: -(src.h + gap) } : dir === 'down' ? { dx: 0, dy: src.h + gap } : dir === 'left' ? { dx: -(src.w + gap), dy: 0 } : { dx: src.w + gap, dy: 0 };
-    const id = 'n' + ++idRef.current;
+    const id = freshId('n');
     setNodes((ns) => [...ns, { ...src, id, x: snap(src.x + off.dx), y: snap(src.y + off.dy) }]);
-    setEdges((es) => [...es, { id: 'e' + ++idRef.current, from: fromId, to: id }]);
+    setEdges((es) => [...es, { id: freshId('e'), from: fromId, to: id }]);
     setSelIds(new Set([id]));
   };
   const onDrop = (e: DragEvent<HTMLDivElement>): void => {
@@ -532,7 +547,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
     const { x, y } = pt(e);
     if (wpDrag) {
       movedRef.current = true;
-      setEdges((es) => es.map((ed) => (ed.id === wpDrag.edgeId && ed.points ? { ...ed, points: ed.points.map((p, i) => (i === wpDrag.index ? { x: snap(x), y: snap(y) } : p)) } : ed)));
+      setEdges((es) => es.map((ed) => (ed.id === wpDrag.edgeId && ed.points ? { ...ed, points: ed.points.map((p, i) => (i === wpDrag.index ? { x, y } : p)) } : ed)));
       return;
     }
     if (epDrag) {
@@ -591,7 +606,8 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
         if (Number.isFinite(bestY)) dy += syAdj;
         setGuides(gv.length || gh.length ? { v: [...new Set(gv)], h: [...new Set(gh)] } : null);
       }
-      setNodes((ns) => ns.map((n) => (drag.origins[n.id] ? { ...n, x: snap(drag.origins[n.id]!.x + dx), y: snap(drag.origins[n.id]!.y + dy) } : n)));
+      // 拖动过程自由移动(不 snap),松手时统一吸附 —— move-time 硬吸格是"跳格不顺滑"的根因,也会跟对齐吸附打架
+      setNodes((ns) => ns.map((n) => (drag.origins[n.id] ? { ...n, x: drag.origins[n.id]!.x + dx, y: drag.origins[n.id]!.y + dy } : n)));
     }
     if (resize) {
       movedRef.current = true;
@@ -632,13 +648,16 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
     const madeEdge = !!(conn && conn.tgt);
     if (conn && conn.tgt) {
       const to = conn.tgt;
-      setEdges((es) => (es.some((d) => d.from === conn.from && d.to === to) ? es : [...es, { id: 'e' + ++idRef.current, from: conn.from, to }]));
+      setEdges((es) => (es.some((d) => d.from === conn.from && d.to === to) ? es : [...es, { id: freshId('e'), from: conn.from, to }]));
     }
     if (band) {
       const r = bandRect(band);
       if (r.w > 3 || r.h > 3) setSelIds(new Set(nodes.filter((n) => intersects(r, n)).map((n) => n.id)));
       setBand(null);
     }
+    // 松手统一吸附(拖动/缩放过程是自由移动的,收尾落格,drawio 同款手感)
+    if (movedRef.current && drag) setNodes((ns) => ns.map((n) => (drag.origins[n.id] ? { ...n, x: snap(n.x), y: snap(n.y) } : n)));
+    if (movedRef.current && resize) setNodes((ns) => ns.map((n) => (n.id === resize.id ? { ...n, x: snap(n.x), y: snap(n.y), w: Math.max(40, snap(n.w)), h: Math.max(30, snap(n.h)) } : n)));
     // 手势若真的改动了内容,把开始前的快照压入撤销栈
     if ((movedRef.current || madeEdge) && preGesture.current) {
       past.current.push(preGesture.current);
@@ -666,7 +685,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
   const preGesture = useRef<{ nodes: BNode[]; edges: BEdge[] } | null>(null);
   const movedRef = useRef(false);
   const arrowNudging = useRef(false);
-  const snapshot = (): { nodes: BNode[]; edges: BEdge[] } => ({ nodes: nodes.map((n) => ({ ...n })), edges: edges.map((e) => ({ ...e })) });
+  const snapshot = (): { nodes: BNode[]; edges: BEdge[] } => ({ nodes: nodes.map((n) => ({ ...n })), edges: edges.map((e) => ({ ...e, ...(e.points ? { points: e.points.map((pt) => ({ ...pt })) } : {}) })) });
   const commit = (): void => {
     past.current.push(snapshot());
     if (past.current.length > 80) past.current.shift();
@@ -700,13 +719,13 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
     commit();
     const idMap = new Map<string, string>();
     const clones = sel.map((n) => {
-      const id = 'n' + ++idRef.current;
+      const id = freshId('n');
       idMap.set(n.id, id);
       return { ...n, id, x: snap(n.x + offset), y: snap(n.y + offset) };
     });
     const newEdges = edges
       .filter((ed) => idMap.has(ed.from) && idMap.has(ed.to))
-      .map((ed) => ({ ...ed, id: 'e' + ++idRef.current, from: idMap.get(ed.from)!, to: idMap.get(ed.to)! }));
+      .map((ed) => ({ ...ed, id: freshId('e'), from: idMap.get(ed.from)!, to: idMap.get(ed.to)! }));
     setNodes((ns) => [...ns, ...clones]);
     if (newEdges.length) setEdges((es) => [...es, ...newEdges]);
     setSelIds(new Set(clones.map((c) => c.id)));
@@ -734,7 +753,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
         if (!clipRef.current.length) return;
         e.preventDefault();
         commit();
-        const clones = clipRef.current.map((n) => ({ ...n, id: 'n' + ++idRef.current, x: snap(n.x + 24), y: snap(n.y + 24) }));
+        const clones = clipRef.current.map((n) => ({ ...n, id: freshId('n'), x: snap(n.x + 24), y: snap(n.y + 24) }));
         setNodes((ns) => [...ns, ...clones]);
         setSelIds(new Set(clones.map((c) => c.id)));
         setSelEdge(null);
@@ -853,7 +872,8 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
           return (
             <g key={ed.id}>
               <path d={d} fill="none" stroke="transparent" strokeWidth={12} style={{ pointerEvents: 'stroke', cursor: 'pointer' }} onPointerDown={(e) => { e.stopPropagation(); setSelEdge(ed.id); setSelIds(new Set()); }} />
-              <path d={d} fill="none" stroke={on ? 'var(--accent)' : '#5f6673'} strokeWidth={on ? 2 : 1.5} markerEnd={arrow === 'none' ? undefined : `url(#m-${arrow})`} style={{ pointerEvents: 'none' }} />
+              <path d={d} fill="none" stroke={on ? 'var(--accent)' : ed.color ?? '#5f6673'} strokeWidth={on ? (ed.width ?? 1.5) + 0.5 : ed.width ?? 1.5} strokeDasharray={ed.dash ? '6 4' : undefined} markerEnd={arrow === 'none' ? undefined : `url(#m-${arrow})`} style={{ pointerEvents: 'none' }} />
+              {ed.label ? (() => { const mi = Math.max(1, Math.floor(pts.length / 2)); const p1 = pts[mi - 1]!, p2 = pts[mi]!; return <text x={(p1.x + p2.x) / 2} y={(p1.y + p2.y) / 2 - 6} className="bedge-label">{ed.label}</text>; })() : null}
             </g>
           );
         })}
@@ -1094,6 +1114,14 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
               <div className="etoolbar" style={{ left: mid.x * zoom + pan.x, top: mid.y * zoom + pan.y - 44 }} onPointerDown={(e) => e.stopPropagation()}>
                 <button className={'etb' + (ed.style !== 'straight' ? ' on' : '')} title={t('正交')} onClick={() => setEdge({ style: 'ortho' })}>⌐</button>
                 <button className={'etb' + (ed.style === 'straight' ? ' on' : '')} title={t('直线')} onClick={() => setEdge({ style: 'straight' })}>╱</button>
+                <span className="etb-sep" />
+                <span className="etb-sep" />
+                <button className={'etb' + (ed.dash ? ' on' : '')} title={t('虚线')} onClick={() => setEdge({ dash: !ed.dash })}>┄</button>
+                <button className={'etb' + ((ed.width ?? 1.5) > 2 ? ' on' : '')} title={t('粗线')} onClick={() => setEdge({ width: (ed.width ?? 1.5) > 2 ? 1.5 : 2.5 })}>━</button>
+                {['#5f6673', '#2563eb', '#16a34a', '#dc2626'].map((c) => (
+                  <button key={c} className={'etb' + ((ed.color ?? '#5f6673') === c ? ' on' : '')} title={t('线色')} onClick={() => setEdge({ color: c })}><span className="etb-dot" style={{ background: c }} /></button>
+                ))}
+                <button className="etb" title={t('标签')} onClick={() => { const v = window.prompt(t('连线文字'), ed.label ?? ''); if (v != null) setEdge({ label: v }); }}>A</button>
                 <span className="etb-sep" />
                 {ARROWS.map((ak) => (
                   <button key={ak} className={'etb' + ((ed.arrow ?? 'classic') === ak ? ' on' : '')} title={t('箭头') + ' ' + ak} onClick={() => setEdge({ arrow: ak })}>
