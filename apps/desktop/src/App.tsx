@@ -20,6 +20,7 @@ import { AgentHome } from './AgentHome.js';
 import { Composer } from './Composer.js';
 import { TopBar } from './TopBar.js';
 import { DrawioBoard, DrawioToolbar, DrawioPalette, parseDrawioStyle, innerForStyle, snap, cleanLabel, extractDrawioOps, makeRawBoardConv, boundingA1 } from './DrawioBoard.js';
+import { styleToKind } from './shape-engine.js';
 import type { BNode, BEdge, BoardSel, BoardHandle } from './DrawioBoard.js';
 import { ThinkingPanel, ClarifyCard } from './ThreadCards.js';
 import type { ClarifyQuestion } from './ThreadCards.js';
@@ -1101,7 +1102,8 @@ export function App() {
         }
         stackY = Math.max(stackY, y) + h + 40;
         const st = parseDrawioStyle(p.style);
-        const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(p.style), label: cleanLabel(p.value), kind: st.text ? 'text' : 'agent', ...(p.style ? { style: p.style } : {}), ...st };
+        const sk = styleToKind(p.style);
+        const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(p.style), label: cleanLabel(p.value), kind: st.text ? 'text' : 'agent', ...(p.style ? { style: p.style } : {}), ...(sk ? { shape: sk } : {}), ...st };
         nodes.push(node); byEdit[e.id] = id; objs.push({ editId: e.id, node });
         if (p.id) byOrig.set(p.id, node);
       }

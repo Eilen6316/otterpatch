@@ -9,6 +9,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { DragEvent, ReactNode } from 'react';
 import { useT } from './i18n.js';
+import { shapeSvg, styleToKind, SHAPE_DEFS } from './shape-engine.js';
 import { FUNC_ICONS, IconPlus, IconSearch, IconUndo } from './icons.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
 
@@ -39,16 +40,17 @@ export function DrawioToolbar({ onAct }: { onAct: OnOpen }) {
 }
 
 /** drawio 左侧形状面板(高度还原 jgraph/drawio:可折叠 通用/杂项/高级 + 搜索 + 便笺本 + 更多图形)。 */
-const PAL_CATS: { key: 'general' | 'misc' | 'advanced'; label: string }[] = [
+const PAL_CATS: { key: 'general' | 'flow' | 'arrows' | 'icons'; label: string }[] = [
   { key: 'general', label: '通用' },
-  { key: 'misc', label: '杂项' },
-  { key: 'advanced', label: '高级' },
+  { key: 'flow', label: '流程图' },
+  { key: 'arrows', label: '箭头' },
+  { key: 'icons', label: '图标' },
 ];
 
 export function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
   const t = useT();
   const [q, setQ] = useState('');
-  const [open, setOpen] = useState<Record<string, boolean>>({ general: true, misc: false, advanced: true });
+  const [open, setOpen] = useState<Record<string, boolean>>({ general: true, flow: true, arrows: false, icons: false });
   const query = q.trim();
   return (
     <aside className="palette">
@@ -61,7 +63,8 @@ export function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
         <div className="pal-scratch">{t('把元素拖至此处')}</div>
       </div>
       {PAL_CATS.map((cat) => {
-        const shapes = DRAWIO_SHAPES[cat.key].filter((s) => !query || s.name.includes(query));
+        // 形状库改由参数化引擎驱动(80 种,drawio 同源几何):缩略图与画布同一生成器,所见即所得
+        const shapes = SHAPE_DEFS.filter((s) => s.cat === cat.key && (!query || s.name.includes(query) || s.kind.toLowerCase().includes(query.toLowerCase())));
         const isOpen = query ? shapes.length > 0 : open[cat.key] !== false;
         if (query && shapes.length === 0) return null;
         return (
@@ -74,14 +77,14 @@ export function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
               <div className="pal-grid">
                 {shapes.map((s) => (
                   <button
-                    key={s.name}
+                    key={s.kind}
                     className="pal-shape"
                     title={s.name}
                     draggable
-                    onDragStart={(e) => e.dataTransfer.setData('otterpatch/shape', JSON.stringify({ name: s.name, inner: s.inner }))}
+                    onDragStart={(e) => e.dataTransfer.setData('otterpatch/shape', JSON.stringify({ name: s.name, shape: s.kind }))}
                     onClick={() => onPick(s.name)}
                   >
-                    <svg viewBox="0 0 40 30" fill="none" stroke="currentColor" strokeWidth={1.4} dangerouslySetInnerHTML={{ __html: s.inner }} />
+                    <svg viewBox="0 0 40 30" fill="none" stroke="currentColor" strokeWidth={1.2} dangerouslySetInnerHTML={{ __html: shapeSvg(s.kind, 40, 30) }} />
                   </button>
                 ))}
               </div>
@@ -95,7 +98,7 @@ export function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
 }
 
 interface XY { x: number; y: number }
-export interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string; kind?: string; rot?: number; fill?: string; stroke?: string; fontColor?: string; fontSize?: number; bold?: boolean; text?: boolean; vTop?: boolean; wrap?: boolean; style?: string }
+export interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string; kind?: string; rot?: number; fill?: string; stroke?: string; fontColor?: string; fontSize?: number; bold?: boolean; text?: boolean; vTop?: boolean; wrap?: boolean; style?: string; shape?: string }
 type ArrowKind = 'classic' | 'open' | 'diamond' | 'circle' | 'none';
 type EdgeStyle = 'ortho' | 'straight';
 export interface BEdge { id: string; from: string; to: string; arrow?: ArrowKind; style?: EdgeStyle; points?: XY[]; color?: string; width?: number; dash?: boolean; label?: string }
@@ -346,7 +349,8 @@ export function makeRawBoardConv(seq: number, taken?: (id: string) => boolean): 
     if (op.parent && op.parent !== '1') { const par = made.get(op.parent); if (par) { x += par.x; y += par.y; } }
     stackY = Math.max(stackY, y) + h + 40;
     const st = parseDrawioStyle(op.style);
-    const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(op.style), label: cleanLabel(op.value), kind: st.text ? 'text' : 'agent', ...(op.style ? { style: op.style } : {}), ...st };
+    const sk = styleToKind(op.style);
+    const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(op.style), label: cleanLabel(op.value), kind: st.text ? 'text' : 'agent', ...(op.style ? { style: op.style } : {}), ...(sk ? { shape: sk } : {}), ...st };
     if (op.cellId) made.set(op.cellId, node);
     return { editId: 'e' + index, boardId: id, node };
   };
@@ -457,7 +461,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
     },
     updateObject: (id, patch) => {
       commit();
-      setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...(patch.value != null ? { label: cleanLabel(patch.value) } : {}), ...(patch.style ? parseDrawioStyle(patch.style) : {}) } : n)));
+      setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...(patch.value != null ? { label: cleanLabel(patch.value) } : {}), ...(patch.style ? { ...parseDrawioStyle(patch.style), style: patch.style, ...(styleToKind(patch.style) ? { shape: styleToKind(patch.style)! } : {}) } : {}) } : n)));
     },
     moveObject: (id, box) => {
       commit();
@@ -563,10 +567,10 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
     setSelIds(new Set()); setSelEdge(null);
     past.current = []; future.current = [];
   };
-  const addNode = (x: number, y: number, inner: string, label: string, kind?: string): void => {
+  const addNode = (x: number, y: number, inner: string, label: string, kind?: string, shape?: string): void => {
     commit();
     const id = freshId('n');
-    setNodes((ns) => [...ns, { id, x: snap(x - 45), y: snap(y - 27), w: 90, h: 54, inner, label, ...(kind ? { kind } : {}) }]);
+    setNodes((ns) => [...ns, { id, x: snap(x - 45), y: snap(y - 27), w: 90, h: 54, inner, label, ...(kind ? { kind } : {}), ...(shape ? { shape } : {}) }]);
     setSelIds(new Set([id]));
     setSelEdge(null);
   };
@@ -586,9 +590,9 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
     e.preventDefault();
     const raw = e.dataTransfer.getData('otterpatch/shape');
     if (!raw) return;
-    const s = JSON.parse(raw) as { name: string; inner: string };
+    const s = JSON.parse(raw) as { name: string; inner?: string; shape?: string };
     const { x, y } = pt(e);
-    addNode(x, y, s.inner, '', s.name); // 拖入的图形不显示中文名,但隐藏存 kind 供 Agent 感知
+    addNode(x, y, s.inner ?? '', '', s.name, s.shape); // 拖入即参数化形状(shape kind),缩放不变形;kind 存中文名供 Agent 感知
   };
 
   const onMove = (e: { clientX: number; clientY: number; shiftKey?: boolean }): void => {
@@ -985,7 +989,10 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
               setEditing(n.id);
             }}
           >
-            {n.text ? null : (n.fill || n.stroke || n.kind === 'agent') && (!n.inner || /^<rect/.test(n.inner)) ? (
+            {n.text ? null : (n.shape ?? (n.style ? styleToKind(n.style) : null)) ? (
+              // 参数化形状引擎(drawio 同源):按实际 w×h 生成几何,箭头深度/圆角/折角等细节定值钳制——缩放不变形
+              <svg width="100%" height="100%" viewBox={`0 0 ${Math.max(8, n.w)} ${Math.max(8, n.h)}`} fill={n.fill ?? '#ffffff'} stroke={n.stroke ?? '#9aa3b2'} strokeWidth={1.3} dangerouslySetInnerHTML={{ __html: shapeSvg((n.shape ?? styleToKind(n.style))!, Math.max(8, n.w), Math.max(8, n.h)) }} />
+            ) : (n.fill || n.stroke || n.kind === 'agent') && (!n.inner || /^<rect/.test(n.inner)) ? (
               <div className="bnode-box" style={{ background: n.fill ?? '#ffffff', borderColor: n.stroke ?? '#9aa3b2' }} />
             ) : n.fill || n.stroke || n.kind === 'agent' ? (
               // 带填充的非矩形形状:真按 innerForStyle 的形状渲染(此前一律画成矩形盒,90 种形状全被吃掉)

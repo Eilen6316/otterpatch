@@ -29,7 +29,8 @@
     "eval:drawio:summary": "node test/eval-drawio-summary.mjs",
     "test:drawio:persist": "node test/drawio-persist.mjs",
     "eval:drawio:multiturn": "node test/eval-drawio-multiturn.mjs",
-    "test:drawio:roundtrip": "node test/drawio-roundtrip.mjs"
+    "test:drawio:roundtrip": "node test/drawio-roundtrip.mjs",
+    "test:drawio:shapes": "node test/shape-engine-e2e.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",

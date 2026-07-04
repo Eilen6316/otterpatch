@@ -5,6 +5,7 @@
  */
 import { inflateSync, strFromU8 } from 'fflate';
 import { parseDrawioStyle, innerForStyle, cleanLabel, type BNode, type BEdge } from './DrawioBoard.js';
+import { styleToKind } from './shape-engine.js';
 
 const unesc = (s: string): string => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d))).replace(/&amp;/g, '&');
 const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -85,7 +86,7 @@ export function parseDrawio(text: string): { nodes: BNode[]; edges: BEdge[] } {
     } else if (c.vertex && c.id !== '0' && c.id !== '1') {
       const abs = absOf(c);
       const st = parseDrawioStyle(c.style);
-      nodes.push({ id: c.id, x: abs.x, y: abs.y, w: c.w, h: c.h, inner: innerForStyle(c.style), label: cleanLabel(c.value), kind: st.text ? 'text' : 'agent', style: c.style, ...st });
+      nodes.push({ id: c.id, x: abs.x, y: abs.y, w: c.w, h: c.h, inner: innerForStyle(c.style), label: cleanLabel(c.value), kind: st.text ? 'text' : 'agent', style: c.style, ...(styleToKind(c.style) ? { shape: styleToKind(c.style)! } : {}), ...st });
     }
   }
   return { nodes, edges };

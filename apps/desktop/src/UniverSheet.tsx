@@ -46,10 +46,10 @@ export interface SheetHandle {
   /** 整张表的全局快照(概览 + 数据 + 焦点),与是否圈选无关。 */
   getSheet(): UniSel | null;
   // 结构性操作(Agent 赋能:插删行列 / 合并 / 冻结 / 清空)——驱动真实 Univer 网格
-  insertRows(row: number, count: number): void;
-  deleteRows(row: number, count: number): void;
-  insertCols(col: number, count: number): void;
-  deleteCols(col: number, count: number): void;
+  insertRows(row: number, count: number, sheet?: string): void;
+  deleteRows(row: number, count: number, sheet?: string): void;
+  insertCols(col: number, count: number, sheet?: string): void;
+  deleteCols(col: number, count: number, sheet?: string): void;
   mergeRange(a1: string): void;
   unmergeRange(a1: string): void;
   freeze(rows: number, cols: number): void;
