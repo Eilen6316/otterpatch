@@ -254,15 +254,29 @@ function rgbToHex(rgb: string): string {
   return ('#' + h(m[1]!) + h(m[2]!) + h(m[3]!)).toLowerCase();
 }
 /** 元素样式 → 简明中文格式串(段落/选区概览用)。 */
-function fmtBrief(el: HTMLElement): { font: string; size: number; color: string; bold: boolean; italic: boolean; align: string } {
+function fmtBrief(el: HTMLElement): { font: string; size: number; color: string; bold: boolean; italic: boolean; align: string; sizeDefault: boolean } {
   const cs = getComputedStyle(el);
+  // 字号/字体取首个文字所在元素:run 级字号在 span 上(docx 导入即如此),块级计算样式只会读到页面基线,
+  // 造成"11.3pt 幻影字号"(agent 把 CSS 默认当成谁设的怪字号去修)+ 与工具栏显示互相矛盾
+  const probeNode = document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode();
+  const probe = probeNode?.parentElement && el.contains(probeNode.parentElement) ? probeNode.parentElement : el;
+  const pcs = probe === el ? cs : getComputedStyle(probe);
+  // 显式字号检测:从文字元素向上到页面根,任一层有内联 font-size 才算"设置过";否则是页面基线的默认渲染
+  let sizeDefault = true;
+  for (let n: HTMLElement | null = probe; n; n = n.parentElement) {
+    if (n.style.fontSize) { sizeDefault = false; break; }
+    if (n.classList.contains('rd-page')) break;
+  }
   return {
-    font: cs.fontFamily.split(',')[0]?.replace(/["']/g, '').trim() ?? '',
-    size: Math.round(parseFloat(cs.fontSize) * 0.75 * 10) / 10,
-    color: rgbToHex(cs.color),
-    bold: parseInt(cs.fontWeight, 10) >= 600,
-    italic: cs.fontStyle === 'italic',
-    align: cs.textAlign === 'center' ? '居中' : cs.textAlign === 'right' ? '右对齐' : cs.textAlign === 'justify' || cs.textAlign === 'justify-all' ? '两端对齐' : '左对齐',
+    font: pcs.fontFamily.split(',')[0]?.replace(/["']/g, '').trim() ?? '',
+    size: Math.round(parseFloat(pcs.fontSize) * 0.75 * 10) / 10,
+    color: rgbToHex(pcs.color),
+    bold: parseInt(pcs.fontWeight, 10) >= 600,
+    italic: pcs.fontStyle === 'italic',
+    // 分散对齐(text-align-last:justify,末行/单行也被撑满)≠ 两端对齐——必须如实上报,这是最常见的排版事故
+    align: cs.textAlign === 'center' ? '居中' : cs.textAlign === 'right' ? '右对齐'
+      : (cs.textAlign === 'justify' || cs.textAlign === 'justify-all') ? (cs.textAlignLast === 'justify' ? '分散对齐' : '两端对齐') : '左对齐',
+    sizeDefault,
   };
 }
 
@@ -528,7 +542,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
         const img = imgBrief(el); // 图片可感知:含图段标出 [图片 alt 宽×高],空段才真算空
         if (/^标题/.test(style)) heads.push(`${'  '.repeat(parseInt(tag.slice(1), 10) - 1)}H${tag.slice(1)} 第${i + 1}段 ${txt.slice(0, 30)}`);
         else if (style === '正文') bodyCombo.set(`${b.font} ${b.size}pt`, (bodyCombo.get(`${b.font} ${b.size}pt`) ?? 0) + 1);
-        const marks = [style, `${b.font} ${b.size}pt`, b.color !== '#000000' && b.color !== '#1f2430' ? b.color : '', b.bold ? '加粗' : '', b.italic ? '斜体' : '', b.align !== '左对齐' ? b.align : ''].filter(Boolean).join(' · ');
+        const marks = [style, `${b.font} ${b.size}pt${b.sizeDefault ? '(默认)' : ''}`, b.color !== '#000000' && b.color !== '#1f2430' ? b.color : '', b.bold ? '加粗' : '', b.italic ? '斜体' : '', b.align !== '左对齐' ? b.align : ''].filter(Boolean).join(' · ');
         const cut = txt.length > 300; if (cut) truncated++;
         return `第${i + 1}段 [${marks}]: ${img}${cut ? txt.slice(0, 300) + '…(已截断)' : txt || (img ? '' : '(空段)')}`;
       });
