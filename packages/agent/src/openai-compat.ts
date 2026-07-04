@@ -154,6 +154,14 @@ export class OpenAICompatModelClient implements ModelClient {
       if (propose) {
         const parsed = salvageProposalArgs(propose.function.arguments);
         if (parsed.truncated && !parsed.edits?.length && !parsed.ops?.length) return { kind: 'answer', text: TRUNCATED_FALLBACK };
+        // 部分截断:抢救出了一截(如 18 条只剩 3 条,值还可能熔接)——别把残图当成品交付,回炉让模型分批重提
+        if (parsed.truncated && repairsLeft > 0) {
+          repairsLeft--;
+          const got = (parsed.ops?.length ?? parsed.edits?.length ?? 0);
+          messages.push({ role: 'assistant', content: msg.content ?? null, tool_calls: [{ id: propose.id, type: 'function', function: propose.function }] });
+          messages.push({ role: 'tool', tool_call_id: propose.id, content: `你的 ${dialect.toolName} 输出在中途被截断,只完整收到前 ${got} 条,其余全部丢失(且截断处的值可能已损坏)。请立即重新提出,并【控制单次输出体积】:本批只输出前 ~8 条完整内容(style/字段只留必要项),plan 里说明"先做第一批,继续说'下一批'"。` });
+          continue;
+        }
         const cs = dialect.buildChangeSet(req, parsed);
         if (opts?.verify && repairsLeft > 0) {
           const v = await opts.verify(cs);
@@ -224,6 +232,15 @@ export class OpenAICompatModelClient implements ModelClient {
           const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK };
           onEvent({ type: 'done', result });
           return result;
+        }
+        // 部分截断 → 回炉分批(与非流式路径同语义),别把残图当成品交付
+        if (parsed.truncated && repairsLeft > 0) {
+          repairsLeft--;
+          onEvent({ type: 'tool', name: 'retry:truncated' });
+          const got = (parsed.ops?.length ?? parsed.edits?.length ?? 0);
+          messages.push({ role: 'assistant', content: content || null, tool_calls: [{ id: propose.id, type: 'function' as const, function: { name: propose.name, arguments: propose.args } }] });
+          messages.push({ role: 'tool', tool_call_id: propose.id, content: `你的 ${dialect.toolName} 输出在中途被截断,只完整收到前 ${got} 条,其余全部丢失(且截断处的值可能已损坏)。请立即重新提出,并【控制单次输出体积】:本批只输出前 ~8 条完整内容(style/字段只留必要项),plan 里说明"先做第一批,继续说'下一批'"。` });
+          continue;
         }
         const cs = dialect.buildChangeSet(req, parsed);
         if (opts?.verify && repairsLeft > 0) {

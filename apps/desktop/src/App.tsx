@@ -506,6 +506,7 @@ export function App() {
   const draftBufRef = useRef('');
   const drawnOpsRef = useRef(0);
   const streamConvRef = useRef<ReturnType<typeof makeRawBoardConv> | null>(null);
+  const staleStreamRef = useRef(false); // 提案被回炉(截断/verify 失败)后置位:新 draft 到达时先清上一轮的流式残画
   const streamObjsRef = useRef<Array<{ editId: string; node?: BNode; edge?: BEdge }>>([]);
   const streamByEditRef = useRef<Record<string, string>>({});
   const [reviewIdx, setReviewIdx] = useState(0);
@@ -735,6 +736,7 @@ export function App() {
         streamConvRef.current = null;
         streamObjsRef.current = [];
         streamByEditRef.current = {};
+        staleStreamRef.current = false;
         type StreamEvt = { type: string; delta?: string; name?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; questions?: ClarifyQuestion[]; message?: string };
         await streamPropose<StreamEvt>(
           ep,
@@ -748,8 +750,17 @@ export function App() {
           (e) => {
             if (e.type === 'reasoning') upd((tt) => (tt.kind === 'answer' ? { ...tt, reasoning: (tt.reasoning ?? '') + (e.delta ?? '') } : tt));
             else if (e.type === 'answer') upd((tt) => (tt.kind === 'answer' ? { ...tt, text: (tt.text ?? '') + (e.delta ?? '') } : tt));
-            else if (e.type === 'tool') upd((tt) => (tt.kind === 'answer' ? { ...tt, reasoning: (tt.reasoning ?? '') + `\n〔查表 ${e.name}〕\n` } : tt));
+            else if (e.type === 'tool') {
+              upd((tt) => (tt.kind === 'answer' ? { ...tt, reasoning: (tt.reasoning ?? '') + `\n〔查表 ${e.name}〕\n` } : tt));
+              // 提案后又有动作(verify/截断重提):标记流式画作可能作废——若随后真有新 draft 到达,先清旧画再画新的
+              if (fmt === 'drawio' && streamObjsRef.current.length) staleStreamRef.current = true;
+            }
             else if (e.type === 'draft' && fmt === 'drawio') {
+              if (staleStreamRef.current) {
+                // 上一轮提案被回炉(截断/verify 失败),它流式画的是废案:清掉,否则残节点与重提的整图叠加
+                boardRef.current?.removeObjects(Object.values(streamByEditRef.current));
+                streamObjsRef.current = []; streamByEditRef.current = {}; draftBufRef.current = ''; drawnOpsRef.current = 0; streamConvRef.current = null; staleStreamRef.current = false;
+              }
               // 边生成边画:每到一段 propose 入参,抽出已闭合的 op 即时画到左侧画板
               draftBufRef.current += e.delta ?? '';
               const conv = streamConvRef.current ?? (streamConvRef.current = makeRawBoardConv(++applySeqRef.current));
