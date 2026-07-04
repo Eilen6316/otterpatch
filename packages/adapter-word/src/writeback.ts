@@ -23,8 +23,10 @@ import type { CharProps, ParaProps } from './style.js';
 
 const dec = new TextDecoder();
 const enc = new TextEncoder();
-// replaceText → word-level redlines; setStyle → character (rPr/rPrChange) + paragraph (pPr/pPrChange) format revisions
-const SUPPORTED: ReadonlySet<EditOpKind> = new Set<EditOpKind>(['replaceText', 'setStyle']);
+// replaceText → word-level redlines; setStyle → character (rPr/rPrChange) + paragraph (pPr/pPrChange) format revisions;
+// deleteRange → whole-paragraph deletion revision (runs in <w:del> + paragraph-mark <w:del/>);
+// setObjectProps(imgAction) → image remove (drawing run in <w:del>) / resize (wp:extent in EMU)
+const SUPPORTED: ReadonlySet<EditOpKind> = new Set<EditOpKind>(['replaceText', 'setStyle', 'deleteRange', 'setObjectProps']);
 const DOC_PART = 'word/document.xml';
 
 export interface WordRedlineOptions {
@@ -40,7 +42,7 @@ export class WordRedlineWriteback implements WritebackBackend {
 
   canHandle(cs: ChangeSet): { ok: boolean; reason?: string } {
     const bad = cs.edits.find((e) => !SUPPORTED.has(e.op.kind));
-    if (bad) return { ok: false, reason: `word-redline supports replaceText / setStyle (got ${bad.op.kind})` };
+    if (bad) return { ok: false, reason: `word-redline supports replaceText / setStyle / deleteRange / setObjectProps (got ${bad.op.kind})` };
     return { ok: true };
   }
 
@@ -61,9 +63,19 @@ export class WordRedlineWriteback implements WritebackBackend {
     for (const e of cs.edits) {
       const anchor = cs.anchors[e.target];
       const quote = anchor && anchor.portable.kind === 'flow' ? anchor.portable.quote.text : '';
+      const paraIdx = anchor && anchor.portable.kind === 'flow' ? anchor.portable.path[0] : undefined; // 段号锚(0-based):空段/重复文本的定位通道
       if (e.op.kind === 'replaceText') {
         if (quote) { edits.push({ old: quote, new: e.op.text }); applied.push(e.id); }
         else dropped.push({ editId: e.id, reason: '文本改写缺少 quote 锚点,无法定位' });
+      } else if (e.op.kind === 'deleteRange') {
+        if (quote || paraIdx != null) { edits.push({ kind: 'delPara', ...(quote ? { quote } : {}), ...(paraIdx != null ? { paraIdx } : {}) }); applied.push(e.id); }
+        else dropped.push({ editId: e.id, reason: '删段缺少 quote/para 锚点,无法定位' });
+      } else if (e.op.kind === 'setObjectProps') {
+        const p = e.op.props as { imgAction?: 'remove' | 'resize'; width?: number };
+        if (p.imgAction !== 'remove' && p.imgAction !== 'resize') { dropped.push({ editId: e.id, reason: `setObjectProps 仅支持图片操作(imgAction),得到 ${JSON.stringify(e.op.props).slice(0, 60)}` }); continue; }
+        if (!quote && paraIdx == null) { dropped.push({ editId: e.id, reason: '图片操作缺少 quote/para 锚点,无法定位' }); continue; }
+        edits.push({ kind: 'img', action: p.imgAction, ...(p.width != null ? { width: p.width } : {}), ...(quote ? { quote } : {}), ...(paraIdx != null ? { paraIdx } : {}) });
+        applied.push(e.id);
       } else if (e.op.kind === 'setStyle') {
         const st0 = e.op.style;
         // Page-level (columns/margins/orientation): inherently document-wide, handled via surgical sectPr patch
@@ -75,7 +87,7 @@ export class WordRedlineWriteback implements WritebackBackend {
           // If the same edit also carries character/paragraph fields and has a quote, fall through to the format-revision path below; purely page-level edits stop here
           if (!quote && st0.font == null && st0.size == null && st0.bold == null && st0.align == null && st0.lineSpacing == null) continue;
         }
-        if (!quote) {
+        if (!quote && paraIdx == null) {
           // Document-wide character/paragraph formatting (all=true): v1 surgical writeback does not support per-run rewriting — report explicitly, never fail silently (workspace preview already applied)
           dropped.push({ editId: e.id, reason: '全文字符/段落格式(all=true)暂不支持外科写回,仅工作区预览生效;可改为对具体段落逐条下发' });
           continue;
@@ -95,7 +107,7 @@ export class WordRedlineWriteback implements WritebackBackend {
         if (st.bgColor != null) para.bgColor = st.bgColor;
         const hasChar = Object.keys(char).length > 0;
         const hasPara = Object.keys(para).length > 0;
-        if (hasChar || hasPara) { edits.push({ kind: 'fmt', quote, ...(hasChar ? { char } : {}), ...(hasPara ? { para } : {}) }); applied.push(e.id); }
+        if (hasChar || hasPara) { edits.push({ kind: 'fmt', quote, ...(paraIdx != null ? { paraIdx } : {}), ...(hasChar ? { char } : {}), ...(hasPara ? { para } : {}) }); applied.push(e.id); }
       }
     }
 

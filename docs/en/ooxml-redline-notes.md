@@ -1,29 +1,46 @@
-# OOXML 修订语义笔记(adapter-word 贡献者向)
+# OOXML redline semantics notes (for adapter-word contributors)
 
-写回层要产出**真 Word 修订**,这些语义细节决定"接受修订后文档是否干净"。当前 adapter-word
-已覆盖一部分;未覆盖项标注为 backlog。来源:OOXML 规范与对主流实现的观察,文本为本项目原创。
+The write-back layer must emit **real Word tracked changes**; these semantic details decide
+whether the document is clean after "accept all revisions". adapter-word covers part of this
+today; uncovered items are marked backlog. Sources: the OOXML spec plus observation of major
+implementations; the text is original to this project.
 
-## 已覆盖(有测试)
-- 插入 = `<w:ins>` 包 run;删除 = `<w:del>` 包 run,且其中文本节点必须改名 `<w:delText>`
-- 修订最小化:只把变化的词切成 del/ins 对,前后未变文本保持原 run 字节不动
-- 字符格式修订 `<w:rPr>+<w:rPrChange>`、段落格式修订 `<w:pPr>+<w:pPrChange>`
-- 修订 run 必须复制原 `<w:rPr>`,否则接受修订后丢加粗/字号
-- 页面级 sectPr 补丁(cols/pgMar/pgSz),按 OOXML 元素顺序插入
+## Covered (with tests)
+- Insertion = runs wrapped in `<w:ins>`; deletion = runs wrapped in `<w:del>`, with text nodes
+  renamed to `<w:delText>`
+- Redline minimization: only the changed words become del/ins pairs; unchanged text before/after
+  keeps its original run bytes
+- Character format revisions `<w:rPr>+<w:rPrChange>`, paragraph format revisions
+  `<w:pPr>+<w:pPrChange>`
+- Revision runs must copy the original `<w:rPr>`, or bold/size is lost after accepting
+- Page-level sectPr patches (cols/pgMar/pgSz), inserted in OOXML element order
+- **Whole-paragraph deletion** (deleteRange → block-deletion redline): every run wrapped in
+  `<w:del>`, `w:t` renamed to `w:delText`, plus an empty `<w:del/>` in the paragraph's
+  `<w:pPr><w:rPr>` marking the **paragraph mark itself** as deleted — no residual empty
+  paragraph/list item after accepting
+- **Image ops** (setObjectProps/imgAction): removal = the drawing run wrapped in `<w:del>`;
+  resize = `wp:extent`/`a:ext` rewritten in EMU, aspect ratio preserved
+- **Para anchoring**: block order mirrors the importer — a top-level `w:tbl` counts as one block,
+  `w:p` inside tables don't — so the workspace's "第N段" lands at the same spot in document.xml;
+  paragraph format revisions (pPrChange) also accept a paragraph-number anchor (formatting an
+  empty paragraph works)
 
-## Backlog(未覆盖,欢迎 PR)
-- **整段删除的段落符标记**:除删内容 run 外,还需在该段 `<w:pPr><w:rPr>` 里放空 `<w:del/>`
-  标记段落符本身被删——缺它则接受修订后残留空段/空列表项。当前 replaceText 为整段删空时未处理。
-- **嵌套否决语义**:否决他人插入 = 在对方 `<w:ins>` 内嵌自己的 `<w:del>`;恢复他人删除 =
-  保留对方 `<w:del>`、其后追加自己的 `<w:ins>` 重写同文本。多作者协作场景需要。
-- **`xml:space="preserve"`**:生成带前导/尾随空格的 `<w:t>` 时必须挂,否则空格静默丢失。
-  当前生成路径未系统校验。
-- **`<w:pPr>` 子元素顺序 schema**:pStyle → numPr → spacing → ind → jc → rPr(垫底);
-  pPrChange 注入时若原段无 pPr,新建的必须守序。
-- **批注(comments)**:锚点 `commentRangeStart/End` 是 run 的兄弟节点(w:p 直接子节点),
-  不能塞进 run;引用标记是独立 run。未来"Agent 留批注不改文"模式的基础。
-- **单位体系**:DXA(1440=1 英寸)用于页面/缩进/表格;EMU(914400=1 英寸)用于图片。
-  sectPr 补丁已用 DXA;未来插图需要 EMU + 四步注册(media/ + rels + Content_Types + w:drawing)。
+## Backlog (uncovered, PRs welcome)
+- **Nested veto semantics**: rejecting someone else's insertion = nesting your `<w:del>` inside
+  their `<w:ins>`; restoring their deletion = keep their `<w:del>` and append your `<w:ins>`
+  rewriting the same text. Needed for multi-author collaboration.
+- **`xml:space="preserve"`**: required when emitting `<w:t>` with leading/trailing spaces, or the
+  spaces are silently dropped. The generation path doesn't systematically enforce it yet.
+- **`<w:pPr>` child-order schema**: pStyle → numPr → spacing → ind → jc → rPr (last); when
+  pPrChange injection creates a fresh pPr, it must respect this order.
+- **Comments**: the `commentRangeStart/End` anchors are siblings of runs (direct children of
+  `w:p`), never inside a run; the reference mark is its own run. The basis for a future
+  "agent comments without editing" mode.
+- **Unit systems**: DXA (1440 = 1 inch) for page/indent/table; EMU (914400 = 1 inch) for images.
+  sectPr patches already use DXA and image resizing already uses EMU; **inserting** new images
+  still needs the four-step registration (media/ + rels + Content_Types + w:drawing).
 
-## 验证思路
-- 写回后的 docx 应通过:解包 → 接受全部修订(LibreOffice headless 可自动化)→ 与"直接改后
-  文本"对比一致 + 无残留空段;这是比"打得开"更强的正确性判据,值得做进 CI。
+## Verification idea
+- A written-back docx should pass: unzip → accept all revisions (LibreOffice headless automates
+  this) → compare equal to the "directly edited" text + no residual empty paragraphs. A stronger
+  correctness criterion than "it opens", worth putting in CI.

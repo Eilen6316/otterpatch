@@ -9,10 +9,14 @@
 - 字符格式修订 `<w:rPr>+<w:rPrChange>`、段落格式修订 `<w:pPr>+<w:pPrChange>`
 - 修订 run 必须复制原 `<w:rPr>`，否则接受修订后丢加粗/字号
 - 页面级 sectPr 补丁（cols/pgMar/pgSz），按 OOXML 元素顺序插入
+- **整段删除**（deleteRange → 整段删除修订）：所有 run 包 `<w:del>`、`w:t` 改名 `w:delText`，
+  并在该段 `<w:pPr><w:rPr>` 放空 `<w:del/>` 标记**段落符本身**被删——接受修订后不残留空段/空列表项
+- **图片操作**（setObjectProps/imgAction）：删图 = drawing run 包 `<w:del>`；调宽 =
+  `wp:extent`/`a:ext` 按 EMU 重写，保持纵横比
+- **段号锚定（para anchoring）**：块序与导入器镜像——顶层 `w:tbl` 算一个块、表内 `w:p` 不计数，
+  工作区"第N段"与 document.xml 落点一致；段落格式修订（pPrChange）也支持段号锚（空段落可套格式）
 
 ## Backlog（未覆盖，欢迎 PR）
-- **整段删除的段落符标记**：除删内容 run 外，还需在该段 `<w:pPr><w:rPr>` 里放空 `<w:del/>`
-  标记段落符本身被删——缺它则接受修订后残留空段/空列表项。当前 replaceText 为整段删空时未处理。
 - **嵌套否决语义**：否决他人插入 = 在对方 `<w:ins>` 内嵌自己的 `<w:del>`；恢复他人删除 =
   保留对方 `<w:del>`、其后追加自己的 `<w:ins>` 重写同文本。多作者协作场景需要。
 - **`xml:space="preserve"`**：生成带前导/尾随空格的 `<w:t>` 时必须挂，否则空格静默丢失。
@@ -22,7 +26,8 @@
 - **批注（comments）**：锚点 `commentRangeStart/End` 是 run 的兄弟节点（w:p 直接子节点），
   不能塞进 run；引用标记是独立 run。未来"Agent 留批注不改文"模式的基础。
 - **单位体系**：DXA（1440=1 英寸）用于页面/缩进/表格；EMU（914400=1 英寸）用于图片。
-  sectPr 补丁已用 DXA；未来插图需要 EMU + 四步注册（media/ + rels + Content_Types + w:drawing）。
+  sectPr 补丁已用 DXA，图片调宽已用 EMU；未来**插入**新图仍需四步注册
+  （media/ + rels + Content_Types + w:drawing）。
 
 ## 验证思路
 - 写回后的 docx 应通过：解包 → 接受全部修订（LibreOffice headless 可自动化）→ 与"直接改后

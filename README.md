@@ -99,7 +99,7 @@ npm test -w @otterpatch/writeback-surgical
 - [x] MCP server + headless CLI with a JSON event stream (BYOK)
 - [x] Word redline + PDF form-fill + PowerPoint slide-text adapters — propose→commit for excel/word/pdf/ppt/drawio
 - [x] Ribbon formatting applies to the live selection (bold/italic/colors/align/number-format)
-- [x] Electron desktop shell + electron-builder packaging config (12-language UI)
+- [x] Electron desktop shell + electron-builder packaging config (Chinese/English UI)
 - [x] Closed write-back loop in the cockpit (otterpatch-serve): load a file → propose → review diff (per-item accept/reject) → accept subset → surgical write-back → download the edited file
 - [x] Word: full Office-style six-tab ribbon + **inline tracked-change review** — per-change hover cards, 4-state view toggle (original/markup/clean/final), flatten-on-accept (accepting physically finalizes; no markup pollution)
 - [x] Agent read tools — Excel `read_range`/`aggregate`; Word `read_blocks`/`find_text`/`get_outline`/`get_style_usage` (full-doc snapshot, both model channels)
@@ -107,6 +107,9 @@ npm test -w @otterpatch/writeback-surgical
 - [x] Shadow-verification registry (Excel recompute · Word anchor landability · drawio topology) with in-turn repair + final semantic self-check; prompt caching on the Anthropic channel
 - [x] Page-level layout ops (columns/margins/orientation — two-column IEEE layouts) + doc-level change chips with true before/after toggling
 - [x] Batch continuation ("next batch" button + opt-in auto-continue, serial & re-anchored); per-edit acceptance telemetry; key-gated capability bench (`test/expert-bench.mjs`)
+- [x] Unified review UX across all three workspaces (shared **DiffToggle**): Excel original/compare/final tri-state with change coloring, Word 4-state incl. whole-paragraph deletion redlines, drawio per-hunk review with board highlighting; single ReviewBox interaction surface + re-review of uncommitted past turns
+- [x] Word structured agent ops — dual-channel anchoring (quote + para number), `deletePara`, per-paragraph image awareness + image remove/resize; Excel value×format hard gate in the prompt
+- [x] Word surgical write-back closed loop: accept-all → `/commit` → `WordRedlineWriteback` rewrites only `word/document.xml` (word-level redlines, paragraph-mark deletion revisions, image ops), everything else byte-identical → download `<name>.otterpatch.docx`; live evals (`npm run eval:excel|word|word:struct|word:commit`, gated on `OA_EVAL_KEY`)
 
 ## License
 

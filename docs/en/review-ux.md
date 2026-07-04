@@ -2,6 +2,13 @@
 
 Every agent proposal is reviewed **in-place, in the workspace** — not just in a side panel.
 
+## One change-view toggle everywhere (DiffToggle)
+
+All three workspaces share a single **DiffToggle** component (`apps/desktop/src/DiffToggle.tsx`):
+label dots + a change-progress counter + a sliding segmented control + ‹ › per-change stepping;
+the thumb is driven by `--dt-n` / `data-idx` and works for 2/3/4 segments — Excel's three states,
+Word's four and drawio's two are the same bar.
+
 ## Word: inline tracked changes
 
 Proposals land as three channels of inline marks (like Word's track changes / Google Docs
@@ -10,12 +17,14 @@ suggesting mode):
 - **Insertions** — green, underlined (`ins.rd-ins`)
 - **Deletions** — red strikethrough, visually receding (`del.rd-del`)
 - **Format changes** — dotted underline + a small glyph chip (`B`/`I`/`U`/`A±`/`¶`…)
+- **Whole-paragraph deletions** — `deletePara` lands as a block-deletion redline (`rd-chg-blkdel`):
+  full red strikethrough in markup view, collapsed in clean/final, untouched in original; the
+  paragraph is only physically removed on accept.
 
 Around them:
 
-- **4-state view toggle** (floating over the page): 原文 / 修订 / 清样 / 改后 — original, full
-  markup, clean-with-change-bars, final. Sliding-thumb segmented control with a change counter and
-  ‹ › step navigation.
+- **4-state view toggle** (DiffToggle, floating over the page): 原文 / 修订 / 清样 / 改后 —
+  original, full markup, clean-with-change-bars, final.
 - **Per-change hover card** — type, old → new, ✓ accept / ✕ reject, right where you're reading.
   Keyboard: Tab to a change, Enter/Space opens the card.
 - **Gutter change bars** on any block containing a change; rail ↔ inline hover linking both ways.
@@ -45,7 +54,12 @@ If the plan declares batches ("先做第一批…"), the accepted turn shows **�
 **⚡自动续批** opt-in toggle (persisted). Auto-continue sends "下一批" after each acceptance —
 serially, each batch re-anchored and re-reviewed — capped at 5 consecutive batches.
 
-## Excel: before-state replay
+## Excel: three-state compare + before-state replay
+
+Excel's DiffToggle has three states: **原文 / 对照 / 改后** (original / compare / final). 对照 =
+the final result plus color-coding of changed cells (blue = pending, red = rejected); the coloring
+fades as each item is dispositioned, view switches restore the real fill per decision, and it is
+auto-cleared before commit — review colors never reach the file.
 
 At proposal time the desktop captures each touched cell's **full before-state** — value *and
 formula*, fill, font color, bold. Reject (or the 原文 view) replays exactly the dimensions the op
@@ -53,11 +67,24 @@ touched: rejecting a value edit doesn't clobber a style edit on the same cell, f
 as formulas, user fills survive. The 原文/改后 quick toggle respects per-item decisions (a rejected
 edit doesn't resurrect when you flip views).
 
-## The rail (both formats)
+## drawio: per-hunk review
 
-An always-visible **git-style unified diff**: `@@ ref label` hunks with red − / green + lines and
-`~` format lines, per-item accept/reject, progress bar, "已采纳 · N 处" with undo. Hovering a hunk
-lights up the corresponding inline change and vice versa.
+drawio graduated from a collapsed code block to the same per-hunk list Excel/Word use: clicking a
+row highlights the corresponding object on the board, with inline ✓/✕ per row; DiffToggle provides
+an 原文/改后 switch. Reject/undo of update/delete/move ops on existing objects restores from the
+before-snapshot (prior/next) exactly — it no longer risks deleting the user's own objects.
+
+## ReviewBox: one interaction surface
+
+The old dual representation ("git-diff list + current change card") is gone; everything converges
+on one **ReviewBox**: an always-visible git-style unified diff (`@@ ref label` hunks with red − /
+green + lines and `~` format lines) where every row has inline quick ✓/✕, dispositioned rows show
+a ✓/✕ badge, and a fixed bottom action bar handles accept/reject-all. Hovering a hunk lights up
+the corresponding inline change and vice versa.
+
+**Re-reviewing past turns**: on uncommitted older turns the inline ✓/✕ stays live (silent
+disposition, doesn't move the review cursor); in Excel a row locks (🔒) if a later turn touched
+the same cell, prompting you to undo the later turn first.
 
 ## Telemetry
 

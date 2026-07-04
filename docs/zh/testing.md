@@ -1,7 +1,9 @@
 # 测试
 
-三个层次：包级单元测试（快速，始终运行）、针对构建产物驾驶舱的无头 e2e 测试
-（模拟模型），以及需要密钥门控的能力基准测试（真实模型，打分）。
+四个层次：包级单元测试（快速，始终运行）、针对构建产物驾驶舱的无头 e2e 测试
+（模拟模型）、live eval（真实模型驱动真实驾驶舱，密钥门控），以及能力基准测试
+（真实模型，打分）。所有测试脚本都住在 `test/` 并入库（不再有根目录 `_*.mjs`
+临时脚本）；live eval 的 API key 走 `OA_EVAL_KEY` 环境变量，bench 走 `OTTERPATCH_BENCH_KEY`。
 
 ## 包级单元测试（`npm test -w @otterpatch/<pkg>`）
 
@@ -10,7 +12,7 @@
 | `agent` | dialect 构建、provider 工厂、消息规范化、修复循环、json 抢救、**文档工具**（read_blocks/find_text/outline/style-usage）、**word 校验器**（引文可落地性）、**drawio 校验器**（悬空边 / 幽灵 id） |
 | `skills` | SKILL.md 解析、匹配与排序（含 playbook 平局裁决）、render/L0、`instructionsFor`、playbook 内容 |
 | `runtime` | 事件流、校验器注册表接线、**最终自检**协议（大变更集复查轮次） |
-| `adapter-*`、`writeback-surgical` | 编译 + 外科式回写保真度 |
+| `adapter-*`、`writeback-surgical` | 编译 + 外科式回写保真度；`adapter-word` 新增 7 项：deletePara（quote / 段号 / 自闭合空段 / 带 pPr 空段）、图片 resize/remove、`w:tbl` 块序镜像、空段落套段落格式 |
 
 运行器：`node --import tsx --test`（见各 package.json）。注意：package.json 文件必须保持
 **无 BOM** —— tsx 的 JSON 读取器会拒绝 UTF-8 BOM。
@@ -35,13 +37,30 @@
 只断言存在性曾掩盖过一个失效的接受按钮）；尽可能读取真实状态（计算样式、通过测试钩子获取的
 网格值）而不是类名。
 
+## Live eval（真实模型 + 真实驾驶舱，需本地 serve + `OA_EVAL_KEY`）
+
+在跑真的 `otterpatch-serve`（`http://localhost:4319`）上驱动真实模型，端到端断言：
+
+| npm script | 断言内容 |
+|---|---|
+| `eval:excel` | 咨询不动表格 / 合计行落公式 / 图表浮层出现 |
+| `eval:excel:sanity` | 值 × 格式口径断言（直接读提案 ops，如百分比格必须写小数） |
+| `eval:word` | Word 通用能力冒烟 |
+| `eval:word:struct` | 空段清理 / deletePara / 图片感知 / 缩放 / 删除，13 项断言 |
+| `eval:word:commit` | hero loop：导入 docx → 提案 → 全部接受 → 外科写回下载 → 解包断言 `w:ins`/`w:del`/段落符删除，10 项断言 |
+
+缺少 `OA_EVAL_KEY` 时报错退出（exit 2）——不会拿假密钥空跑。
+
 ## 能力基准（`test/expert-bench.mjs`，密钥门控）
 
-用真实模型跑 8 个任务（Word 润色/结构/公文（政府公文）/歧义，Excel
-公式/异常/图表/歧义），并从两个层次打分：
+用真实模型跑 16 个任务（Word 润色/结构/公文（政府公文）/歧义、Excel
+公式/异常/图表/歧义、多轮续接/撤销场景，以及本周新增的 `w-cleanup-empty` /
+`w-img-resize` / `w-img-remove` / `x-pct-mock`），并从两个层次打分：
 
 1. **客观不变量** —— 响应类型（changeset 还是 clarify）、必需的工具调用
-   （`read_blocks`、`aggregate`、`load_skill`……）、必需的操作形态（`=SUM`、`chart`）。
+   （`read_blocks`、`aggregate`、`load_skill`……）、必需的操作形态（`=SUM`、`chart`）、
+   **禁止的操作形态**（`opsForbid`，如删图任务禁止出现 `deleteRange`），以及结构化自定义
+   校验（`check`，如"毛利率格写入值必须 ≤2"）。
 2. **LLM 评审** —— 每个任务按 1–5 分评分标准打分。
 
 结果追加到 `test/bench-results.jsonl` 用于趋势跟踪。没有 `OTTERPATCH_BENCH_KEY`

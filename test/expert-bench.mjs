@@ -46,6 +46,28 @@ const DOC = {
 const docCtx = (truncAt = 60) =>
   `[Word 文档 · 4 段]\n第1段 [标题1 · 宋体 18pt · 居中]: 项目进展报告\n第2段 [正文 · 宋体 12pt]: ${LONG.slice(0, truncAt)}…(已截断)\n第3段 [正文 · 宋体 15pt]: 三、下一步安排\n第4段 [正文 · 仿宋 12pt]: 尽快推进试运行准备工作,确保按期上线。\n(有 1 段超长已截断:改写/引用前先用 read_blocks 取该段全文;检索 find_text,大纲 get_outline,排版审计 get_style_usage。)`;
 
+// ── 素材②:结构清理 + 图片操作(空段/垃圾段/含图段——deletePara/para 锚定/img op 的靶场)──
+const DOC2 = {
+  blocks: [
+    { style: '标题1', text: '产品验收报告', font: '宋体', size: 18 },
+    { style: '正文', text: '[图片 验收流程图 120×90]验收范围包括表格、文档与画板三个模块。', font: '宋体', size: 12 },
+    { style: '正文', text: '', font: '宋体', size: 12 },
+    { style: '正文', text: '', font: '宋体', size: 12 },
+    { style: '正文', text: '阿斯顿撒 deSSD 测试残留文字', font: '宋体', size: 12 },
+    { style: '正文', text: '结论:三个模块均达到验收标准。', font: '宋体', size: 12 },
+  ],
+};
+const doc2Ctx = '[Word 文档 · 6 段]\n第1段 [标题1 · 宋体 18pt]: 产品验收报告\n第2段 [正文 · 宋体 12pt]: [图片 验收流程图 120×90]验收范围包括表格、文档与画板三个模块。\n第3段 [正文 · 宋体 12pt]: (空段)\n第4段 [正文 · 宋体 12pt]: (空段)\n第5段 [正文 · 宋体 12pt]: 阿斯顿撒 deSSD 测试残留文字\n第6段 [正文 · 宋体 12pt]: 结论:三个模块均达到验收标准。';
+// ── 素材③:值×格式耦合(毛利率小数 + 0% 格式——mock 口径自检的靶场)──
+const SHEET2 = {
+  a1: 'A1:F4',
+  values: [
+    ['日期', '产品', '销量', '单价', '金额', '毛利率'],
+    ['01-03', 'A 型', 120, 38, 4560, 0.41], ['01-05', 'B 型', 86, 52, 4472, 0.37], ['01-09', 'A 型', 150, 38, 5700, 0.41],
+  ],
+};
+const sheet2Ctx = '表格 A1:F4,表头 日期/产品/销量/单价/金额/毛利率;毛利率列存小数(如 0.41)配 0% 数字格式显示为 41%;数据末行为第 4 行。';
+
 // ── 任务集(id / 请求 / 客观不变量 / rubric)──
 const TASKS = [
   { id: 'w-polish-truncated', format: 'word', intent: '把第2段润色得更精炼', context: docCtx(), doc: DOC,
@@ -104,6 +126,41 @@ const TASKS = [
     ],
     expect: { kind: 'changeset', opsMust: [/尽快推进试运行准备工作/] },
     rubric: '上一轮改动已撤销:quote 必须锚定【原句】("尽快推进试运行准备工作…"),不得把已撤销的版本当作现存文本引用。' },
+
+  // ── 新能力:结构清理(deletePara + para 段号锚定)/ 图片操作(img op)/ 值×格式口径自检 ──
+  { id: 'w-cleanup-empty', format: 'word', intent: '清理文档:删掉所有空段落,以及那段无意义的测试残留文字', context: doc2Ctx, doc: DOC2,
+    expect: { kind: 'changeset', opsMust: [/deleteRange/],
+      check: (cs) => {
+        const dels = cs.edits.filter((e) => e.op.kind === 'deleteRange');
+        if (dels.length < 3) return `删段 edits 只有 ${dels.length} 条(应 ≥3:两个空段+残留文字段)`;
+        for (const e of dels) {
+          const a = cs.anchors[e.target]; const p = a?.portable;
+          if (p?.kind !== 'flow') continue;
+          if (p.path[0] === 1 || (p.quote.text && p.quote.text.includes('验收范围'))) return '把含图片的第2段也删了(应保留)';
+          if (!p.quote.text && p.path[0] == null) return '空段删除没有给 para 段号锚(空 quote 无法定位)';
+        }
+        return null;
+      } },
+    rubric: '空段落是否用 para 段号锚定 + deletePara(而非说"空字符串无法定位"跳过);残留文字段是否一并删除;含图片的第2段与正文是否保留。' },
+  { id: 'w-img-resize', format: 'word', intent: '第2段那张验收流程图太大了,缩小到 100 像素宽', context: doc2Ctx, doc: DOC2,
+    expect: { kind: 'changeset', opsMust: [/imgAction/, /resize/, /100/], opsForbid: [/deleteRange/] },
+    rubric: '是否用 img=resize + imgWidth=100 精确执行(而非说不支持/删除重来);锚定是否落在第2段(para 或该段 quote)。' },
+  { id: 'w-img-remove', format: 'word', intent: '把第2段里的图片删掉,段内文字要保留', context: doc2Ctx, doc: DOC2,
+    expect: { kind: 'changeset', opsMust: [/imgAction/, /"remove"/], opsForbid: [/deleteRange/, /replaceText/] },
+    rubric: '是否用 img=remove 只删图不删段(deletePara/replacement 都会伤到段内文字);plan 是否说明文字保留。' },
+  { id: 'x-pct-mock', format: 'excel', intent: '在数据下方续写 2 行 2 月的 mock 数据,口径与上面一致', context: sheet2Ctx, sheet: SHEET2,
+    expect: { kind: 'changeset',
+      check: (cs) => {
+        for (const e of cs.edits) {
+          if (e.op.kind !== 'setValue') continue;
+          const a = cs.anchors[e.target]; const a1 = a?.portable?.kind === 'grid' ? a.portable.a1 : '';
+          if (!/^F\d+$/i.test(a1.replace(/^.*!/, ''))) continue;
+          const n = typeof e.op.value === 'number' ? e.op.value : parseFloat(String(e.op.value));
+          if (Number.isFinite(n) && n > 2) return `毛利率格 ${a1} 写入 ${e.op.value} —— 配 0% 格式会显示成 ${n * 100}%(口径事故,应写小数)`;
+        }
+        return null;
+      } },
+    rubric: 'mock 数据是否口径正确(毛利率写小数如 0.4 而非 40/120)、有合理波动(非全同值)、金额列优先公式(=销量×单价);是否先探明末行再续写。' },
 ];
 
 // ── 执行 ──
@@ -156,16 +213,19 @@ for (const task of TASKS) {
   const kindOk = result.kind === task.expect.kind;
   const toolsOk = (task.expect.mustTools ?? []).every((t) => tools.includes(t))
     && (!task.expect.mustToolsAny || task.expect.mustToolsAny.some((t) => tools.includes(t)));
-  const opsOk = (task.expect.opsMust ?? []).every((rx) => rx.test(ops));
+  const opsOk = (task.expect.opsMust ?? []).every((rx) => rx.test(ops))
+    && !(task.expect.opsForbid ?? []).some((rx) => rx.test(ops));
+  // 结构化自定义不变量(正则够不着的:数值区间/锚点交叉校验),返回 null=通过、字符串=失败原因
+  const checkMsg = task.expect.check && result.kind === 'changeset' ? task.expect.check(result.changeSet) : null;
   const desc = `工具轨迹: ${tools.join(' → ') || '(无)'}\n回应类型: ${result.kind}\n` +
     (result.kind === 'changeset' ? `plan: ${result.changeSet.meta.planSummary ?? ''}\nedits(${result.changeSet.edits.length}): ${ops.slice(0, 3000)}`
       : result.kind === 'clarify' ? `questions: ${JSON.stringify(result.questions).slice(0, 1500)}` : `answer: ${result.text.slice(0, 1500)}`);
   const j = await judge(task, desc);
-  const pass = kindOk && toolsOk && opsOk;
+  const pass = kindOk && toolsOk && opsOk && !checkMsg;
   if (!pass) fails++;
   sum += j.score; n++;
-  console.log(`  ${pass ? '✓' : '✗'} ${task.id}  kind:${kindOk ? 'ok' : result.kind} tools:${toolsOk ? 'ok' : '缺[' + tools.join(',') + ']'} ops:${opsOk ? 'ok' : 'miss'}  judge:${j.score}/5 —— ${j.reason}`);
-  appendFileSync(new URL('./bench-results.jsonl', import.meta.url), JSON.stringify({ ts: new Date().toISOString(), provider: PROVIDER, model: MODEL, task: task.id, kindOk, toolsOk, opsOk, judge: j.score, reason: j.reason }) + '\n');
+  console.log(`  ${pass ? '✓' : '✗'} ${task.id}  kind:${kindOk ? 'ok' : result.kind} tools:${toolsOk ? 'ok' : '缺[' + tools.join(',') + ']'} ops:${opsOk ? 'ok' : 'miss'}${checkMsg ? ' check:' + checkMsg : ''}  judge:${j.score}/5 —— ${j.reason}`);
+  appendFileSync(new URL('./bench-results.jsonl', import.meta.url), JSON.stringify({ ts: new Date().toISOString(), provider: PROVIDER, model: MODEL, task: task.id, kindOk, toolsOk, opsOk, ...(checkMsg ? { check: checkMsg } : {}), judge: j.score, reason: j.reason }) + '\n');
 }
 console.log(`\nBENCH(${PROVIDER}/${MODEL}): ${n} 任务 · 不变量失败 ${fails} · judge 均分 ${(n ? sum / n : 0).toFixed(2)}/5`);
 process.exit(fails ? 1 : 0);

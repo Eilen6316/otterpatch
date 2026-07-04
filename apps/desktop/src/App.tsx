@@ -1233,7 +1233,7 @@ export function App() {
     setAccepted((prev) => new Set([...prev, ...turn.diff.items.map((x) => akey(turn.diff.changeSetId, x.editId))]));
     setReviewIdx(all.length);
     markCommitted(ti, all.length);
-    if (isExcel && fileB64) void doCommit(all); // 有上传文件 → 外科写回并下载
+    if ((isExcel || fmt === 'word') && fileB64) void doCommit(all); // 有上传文件 → 外科写回并下载(Word 走 w:ins/w:del 修订落盘)
     else notify((fmt === 'drawio' ? t('已采纳到画板') : fmt === 'word' ? t('已采纳到文档') : t('已采纳到表格')) + ' · ' + all.length + ' ' + t('处'));
     // 自动续批:plan 声明了分批 + 开关开着 → 采纳后自动续发(串行,每批重新锚定+校验+审阅;上限防失控)
     if (autoBatch && BATCH_RX.test(turn.diff.intent ?? '')) {

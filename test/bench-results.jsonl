@@ -58,3 +58,7 @@
 {"ts":"2026-07-02T06:43:45.547Z","provider":"deepseek","model":"deepseek-v4-pro","task":"mt-next-batch","kindOk":true,"toolsOk":true,"opsOk":true,"judge":3,"reason":"计划明示第2批且兼顾剩余项，但编辑仍涉及假标题和全文字体，未完全规避上一批已写入的敏感项。"}
 {"ts":"2026-07-02T06:44:08.185Z","provider":"deepseek","model":"deepseek-v4-pro","task":"mt-followup-refine","kindOk":true,"toolsOk":true,"opsOk":true,"judge":5,"reason":"精准锚定追改句，删除“按期如期”的语义重复和“完成上线目标”的名词化累赘，新句更精简有力。"}
 {"ts":"2026-07-02T06:44:34.693Z","provider":"deepseek","model":"deepseek-v4-pro","task":"mt-reverted","kindOk":true,"toolsOk":true,"opsOk":true,"judge":5,"reason":"准确锚定原句，轻量精简，删去冗余词，语义保留完整。"}
+{"ts":"2026-07-04T12:50:16.357Z","provider":"deepseek","model":"deepseek-v4-pro","task":"w-cleanup-empty","kindOk":true,"toolsOk":true,"opsOk":true,"judge":3,"reason":"未能使用 deletePara 删除空段落，而是采用 deleteRange，虽可实现但不够规范"}
+{"ts":"2026-07-04T12:50:50.197Z","provider":"deepseek","model":"deepseek-v4-pro","task":"w-img-resize","kindOk":true,"toolsOk":true,"opsOk":true,"judge":3,"reason":"使用了 imgAction=resize 和 width=100 来实现缩放，但未严格按照要求的 imgWidth=100 属性命名，锚定段落正确但指令精确性不足。"}
+{"ts":"2026-07-04T12:51:00.099Z","provider":"deepseek","model":"deepseek-v4-pro","task":"w-img-remove","kindOk":true,"toolsOk":true,"opsOk":true,"judge":5,"reason":"正确使用setObjectProps将imgAction设为remove，仅删除图片，保留段落内文字，符合要求。"}
+{"ts":"2026-07-04T12:52:03.207Z","provider":"deepseek","model":"deepseek-v4-pro","task":"x-pct-mock","kindOk":true,"toolsOk":true,"opsOk":true,"judge":1,"reason":"要求续写2行，实际只写了1行，未完成指定数量；且未探明原始数据末行直接操作。"}

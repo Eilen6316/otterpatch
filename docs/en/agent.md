@@ -29,7 +29,27 @@ provider-agnostic tool definitions in `sheet-tools.ts` / `doc-tools.ts`.
 | any | `load_skill` | pull a domain playbook's full instructions (see [skills.md](./skills.md)) |
 
 Snapshots ride along on the request (`ProposeRequest.sheet` / `.doc`) and are only visible to the
-tools — they are not pasted into the prompt.
+tools — they are not pasted into the prompt. Word context/snapshots annotate images per paragraph
+(`[图片 alt 宽×高]`), so the agent knows where each image sits and how big it is.
+
+## Word structured ops: dual-channel anchoring / deletePara / images
+
+- **Dual-channel anchoring**: `quote` (source-text fragment, preferred) + `para` (1-based
+  paragraph number, from the context's "第N段" or `read_blocks`). Empty paragraphs and duplicated
+  text become anchorable; a failed quote lookup falls back to the paragraph number.
+- **deletePara**: a whole-paragraph deletion op (clear empty paragraphs, drop redundant ones).
+  Within a batch it lands in **descending** paragraph order to prevent index drift; deletions left
+  pending across turns are physically finalized when the next proposal arrives, so paragraph
+  numbers match the snapshot.
+- **Image ops** (`setObjectProps`): `img=remove` deletes only the image, keeping the paragraph's
+  text; `img=resize` + `imgWidth` scales proportionally. Users can also click-select an image in
+  the workspace as the circled target (selection outline, reported as a "第N段" position).
+- **Excel value × format hard gate** (prompt-level): writing into a percent-formatted cell must
+  use decimals — 41% is `0.41`; writing `120` renders as 12000%, a units accident. Mock data must
+  look real (variance within columns, derived columns as formulas, ratios as decimals).
+- **Diff label completion**: line spacing / paragraph styles / columns / margins / page
+  orientation no longer collapse into a generic "apply format" label; `deleteRange` and image ops
+  get proper labels; flow refs with an empty quote display as "第N段".
 
 ## Shadow verification: propose → observe → repair
 

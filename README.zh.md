@@ -20,7 +20,7 @@ Agent 不该直接改你的文件。在 OtterPatch 里,Agent 只**提议**一份
 
 ## 文档
 
-文档在 [`docs/`](./docs/README.md)(五种语言):
+文档在 [`docs/`](./docs/README.md)(中文 · English):
 [架构](./docs/zh/architecture.md) · [Agent 循环](./docs/zh/agent.md) ·
 [技能与打法手册](./docs/zh/skills.md) · [审阅体验](./docs/zh/review-ux.md) ·
 [测试](./docs/zh/testing.md) · [能力基准](./docs/zh/bench.md)
@@ -76,6 +76,9 @@ npm test -w @otterpatch/writeback-surgical
 - [x] 影子校验注册表(Excel 重算 · Word 锚点可落地 · drawio 拓扑完整)+ 当轮修复 + 收尾语义自检;Anthropic 通道 prompt caching
 - [x] 页面级版式操作(分栏/页边距/纸张方向,IEEE 双栏可直接做)+ 全文级改动 chip(真前后对比)
 - [x] 分批续接(「继续下一批」+ 可选自动续批,串行重新锚定)+ 逐条接受率遥测 + 能力级 bench(`test/expert-bench.mjs`)
+- [x] 三工作区统一审阅 UX(共享 **DiffToggle**):Excel 原文/对照/改后 三态 + 改动格着色、Word 四态含整段删除修订、drawio 逐条 hunk 审阅联动画板高亮;ReviewBox 单一交互面 + 未提交历史回合可重审
+- [x] Word Agent 结构化操作——quote + 段号双通道锚定、`deletePara`、按段图片感知 + 图片删除/等比调宽;Excel 值×格式硬门槛进提示词
+- [x] Word 外科写回闭环:全部接受 → `/commit` → `WordRedlineWriteback` 只重写 `word/document.xml`(词级红线、段落符删除修订、图片操作),其余部件字节透传 → 下载 `<名>.otterpatch.docx`;live eval 体系(`npm run eval:excel|word|word:struct|word:commit`,`OA_EVAL_KEY` 门控)
 
 ## 许可证
 

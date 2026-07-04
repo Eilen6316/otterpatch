@@ -15,11 +15,18 @@ import { esc, paraText, parsePara, splitBody, sliceRuns } from './runs.js';
 
 /** Text rewrite (compatible with the legacy signature). */
 export interface ParaEdit { old: string; new: string }
-/** Format revision (character and/or paragraph; both may coexist). */
-export interface FmtEdit { kind: 'fmt'; quote: string; char?: CharProps; para?: ParaProps }
-export type DocEdit = ParaEdit | FmtEdit;
+/** Format revision (character and/or paragraph; both may coexist). paraIdx anchors empty/duplicate paragraphs by top-level block index. */
+export interface FmtEdit { kind: 'fmt'; quote: string; char?: CharProps; para?: ParaProps; paraIdx?: number }
+/** Whole-paragraph deletion as a native revision: every run wrapped in <w:del> (w:t→w:delText) + paragraph-mark deletion in pPr, so accepting the revision leaves no empty paragraph behind. */
+export interface DelParaEdit { kind: 'delPara'; quote?: string; paraIdx?: number }
+/** Image op on the drawing inside the anchored paragraph: remove (run wrapped in <w:del>) or resize (wp:extent/a:ext rewritten in EMU, aspect kept). */
+export interface ImgEdit { kind: 'img'; action: 'remove' | 'resize'; width?: number; quote?: string; paraIdx?: number }
+export type DocEdit = ParaEdit | FmtEdit | DelParaEdit | ImgEdit;
 
 const isText = (e: DocEdit): e is ParaEdit => 'old' in e;
+const isDel = (e: DocEdit): e is DelParaEdit => !isText(e) && e.kind === 'delPara';
+const isImg = (e: DocEdit): e is ImgEdit => !isText(e) && e.kind === 'img';
+const EMU_PER_PX = 9525; // 96dpi: 1px = 9525 EMU
 const escAttr = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 interface Ctx { id: number; author: string; authorRaw: string; date: string }
@@ -62,9 +69,72 @@ function flattenReplace(full: string, quote: string, next: string, ctx: Ctx): st
   return xml;
 }
 
-/** Try to apply one edit to a paragraph; returns null if the quote is not in this paragraph. */
-function tryApply(para: string, edit: DocEdit, ctx: Ctx): string | null {
-  const quote = isText(edit) ? edit.old : edit.quote;
+/** Paragraph-mark deletion element for pPr (the redline-notes backlog item: without it, accepting the revision leaves an empty paragraph). */
+function paraMarkDel(pPr: string, ctx: Ctx): string {
+  const del = `<w:del w:id="${ctx.id++}" w:author="${ctx.author}" w:date="${ctx.date}"/>`;
+  if (!pPr) return `<w:pPr><w:rPr>${del}</w:rPr></w:pPr>`;
+  if (/^\s*<w:pPr\b[^>]*\/>/.test(pPr)) return pPr.replace(/<w:pPr\b([^>]*)\/>/, `<w:pPr$1><w:rPr>${del}</w:rPr></w:pPr>`);
+  if (/<w:rPr[\s/>]/.test(pPr)) return pPr.replace(/<w:rPr\b(\s[^>]*)?>/, (m) => m + del).replace(/<w:rPr\b([^>]*)\/>/, `<w:rPr$1>${del}</w:rPr>`);
+  return pPr.replace(/<\/w:pPr>\s*$/, `<w:rPr>${del}</w:rPr></w:pPr>`);
+}
+
+/** Delete a whole paragraph as a native revision: runs → <w:del>-wrapped (w:t→w:delText), pPr gets the paragraph-mark <w:del/>. */
+function delParaXml(para: string, ctx: Ctx): string {
+  if (/^<w:p\b[^>]*\/>$/.test(para)) {
+    // Self-closing empty paragraph: only the paragraph-mark deletion is needed
+    return para.replace(/\/>$/, '>') + paraMarkDel('', ctx) + '</w:p>';
+  }
+  const { open, pPr, body } = parsePara(para);
+  const newBody = body.replace(/<w:r\b[^>]*>[\s\S]*?<\/w:r>/g, (run) =>
+    `<w:del w:id="${ctx.id++}" w:author="${ctx.author}" w:date="${ctx.date}">${run.replace(/<w:t\b(\s[^>]*)?>/g, '<w:delText$1>').replace(/<\/w:t>/g, '</w:delText>')}</w:del>`);
+  return open + paraMarkDel(pPr, ctx) + newBody + '</w:p>';
+}
+
+/** Image ops inside a paragraph: resize rewrites wp:extent/a:ext (EMU, aspect kept, direct edit — image sizing has no practical revision form); remove wraps the drawing run in <w:del>. */
+function imgXml(para: string, edit: ImgEdit, ctx: Ctx): string | null {
+  if (!/<w:drawing\b|<w:pict\b/.test(para)) return null;
+  if (edit.action === 'resize') {
+    if (!edit.width) return null;
+    let hit = false;
+    const out = para.replace(/(<(?:wp:extent|a:ext)\b[^>]*?cx=")(\d+)("[^>]*?cy=")(\d+)(")/g, (_m, a, cx, b, cy, c) => {
+      const ncx = Math.round(edit.width! * EMU_PER_PX);
+      const ncy = Math.max(1, Math.round(ncx * (Number(cy) / Math.max(1, Number(cx)))));
+      hit = true;
+      return `${a}${ncx}${b}${ncy}${c}`;
+    });
+    return hit ? out : null;
+  }
+  // remove:包住含 drawing/pict 的 run(drawing run 无 w:t,w:del 包裹即为删除修订)
+  const { open, pPr, body } = parsePara(para);
+  let hit = false;
+  const newBody = body.replace(/<w:r\b[^>]*>[\s\S]*?<\/w:r>/g, (run) => {
+    if (!/<w:drawing\b|<w:pict\b/.test(run)) return run;
+    hit = true;
+    return `<w:del w:id="${ctx.id++}" w:author="${ctx.author}" w:date="${ctx.date}">${run}</w:del>`;
+  });
+  return hit ? open + pPr + newBody + '</w:p>' : null;
+}
+
+/** Try to apply one edit to a paragraph; returns null if the quote is not in this paragraph.
+ *  blkIdx = the paragraph's top-level block index (each top-level <w:tbl> counts as one block, mirroring
+ *  the workspace importer) — anchors paraIdx-based edits (empty paragraphs have no quote to match). */
+function tryApply(para: string, edit: DocEdit, ctx: Ctx, blkIdx?: number): string | null {
+  const quote = isText(edit) ? edit.old : (edit.quote ?? '');
+  const idxHit = !isText(edit) && edit.paraIdx != null && edit.paraIdx === blkIdx;
+  // 结构/图片操作:quote 命中该段 或 段号命中(空段只有段号)
+  if (isDel(edit)) {
+    if (quote ? paraText(para).includes(quote) : idxHit) return delParaXml(para, ctx);
+    return null;
+  }
+  if (isImg(edit)) {
+    if (quote ? paraText(para).includes(quote) : idxHit) return imgXml(para, edit, ctx);
+    return null;
+  }
+  // 段落格式 + 段号锚(空段落套格式:quote 为空,靠段号命中)
+  if (!quote && !isText(edit) && idxHit && edit.para) {
+    const { open, pPr, body } = parsePara(para);
+    return open + mergePPr(pPr, paraElems(edit.para), ctx.id++, ctx.author, ctx.date) + body + '</w:p>';
+  }
   if (!quote) return null;
   const full = paraText(para);
   if (!full.includes(quote)) return null;
@@ -108,7 +178,9 @@ function tryApply(para: string, edit: DocEdit, ctx: Ctx): string | null {
   return open + newPPr + newBody + '</w:p>';
 }
 
-/** Apply a set of edits to document.xml; each edit locates its first matching paragraph and rewrites it surgically. */
+/** Apply a set of edits to document.xml; each edit locates its first matching paragraph and rewrites it surgically.
+ *  Block indexing mirrors the workspace importer: top-level <w:tbl> consumes its inner paragraphs and counts
+ *  as ONE block, so paraIdx from the workspace ("第N段") lands on the same paragraph here. */
 export function redlineDocumentXml(documentXml: string, edits: DocEdit[], opts: RedlineOptions = {}): { xml: string; changed: number } {
   const authorRaw = opts.author ?? 'OtterPatch';
   const ctx: Ctx = { id: opts.idStart ?? 1, author: escAttr(authorRaw), authorRaw, date: opts.date ?? '1970-01-01T00:00:00Z' };
@@ -116,11 +188,13 @@ export function redlineDocumentXml(documentXml: string, edits: DocEdit[], opts: 
   let changed = 0;
   for (const edit of edits) {
     let applied = false;
-    // Match both self-closing empty paragraphs <w:p .../> (common in Word) and regular <w:p>...</w:p>, so an empty paragraph doesn't swallow the next one
-    xml = xml.replace(/<w:p\b[^>]*\/>|<w:p\b[\s\S]*?<\/w:p>/g, (para) => {
-      if (applied) return para;
-      const res = tryApply(para, edit, ctx);
-      if (res == null) return para;
+    let blk = -1; // top-level block cursor (w:tbl = one block, its inner w:p don't count)
+    // Match tables first (skipped whole), then self-closing empty paragraphs <w:p .../> and regular <w:p>...</w:p>
+    xml = xml.replace(/<w:tbl\b[\s\S]*?<\/w:tbl>|<w:p\b[^>]*\/>|<w:p\b[\s\S]*?<\/w:p>/g, (el) => {
+      blk++;
+      if (applied || el.startsWith('<w:tbl')) return el;
+      const res = tryApply(el, edit, ctx, blk);
+      if (res == null) return el;
       applied = true;
       return res;
     });
