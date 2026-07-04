@@ -215,6 +215,10 @@ export interface BoardHandle {
   updateObject(id: string, patch: { value?: string; style?: string }): void;
   moveObject(id: string, box: { x?: number; y?: number; w?: number; h?: number }): void;
   highlight(id: string): void;
+  /** 读某对象当前状态(改前快照用)——mutation 类改动"拒绝/撤销"要按它还原,不能删对象。 */
+  getObject(id: string): { node?: BNode; edge?: BEdge } | null;
+  /** 按快照恢复/重放对象(存在则整体替换,被删则补回)。 */
+  restoreObject(obj: { node?: BNode; edge?: BEdge }): void;
 }
 /** drawio style 串 → 画板节点的线稿 inner SVG(覆盖常见形状,默认矩形)。 */
 export function innerForStyle(style?: string): string {
@@ -353,6 +357,8 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
   const [selEdge, setSelEdge] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const [hi, setHi] = useState<string | null>(null);
+  const nodesRef = useRef<BNode[]>([]); nodesRef.current = nodes; // getObject 走 ref,句柄闭包不吃 state 陈旧值
+  const edgesRef = useRef<BEdge[]>([]); edgesRef.current = edges;
   useImperativeHandle(apiRef, () => ({
     addObjects: (nn, ee) => {
       if (nn.length || ee.length) commit();
@@ -375,6 +381,16 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
       setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...(box.x != null ? { x: snap(box.x) } : {}), ...(box.y != null ? { y: snap(box.y) } : {}), ...(box.w != null ? { w: box.w } : {}), ...(box.h != null ? { h: box.h } : {}) } : n)));
     },
     highlight: (id) => { setHi(id); setSelIds(new Set([id])); setSelEdge(null); },
+    getObject: (id) => {
+      const n = nodesRef.current.find((x) => x.id === id);
+      if (n) return { node: { ...n } };
+      const e = edgesRef.current.find((x) => x.id === id);
+      return e ? { edge: { ...e } } : null;
+    },
+    restoreObject: (obj) => {
+      if (obj.node) { const nd = obj.node; setNodes((ns) => (ns.some((n) => n.id === nd.id) ? ns.map((n) => (n.id === nd.id ? nd : n)) : [...ns, nd])); }
+      if (obj.edge) { const ed = obj.edge; setEdges((es) => (es.some((e) => e.id === ed.id) ? es.map((e) => (e.id === ed.id ? ed : e)) : [...es, ed])); }
+    },
   }));
   const [editing, setEditing] = useState<string | null>(null);
   const [drag, setDrag] = useState<{ sx: number; sy: number; origins: Record<string, XY> } | null>(null);

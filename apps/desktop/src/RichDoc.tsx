@@ -53,9 +53,9 @@ export interface RichDocHandle {
   getContext(): string;
   /** 全文快照(逐段全文+样式,清样投影)——随请求上送 serve,供 read_blocks/find_text 等工具按需取,不进 prompt。 */
   getDocSnapshot(): { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string }> };
-  /** 落一条 Agent 改动(文本改写 replacement / 格式 fmt / 删段 removeBlock),按 editId 包裹,可还原。
+  /** 落一条 Agent 改动(文本改写 replacement / 格式 fmt / 删段 removeBlock / 图片 img),按 editId 包裹,可还原。
    *  blockIdx=段号锚(0-based,与 getContext/getDocSnapshot 的"第N段"同序):quote 定位失败或空段落时的兜底通道。 */
-  applyEdit(editId: string, quote: string, opts: { replacement?: string; fmt?: DocFmt; blockIdx?: number; removeBlock?: boolean }): boolean;
+  applyEdit(editId: string, quote: string, opts: { replacement?: string; fmt?: DocFmt; blockIdx?: number; removeBlock?: boolean; img?: { action: 'remove' | 'resize'; width?: number } }): boolean;
   /** 按 editId 精确还原该条改动(undoMap 缺失时按 DOM 现场兜底);false=完全找不到可还原目标。 */
   revert(editId: string): boolean;
   /** 选中/滚动到某条改动。 */
@@ -555,7 +555,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       if (root.querySelector(`[data-cid="${cssq(editId)}"]`)) return true; // 幂等:同一改动只落一次(刷新后重复接受/重放不叠标记)
       const fmt = opts.fmt;
       // 全文格式/页面级(无 quote 且无段号锚):字符级改根内联样式(继承给各段);columns/margin/orient 落页面态;记 prior/next 供四态切换与还原
-      if (!quote && fmt && opts.blockIdx == null && !opts.removeBlock) {
+      if (!quote && fmt && opts.blockIdx == null && !opts.removeBlock && !opts.img) {
         if (undoMap.current.has(editId) || docChgsRef.current.some((c) => c.cid === editId)) return true; // 幂等(root 改动没有 data-cid 可查)
         const s = root.style;
         const snap = (): Record<string, string> => ({
@@ -599,6 +599,22 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       // 拒绝落进未定修订内部:嵌套标记会毁掉 flatten/revert 的对称性(服务端锚点校验负责修复此类 quote)
       const inRev = (nd: Node): boolean => { let e: Node | null = nd; while (e && e !== root) { if (e instanceof HTMLElement && (e.classList.contains('rd-chg') || e.tagName === 'DEL' || e.tagName === 'INS')) return true; e = e.parentNode; } return false; };
       if (inRev(range.startContainer) || inRev(range.endContainer)) return false;
+      // 图片操作:对锚定段内的图片删除/调宽 —— 整段快照进 undoMap,拒绝可整段还原(图片复现)
+      if (opts.img) {
+        let blk: Node | null = range.startContainer;
+        while (blk && blk !== root) { if (blk instanceof HTMLElement && BLOCK_TAGS.test(blk.tagName)) break; blk = blk.parentNode; }
+        if (!(blk instanceof HTMLElement) || blk === root) return false;
+        const im = blk.querySelector('img');
+        if (!im) return false;
+        const prior = blk.cloneNode(true) as Element;
+        if (opts.img.action === 'remove') im.remove();
+        else if (opts.img.width) { im.style.width = opts.img.width + 'px'; im.style.height = 'auto'; im.removeAttribute('width'); im.removeAttribute('height'); }
+        blk.setAttribute('data-edit-block', editId); blk.setAttribute('data-cid', editId); blk.setAttribute('data-kind', 'format'); blk.setAttribute('data-glyph', opts.img.action === 'remove' ? '✕图' : '图±');
+        undoMap.current.set(editId, { mode: 'block', prior, el: blk });
+        refreshHasDiff();
+        persist();
+        return true;
+      }
       // 删段(结构操作):整段打 remove 修订标记 —— mark 视图红删除线、clean/final 视图整段隐藏;接受才物理移除
       if (opts.removeBlock) {
         let blk: Node | null = range.startContainer;

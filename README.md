@@ -2,7 +2,7 @@
   <img src="./assets/logo.png" alt="OtterPatch" width="440" />
 </p>
 
-<p align="center"><b>English</b> · <a href="./README.zh.md">中文</a> · <a href="./README.ja.md">日本語</a> · <a href="./README.fr.md">Français</a> · <a href="./README.ko.md">한국어</a></p>
+<p align="center"><b>English</b> · <a href="./README.zh.md">中文</a></p>
 
 > 🦦 **O**ffice **T**ransforms · **T**racked · **E**dited & **R**eviewed · surgical **Patch** write-back — an Agent-driven, reviewable **safe-commit layer** for documents.
 > Circle a region → say what you want → review the diff → high-fidelity write-back.
@@ -22,7 +22,7 @@ whereas a model round-trip rewrote 11/31. See `packages/writeback-surgical`.
 
 ## Docs
 
-Documentation lives in [`docs/`](./docs/README.md) (English · 中文 · 日本語 · Français · 한국어):
+Documentation lives in [`docs/`](./docs/README.md) (English · 中文):
 [architecture](./docs/en/architecture.md) · [agent loop](./docs/en/agent.md) ·
 [skills & playbooks](./docs/en/skills.md) · [review UX](./docs/en/review-ux.md) ·
 [testing](./docs/en/testing.md) · [bench log](./docs/en/bench.md)

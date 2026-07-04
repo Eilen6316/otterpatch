@@ -7,7 +7,7 @@ import {
   IconDoc, IconPlus,
   FUNC_ICONS,
 } from './icons.js';
-import { LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
+import { asLang, LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
 import type { RichDocHandle, DocFmt, WordSel } from './RichDoc.js';
@@ -49,13 +49,14 @@ export type Turn =
 export type DiffTurn = Extract<Turn, { kind: 'diff' }>;
 
 /** drawio 改动落到画板的句柄:editId→画板对象 id 映射 + 可重放的节点/连线(供逐条接受/拒绝)。 */
-interface BoardPatch { byEdit: Record<string, string>; objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> }
+/** muts:改/删/移动【现有对象】的前后快照——拒绝/撤销按 prior 还原(此前直接 removeObjects 会把用户自己的节点删掉),重新接受按 next 重放。 */
+interface BoardPatch { byEdit: Record<string, string>; objs: Array<{ editId: string; node?: BNode; edge?: BEdge }>; muts?: Record<string, { prior: { node?: BNode; edge?: BEdge }; next: { node?: BNode; edge?: BEdge } | null }> }
 
 /** Word 一条改动:文本改写(replacement)/格式(style)/删段(remove)。domId 为跨回合唯一的 DOM 标记(避免 editId 撞名误还原);blockIdx 为段号锚(quote 定位失败/空段落的兜底通道)。 */
-export interface WordEdit { editId: string; domId: string; quote: string; replacement?: string; style?: DocFmt; blockIdx?: number; remove?: boolean }
+export interface WordEdit { editId: string; domId: string; quote: string; replacement?: string; style?: DocFmt; blockIdx?: number; remove?: boolean; img?: { action: 'remove' | 'resize'; width?: number } }
 /** WordEdit → applyEdit 的 opts(三处调用点共用,保证初次落地/重新接受/全部接受走同一语义)。 */
-const wordEditOpts = (w: WordEdit): { replacement?: string; fmt?: DocFmt; blockIdx?: number; removeBlock?: boolean } =>
-  w.remove ? { removeBlock: true, blockIdx: w.blockIdx } : w.style ? { fmt: w.style, blockIdx: w.blockIdx } : { replacement: w.replacement ?? '', blockIdx: w.blockIdx };
+const wordEditOpts = (w: WordEdit): { replacement?: string; fmt?: DocFmt; blockIdx?: number; removeBlock?: boolean; img?: { action: 'remove' | 'resize'; width?: number } } =>
+  w.img ? { img: w.img, blockIdx: w.blockIdx } : w.remove ? { removeBlock: true, blockIdx: w.blockIdx } : w.style ? { fmt: w.style, blockIdx: w.blockIdx } : { replacement: w.replacement ?? '', blockIdx: w.blockIdx };
 
 /**
  * 把对话流投影成模型历史(Pi 的 projection 模式:thread 是单一数据源)。
@@ -476,7 +477,7 @@ function Section({ label, children, defaultOpen = true }: { label: string; child
 }
 
 export function App() {
-  const [lang, setLang] = useState<Lang>(() => lsGet('oa.lang', 'zh') as Lang);
+  const [lang, setLang] = useState<Lang>(() => asLang(lsGet('oa.lang', 'zh')));
   const t = makeT(lang);
   const [sent, setSent] = useState(false);
   const [fmt, setFmt] = useState<Fmt>(() => (lsGet('oa.fmt', 'excel') as Fmt));
@@ -492,6 +493,7 @@ export function App() {
   const [server, setServer] = useState(() => lsGet('oa.server', 'http://localhost:4319'));
   const [uniSel, setUniSel] = useState<UniSel | null>(null);
   const [excelDiff, setExcelDiff] = useState<'orig' | 'mark' | 'final'>('final'); // Excel 改动视图:原文/对照(改动格着色)/改后
+  const [boardDiff, setBoardDiff] = useState<'orig' | 'final'>('final'); // drawio 改动视图:原文(隐提案)/改后
   const [wordSel, setWordSel] = useState<WordSel | null>(null);
   const [hoverCid, setHoverCid] = useState<string | null>(null); // 文档里/rail 悬停联动的改动 domId
   const [boardSel, setBoardSel] = useState<BoardSel | null>(null);
@@ -771,19 +773,20 @@ export function App() {
                 setReviewIdx(0);
                 if (fmt === 'drawio') {
                   // drawio:先把【改/删/移动现有节点】落到画板;新增节点则复用流式已画的、或一次性补画
-                  const mutBy = applyDrawioMutations(cs);
-                  let board: { byEdit: Record<string, string>; objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> };
+                  setBoardDiff('final'); // 新提案到达,视图回到"改后"基准
+                  const mut = applyDrawioMutations(cs);
+                  let board: BoardPatch;
                   if (streamObjsRef.current.length) {
-                    board = { byEdit: { ...streamByEditRef.current, ...mutBy }, objs: streamObjsRef.current };
+                    board = { byEdit: { ...streamByEditRef.current, ...mut.byEdit }, objs: streamObjsRef.current, muts: mut.muts };
                   } else {
                     const b = drawioCsToBoard(cs);
-                    board = { byEdit: { ...b.byEdit, ...mutBy }, objs: b.objs };
+                    board = { byEdit: { ...b.byEdit, ...mut.byEdit }, objs: b.objs, muts: mut.muts };
                     if (b.nodes.length || b.edges.length) void playBoard(b.nodes, b.edges); // 兜底:逐个补图
                   }
-                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], board: { byEdit: board.byEdit, objs: board.objs }, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], board, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                 } else if (fmt === 'word') {
                   // Word:从 changeSet 取每条 edit —— 文本改写(replaceText)或格式(setStyle),按 diff 顺序建审阅项
-                  const wcs = cs as { edits?: Array<{ id: string; target: string; op?: { kind?: string; text?: string; style?: DocFmt } }>; anchors?: Record<string, { portable?: { quote?: { text?: string }; path?: number[] } }> } | null;
+                  const wcs = cs as { edits?: Array<{ id: string; target: string; op?: { kind?: string; text?: string; style?: DocFmt; props?: { imgAction?: 'remove' | 'resize'; width?: number } } }>; anchors?: Record<string, { portable?: { quote?: { text?: string }; path?: number[] } }> } | null;
                   const byId = new Map((wcs?.edits ?? []).map((e) => [e.id, { quote: wcs?.anchors?.[e.target]?.portable?.quote?.text ?? '', blockIdx: wcs?.anchors?.[e.target]?.portable?.path?.[0], op: e.op }]));
                   const wordEdits: WordEdit[] = diff.items.map((it) => {
                     const rec = byId.get(it.editId);
@@ -791,6 +794,7 @@ export function App() {
                     const blockIdx = rec?.blockIdx; // 显式段号锚(dialect 仅在模型给了 para 时携带)
                     const domId = `${diff.changeSetId}::${it.editId}`; // 跨回合唯一,避免 e0/e1 撞名误还原
                     if (rec?.op?.kind === 'deleteRange') return { editId: it.editId, domId, quote, remove: true, ...(blockIdx != null ? { blockIdx } : {}) };
+                    if (rec?.op?.kind === 'setObjectProps' && rec.op.props?.imgAction) return { editId: it.editId, domId, quote, img: { action: rec.op.props.imgAction, ...(rec.op.props.width != null ? { width: rec.op.props.width } : {}) }, ...(blockIdx != null ? { blockIdx } : {}) };
                     if (rec?.op?.kind === 'setStyle') return { editId: it.editId, domId, quote, style: rec.op.style ?? {}, ...(blockIdx != null ? { blockIdx } : {}) };
                     return { editId: it.editId, domId, quote, replacement: rec?.op?.text ?? (it.after ?? ''), ...(blockIdx != null ? { blockIdx } : {}) };
                   });
@@ -871,7 +875,11 @@ export function App() {
     const turn = thread[idx];
     if (!turn || turn.role !== 'assistant' || turn.kind !== 'diff') return;
     if (turn.board) {
-      boardRef.current?.removeObjects(Object.values(turn.board.byEdit)); // drawio:从画板移除该回合对象
+      // drawio:新增对象移除;改/删/移动现有对象按改前快照还原(直接 removeObjects 会把用户的节点一并删掉)
+      const muts = turn.board.muts ?? {};
+      const addIds = Object.entries(turn.board.byEdit).filter(([eid]) => !muts[eid]).map(([, id]) => id);
+      if (addIds.length) boardRef.current?.removeObjects(addIds);
+      for (const m of Object.values(muts)) boardRef.current?.restoreObject(m.prior);
     } else if (turn.word) {
       let missed = 0;
       for (const w of turn.word) if (accepted.has(akey(turn.diff.changeSetId, w.editId))) { if (!wordRef.current?.revert(w.domId)) missed++; } // 按 domId 精确还原每条(undoMap 缺失走 DOM 兜底)
@@ -1055,22 +1063,34 @@ export function App() {
     }
     return { nodes, edges, byEdit, objs };
   };
-  /** drawio:把【改/删/移动现有节点】op 落到画板(用上下文给 Agent 的真实节点 id 定位),返回 editId→节点id 供审阅高亮。 */
-  const applyDrawioMutations = (cs: unknown): Record<string, string> => {
+  /** drawio:把【改/删/移动现有节点】op 落到画板(用上下文给 Agent 的真实节点 id 定位)。
+   *  返回 byEdit(审阅高亮)+ muts(prior/next 快照:拒绝还原 prior、重接受重放 next,别删用户对象)。 */
+  const applyDrawioMutations = (cs: unknown): { byEdit: Record<string, string>; muts: NonNullable<BoardPatch['muts']> } => {
     const c = cs as { edits?: Array<{ id: string; target: string; op: { kind?: string; props?: { value?: unknown; style?: unknown }; box?: { left?: number; top?: number; width?: number; height?: number } } }>; anchors?: Record<string, { portable?: { elementId?: string } }> } | null;
     const byEdit: Record<string, string> = {};
-    if (!c?.edits) return byEdit;
+    const muts: NonNullable<BoardPatch['muts']> = {};
+    if (!c?.edits) return { byEdit, muts };
     for (const e of c.edits) {
       const k = e.op?.kind;
       if (k !== 'setObjectProps' && k !== 'deleteObject' && k !== 'moveObject') continue;
       const id = c.anchors?.[e.target]?.portable?.elementId;
       if (!id) continue;
       byEdit[e.id] = id;
-      if (k === 'setObjectProps') boardRef.current?.updateObject(id, { value: e.op.props?.value as string | undefined, style: e.op.props?.style as string | undefined });
-      else if (k === 'deleteObject') boardRef.current?.removeObjects([id]);
-      else if (k === 'moveObject') boardRef.current?.moveObject(id, { x: e.op.box?.left, y: e.op.box?.top, w: e.op.box?.width, h: e.op.box?.height });
+      const prior = boardRef.current?.getObject(id);
+      if (k === 'setObjectProps') {
+        const value = e.op.props?.value as string | undefined; const style = e.op.props?.style as string | undefined;
+        boardRef.current?.updateObject(id, { value, style });
+        if (prior?.node) muts[e.id] = { prior, next: { node: { ...prior.node, ...(value != null ? { label: String(value) } : {}), ...(style ? parseDrawioStyle(style) : {}) } } };
+      } else if (k === 'deleteObject') {
+        boardRef.current?.removeObjects([id]);
+        if (prior) muts[e.id] = { prior, next: null };
+      } else if (k === 'moveObject') {
+        const b = e.op.box ?? {};
+        boardRef.current?.moveObject(id, { x: b.left, y: b.top, w: b.width, h: b.height });
+        if (prior?.node) muts[e.id] = { prior, next: { node: { ...prior.node, ...(b.left != null ? { x: snap(b.left) } : {}), ...(b.top != null ? { y: snap(b.top) } : {}), ...(b.width != null ? { w: b.width } : {}), ...(b.height != null ? { h: b.height } : {}) } } };
+      }
     }
-    return byEdit;
+    return { byEdit, muts };
   };
   // ── 逐条审阅:把单条改动应用/还原到左侧工作区(Excel 网格 / drawio 画板)+ 高亮当前条 ──
   const applyGridOp = (op: GridOp): void => {
@@ -1090,6 +1110,28 @@ export function App() {
     if (op.color) api.setFontColor(op.a1, bs?.color ?? '#1f2937');
     if (op.bold) api.setBold(op.a1, bs?.bold ?? false);
     if (op.align) api.setAlign(op.a1, bs?.align ?? null); // 改前没显式对齐就清回默认(文本左/数字右)
+  };
+  /** drawio 改动视图:原文=隐掉本轮提案(新增移除、改动还原改前快照);改后=按当前处置呈现。 */
+  const applyBoardDiffView = (view: 'orig' | 'final'): void => {
+    let turn: Extract<Turn, { kind: 'diff' }> | undefined;
+    for (let i = thread.length - 1; i >= 0; i--) { const tt = thread[i]; if (tt && tt.role === 'assistant' && tt.kind === 'diff' && tt.board && tt.diff.items.length) { turn = tt; break; } }
+    const b = turn?.board;
+    if (!turn || !b) return;
+    const muts = b.muts ?? {};
+    for (const it of turn.diff.items) {
+      const on = view === 'final' && accepted.has(akey(turn.diff.changeSetId, it.editId));
+      const m = muts[it.editId];
+      const id = b.byEdit[it.editId];
+      if (m) {
+        if (on) { if (m.next) boardRef.current?.restoreObject(m.next); else if (id) boardRef.current?.removeObjects([id]); }
+        else boardRef.current?.restoreObject(m.prior);
+      } else {
+        const o = b.objs.find((x) => x.editId === it.editId);
+        if (on) { if (o) reapplyBoardObj(o); }
+        else if (id) boardRef.current?.removeObjects([id]);
+      }
+    }
+    setBoardDiff(view);
   };
   /** 一条 op 的"真实底色"(op 自己改了底色用 op 的,否则回改前采集值)——离开对照视图时恢复用。 */
   const realBg = (op: GridOp, on: boolean): string | null => (on ? op.bg ?? op.beforeState?.bg ?? null : op.beforeState?.bg ?? null);
@@ -1143,7 +1185,7 @@ export function App() {
     const k = akey(turn.diff.changeSetId, it.editId);
     if (!accepted.has(k)) { // 之前被拒 → 重新落回工作区(applyEdit 幂等,重复接受不叠标记)
       if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
-      else if (fmt === 'drawio') { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
+      else if (fmt === 'drawio') { const m = turn.board?.muts?.[it.editId]; if (m) { if (m.next) boardRef.current?.restoreObject(m.next); else { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); } } else { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); } }
       else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w)); }
       toggleAccept(k, true);
     }
@@ -1170,7 +1212,7 @@ export function App() {
     const it = turn.diff.items[idx]; if (!it) return;
     const k = akey(turn.diff.changeSetId, it.editId);
     if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) { revertGridOp(op); if (excelDiff === 'mark') univerRef.current?.setBackground(op.a1, realBg(op, false)); } }
-    else if (fmt === 'drawio') { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); }
+    else if (fmt === 'drawio') { const m = turn.board?.muts?.[it.editId]; if (m) boardRef.current?.restoreObject(m.prior); else { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); } } // 改/删/移动现有对象 → 按改前快照还原,不是删对象
     else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w && !wordRef.current?.revert(w.domId) && accepted.has(k)) notify(t('该改动已定稿,未找到可还原的位置')); } // undoMap 缺失时 revert 自带 DOM 兜底
     toggleAccept(k, false);
     telemetry('reject', itemKind(turn, it));
@@ -1444,7 +1486,29 @@ export function App() {
                   </Suspense>
                 </>
               ) : fmt === 'drawio' ? (
-                <DrawioBoard ref={boardRef} onBoardSel={setBoardSel} />
+                <>
+                  {(() => {
+                    const dt = lastDiffIdx >= 0 ? thread[lastDiffIdx] : undefined;
+                    const dturn = dt && dt.role === 'assistant' && dt.kind === 'diff' && dt.board && dt.diff.items.length > 0 ? dt : undefined;
+                    if (!dturn) return null;
+                    const total = !dturn.committed && !dturn.reverted ? dturn.diff.items.length : 0;
+                    return (
+                      <DiffToggle<'orig' | 'final'>
+                        label="Agent 改动"
+                        className="board-difftoggle"
+                        segs={[
+                          { v: 'orig', label: '原文', title: '隐藏本轮提案,回看改前画板' },
+                          { v: 'final', label: '改后', title: '按当前处置呈现提案' },
+                        ] as const}
+                        active={boardDiff}
+                        count={total > 0 ? { pos: Math.min(reviewIdx, total - 1), total } : null}
+                        onPick={applyBoardDiffView}
+                        onStep={total > 0 ? (dir) => setReviewIdx((total + Math.min(reviewIdx, total - 1) + dir) % total) : undefined}
+                      />
+                    );
+                  })()}
+                  <DrawioBoard ref={boardRef} onBoardSel={setBoardSel} />
+                </>
               ) : fmt === 'word' ? (
                 <Suspense fallback={<div className="univer-loading">{t('加载文档编辑器…')}</div>}>
                   <RichDoc ref={wordRef} onSelection={setWordSel} onChangeHover={setHoverCid} onChangeResolve={resolveByCid} />
@@ -1520,10 +1584,16 @@ export function App() {
                             hoverCid={hoverCid}
                             autoBatch={autoBatch}
                             wordRef={wordRef}
+                            lockedEdits={(() => { // 历史重审守卫:该条的格子被后续回合改过 → 锁行内 ✓/✕(先撤销后面的回合)
+                              if (!isExcel || i === lastDiffIdx) return undefined;
+                              const laterA1 = new Set<string>();
+                              for (let j = i + 1; j < thread.length; j++) { const t2 = thread[j]; if (t2 && t2.role === 'assistant' && t2.kind === 'diff') for (const op of t2.ops) laterA1.add(op.a1); }
+                              return new Set(turn.ops.filter((o) => o.editId && laterA1.has(o.a1)).map((o) => o.editId!));
+                            })()}
                             onSetReviewIdx={setReviewIdx}
                             onHoverCid={setHoverCid}
-                            onAccept={(k) => acceptItem(turn, k)}
-                            onReject={(k) => rejectItem(turn, k)}
+                            onAccept={(k) => acceptItem(turn, k, !active)}
+                            onReject={(k) => rejectItem(turn, k, !active)}
                             onAcceptAll={() => acceptAll(turn, i)}
                             onRevertTurn={() => revertTurn(i)}
                             onSend={(s) => { void send(s); }}

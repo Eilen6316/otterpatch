@@ -17,7 +17,12 @@
     "test": "npm test --workspaces --if-present",
     "test:ui": "node test/ui-smoke.mjs",
     "test:agent": "node test/excel-agent.mjs",
-    "smoke": "node scripts/real-smoke.mjs"
+    "smoke": "node scripts/real-smoke.mjs",
+    "eval:excel": "node test/eval-excel.mjs",
+    "eval:excel:sanity": "node test/eval-excel-sanity.mjs",
+    "eval:word": "node test/eval-word.mjs",
+    "eval:word:struct": "node test/eval-word-struct.mjs",
+    "shot:review": "node test/review-shot.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",

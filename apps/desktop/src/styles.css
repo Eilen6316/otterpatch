@@ -451,7 +451,9 @@ svg { display: block; }
 .rd-view-outline .rd-page p { margin-left: 72px; color: var(--muted); }
 .univer-host { width: 100%; height: 100%; min-height: 0; isolation: isolate; }
 .univer-loading { display: grid; place-items: center; color: var(--muted); font-size: 13px; }
-.canvas.board { padding: 0; }
+.canvas.board { padding: 0; position: relative; }
+/* drawio 的改动视图切换条:与 Word 同位(顶部居中),压过画板 */
+.rd-difftoggle.board-difftoggle { z-index: 60; }
 .canvas.doc { padding: 26px; background-color: #eef0f2; background-image: none; place-items: start center; }
 .sheet.full { width: 100%; box-shadow: none; border: 0; border-radius: 0; }
 .sheet.full th, .sheet.full td { padding: 5px 12px; }
@@ -781,6 +783,7 @@ svg { display: block; }
 .gd-btn.ok:hover { border-color: var(--add); color: var(--add); background: var(--add-bg); }
 .gd-btn.no:hover { border-color: var(--del); color: var(--del); background: var(--del-bg); }
 .gd-state { font-size: 10px; font-weight: 700; width: 16px; text-align: center; }
+.gd-lock { font-size: 10px; opacity: .6; cursor: help; }
 .gd-state.ok { color: var(--add); }
 .gd-state.no { color: var(--del); }
 .gd-line { display: flex; gap: 6px; padding: 3px 11px; font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }

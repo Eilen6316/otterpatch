@@ -19,6 +19,8 @@ export interface ReviewBoxProps {
   accepted: Set<string>;
   hoverCid: string | null;
   autoBatch: boolean;
+  /** 历史重审守卫:这些 editId 的目标格已被后续回合改过,行内 ✓/✕ 锁住(避免旧回合处置踩坏新改动)。 */
+  lockedEdits?: Set<string>;
   wordRef: RefObject<RichDocHandle | null>;
   onSetReviewIdx(i: number): void;
   onHoverCid(cid: string | null): void;
@@ -30,7 +32,7 @@ export interface ReviewBoxProps {
   onSetAutoBatch(v: boolean): void;
 }
 
-export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBatch, wordRef, onSetReviewIdx, onHoverCid, onAccept, onReject, onAcceptAll, onRevertTurn, onSend, onSetAutoBatch }: ReviewBoxProps): ReactNode {
+export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBatch, lockedEdits, wordRef, onSetReviewIdx, onHoverCid, onAccept, onReject, onAcceptAll, onRevertTurn, onSend, onSetAutoBatch }: ReviewBoxProps): ReactNode {
   const t = useT();
   const d = turn.diff;
   const total = d.items.length;
@@ -46,12 +48,6 @@ export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBat
         {total > 0 && active && <span className="rv-count">{Math.min(ridx + (cur ? 1 : 0), total)}<i>/</i>{total}</span>}
       </div>
       {total > 0 ? (
-        turn.board ? (
-          <details className="rv-code">
-            <summary>{t('查看绘制代码')} · {total} {t('个对象')}</summary>
-            <pre>{d.items.map((it) => `${it.ref}${it.after ? '  ' + it.after : ''}  · ${it.label}`).join('\n')}</pre>
-          </details>
-        ) : (
           <div className="rv-gitdiff">
             <div className="gd-head">{t('改动 diff')} · {total} {t('处')}</div>
             {d.items.map((it, k) => {
@@ -64,18 +60,24 @@ export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBat
               const fmtDesc = it.after || (w?.style ? Object.keys(w.style).join('/') : '') || t('改格式');
               const curHunk = active && k === ridx;
               const acc = accepted.has(akey(d.changeSetId, it.editId));
-              const seen = active && k < ridx; // 游标已过 = 已处置,行尾亮出处置结果
+              const seen = active ? k < ridx : true; // active:游标已过=已处置;历史回合:直接亮处置结果
+              const canAct = !turn.committed && !turn.reverted; // 历史回合(未提交/未撤销)也可重审
+              const lockedRow = lockedEdits?.has(it.editId) ?? false;
               return (
                 <div key={it.editId} data-cid={w?.domId} className={'gd-hunk' + (curHunk ? ' cur' : '') + (w && hoverCid && hoverCid === w.domId ? ' is-linked' : '') + (acc ? '' : ' gd-rej')}
                   onMouseEnter={() => { if (w) { onHoverCid(w.domId); wordRef.current?.linkChange(w.domId); } }}
                   onMouseLeave={() => { onHoverCid(null); wordRef.current?.linkChange(null); }}
                   onClick={() => { if (active) onSetReviewIdx(k); if (w) wordRef.current?.activateChange(w.domId); }} title={it.label}>
                   <div className="gd-ref"><span className="gd-at">@@</span> {refShort} <span className="gd-lbl">{it.label}</span>
-                    {active ? (
+                    {canAct ? (
                       <span className="gd-acts" onClick={(e) => e.stopPropagation()}>
                         {seen ? <span className={'gd-state ' + (acc ? 'ok' : 'no')}>{acc ? '✓' : '✕'}</span> : null}
-                        <button className="gd-btn no" title={t('拒绝')} aria-label={t('拒绝')} onClick={() => onReject(k)}><IconX size={11} /></button>
-                        <button className="gd-btn ok" title={t('接受')} aria-label={t('接受')} onClick={() => onAccept(k)}><IconCheck size={11} /></button>
+                        {lockedRow ? (
+                          <span className="gd-lock" title={t('后续回合已改过此处,先撤销后面的回合再重审')}>🔒</span>
+                        ) : (<>
+                          <button className="gd-btn no" title={t('拒绝')} aria-label={t('拒绝')} onClick={() => onReject(k)}><IconX size={11} /></button>
+                          <button className="gd-btn ok" title={t('接受')} aria-label={t('接受')} onClick={() => onAccept(k)}><IconCheck size={11} /></button>
+                        </>)}
                       </span>
                     ) : null}
                   </div>
@@ -89,7 +91,6 @@ export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBat
               );
             })}
           </div>
-        )
       ) : null}
       {total > 0 && active && <div className="rv-prog"><div className="rv-prog-fill" style={{ width: `${(ridx / total) * 100}%` }} /></div>}
 

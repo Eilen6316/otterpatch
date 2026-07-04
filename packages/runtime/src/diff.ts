@@ -110,8 +110,12 @@ function describe(op: EditOp): { badge: DiffBadge; label: string; after?: string
       return { badge: 'modify', label: `paragraph style ${op.styleName}` };
     case 'moveObject':
       return { badge: 'move', label: 'move object' };
-    case 'setObjectProps':
+    case 'setObjectProps': {
+      const ia = (op.props as { imgAction?: string; width?: number }).imgAction;
+      if (ia === 'remove') return { badge: 'remove', label: '删除图片' };
+      if (ia === 'resize') return { badge: 'modify', label: `图片宽度 ${(op.props as { width?: number }).width ?? '?'}px` };
       return { badge: 'modify', label: 'set props', after: JSON.stringify(op.props) };
+    }
     case 'addObject': {
       const p = (op.payload ?? {}) as { value?: string; edge?: boolean; source?: string; target?: string };
       if (p.edge || (p.source && p.target)) return { badge: 'add', label: `连线 ${p.source ?? '?'} → ${p.target ?? '?'}` };

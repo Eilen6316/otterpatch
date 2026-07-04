@@ -12,7 +12,8 @@ export const WORD_SYSTEM =
   '(二)改格式:【不要】给 replacement,改给格式字段。字符级:bold/italic/underline(true 设为/ false 取消)、font(字体名如 宋体/黑体/Arial)、size(字号磅:五号≈10.5、小四≈12、四号≈14、三号≈16)、color(如 #c00000);' +
   '段落级(作用于 quote 所在整段):align(left/center/right/justify 对齐)、lineSpacing(行距倍数 1/1.5/2)、bgColor(段落底纹色)、block(段落样式:h1/h2/h3=标题1/2/3、p=正文、blockquote=引用);' +
   '页面级(须 all=true,作用于整篇版面):columns(分栏:2=双栏,IEEE/论文版式的关键)、margin(页边距 narrow/normal/moderate/wide)、orient(纸张方向 portrait/landscape)——"改成双栏""IEEE 版式""页边距调窄""横向纸张"这类版式要求【可以直接做】,别说工具不支持。' +
-  '(三)结构级:deletePara=true 删除锚定的【整段】——清理空段落、删除冗余/重复段落用它(别用 replacement 空串,那只清文字不删段)。\n' +
+  '(三)结构级:deletePara=true 删除锚定的【整段】——清理空段落、删除冗余/重复段落用它(别用 replacement 空串,那只清文字不删段)。' +
+  '(四)图片:上下文里标注 [图片 alt 宽×高] 的段落,可对段内图片操作——img="remove" 删除该图(段内文字保留)、img="resize"+imgWidth=像素宽 调整大小(高度等比);锚定该段(para 段号或该段 quote)。"这张图删掉/图太大了缩小点"直接做,别再说不支持。\n' +
   '【锚定方式,两条通道】① quote:文档中真实存在且唯一的原文片段(首选);② para:段号(1-based,即上下文/read_blocks 里的"第N段")——【空段落】(上下文显示"(空段)")、重复短语无法唯一引用、或整段操作(deletePara/段落级格式)时用 para 锚定,此时 quote 给空串。两者都给时先按 quote 定位、失败落到 para。段号以【当前快照】为准,同一批 edits 内段号不会漂移。\n' +
   '作用范围:给 quote 则只对这段文字/该段;全文统一(如"全文宋体五号""所有字改成宋体""统一 1.5 倍行距")给 all=true(可省 quote)——统一字体字号/对齐行距这类规范化最适合 all=true 一次落定。\n' +
   // 段6 关键规则(原 ①②③ 原样保留,增补 ④⑤)

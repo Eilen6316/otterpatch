@@ -1,6 +1,6 @@
 # OtterPatch
 
-[English](./README.md) · **中文** · [日本語](./README.ja.md) · [Français](./README.fr.md) · [한국어](./README.ko.md)
+[English](./README.md) · **中文**
 
 > 🦦 **O**ffice **T**ransforms · **T**racked · **E**dited & **R**eviewed · surgical **Patch** —— 由 Agent 驱动、可审阅的文档**安全提交层**。
 > 圈选区域 → 说出诉求 → 审阅差异 → 高保真写回。
