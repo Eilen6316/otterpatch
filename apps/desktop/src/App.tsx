@@ -1098,7 +1098,7 @@ export function App() {
         }
         stackY = Math.max(stackY, y) + h + 40;
         const st = parseDrawioStyle(p.style);
-        const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(p.style), label: cleanLabel(p.value), kind: st.text ? 'text' : 'agent', ...st };
+        const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(p.style), label: cleanLabel(p.value), kind: st.text ? 'text' : 'agent', ...(p.style ? { style: p.style } : {}), ...st };
         nodes.push(node); byEdit[e.id] = id; objs.push({ editId: e.id, node });
         if (p.id) byOrig.set(p.id, node);
       }
@@ -1304,6 +1304,22 @@ export function App() {
           return;
         } catch (e) {
           notify(t('已载入(渲染失败,仍可写回)') + ':' + (e instanceof Error ? e.message : String(e)));
+          return;
+        }
+      }
+      if (fmt === 'drawio' && /\.(drawio|xml)$/i.test(f.name)) {
+        // 标准 .drawio 导入:mxGraphModel → 画板(压撤销栈,Ctrl+Z 可回导入前);Agent 拿到完整拓扑即可改
+        try {
+          const xml = decodeURIComponent(escape(atob(b64))); // base64 → UTF-8 文本
+          void import('./drawio-io.js').then(({ parseDrawio }) => {
+            const g = parseDrawio(xml);
+            if (!g.nodes.length && !g.edges.length) { notify(t('未解析出图形(不是有效的 .drawio?)')); return; }
+            boardRef.current?.loadBoard(g.nodes, g.edges);
+            notify(t('已载入并渲染') + ' · ' + f.name + ` (${g.nodes.length} ${t('节点')} · ${g.edges.length} ${t('连线')})`);
+          });
+          return;
+        } catch (e) {
+          notify(t('已载入(渲染失败)') + ':' + (e instanceof Error ? e.message : String(e)));
           return;
         }
       }

@@ -95,7 +95,7 @@ export function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
 }
 
 interface XY { x: number; y: number }
-export interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string; kind?: string; rot?: number; fill?: string; stroke?: string; fontColor?: string; fontSize?: number; bold?: boolean; text?: boolean; vTop?: boolean; wrap?: boolean }
+export interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string; kind?: string; rot?: number; fill?: string; stroke?: string; fontColor?: string; fontSize?: number; bold?: boolean; text?: boolean; vTop?: boolean; wrap?: boolean; style?: string }
 type ArrowKind = 'classic' | 'open' | 'diamond' | 'circle' | 'none';
 type EdgeStyle = 'ortho' | 'straight';
 export interface BEdge { id: string; from: string; to: string; arrow?: ArrowKind; style?: EdgeStyle; points?: XY[]; color?: string; width?: number; dash?: boolean; label?: string }
@@ -244,6 +244,10 @@ export interface BoardHandle {
   highlight(id: string): void;
   /** 读某对象当前状态(改前快照用)——mutation 类改动"拒绝/撤销"要按它还原,不能删对象。 */
   getObject(id: string): { node?: BNode; edge?: BEdge } | null;
+  /** 整板替换(导入 .drawio):压撤销栈,可 Ctrl+Z 回到导入前。 */
+  loadBoard(nodes: BNode[], edges: BEdge[]): void;
+  /** 整板读取(导出 .drawio)。 */
+  getBoard(): { nodes: BNode[]; edges: BEdge[] };
   /** 按快照恢复/重放对象(存在则整体替换,被删则补回)。 */
   restoreObject(obj: { node?: BNode; edge?: BEdge }): void;
 }
@@ -340,7 +344,7 @@ export function makeRawBoardConv(seq: number, taken?: (id: string) => boolean): 
     if (op.parent && op.parent !== '1') { const par = made.get(op.parent); if (par) { x += par.x; y += par.y; } }
     stackY = Math.max(stackY, y) + h + 40;
     const st = parseDrawioStyle(op.style);
-    const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(op.style), label: cleanLabel(op.value), kind: st.text ? 'text' : 'agent', ...st };
+    const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(op.style), label: cleanLabel(op.value), kind: st.text ? 'text' : 'agent', ...(op.style ? { style: op.style } : {}), ...st };
     if (op.cellId) made.set(op.cellId, node);
     return { editId: 'e' + index, boardId: id, node };
   };
@@ -441,6 +445,8 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
       setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...(box.x != null ? { x: snap(box.x) } : {}), ...(box.y != null ? { y: snap(box.y) } : {}), ...(box.w != null ? { w: box.w } : {}), ...(box.h != null ? { h: box.h } : {}) } : n)));
     },
     highlight: (id) => { setHi(id); setSelIds(new Set([id])); setSelEdge(null); },
+    loadBoard: (nn, ee) => { commit(); setNodes(nn); setEdges(ee); setSelIds(new Set()); setSelEdge(null); },
+    getBoard: () => ({ nodes: nodesRef.current.map((n) => ({ ...n })), edges: edgesRef.current.map((e) => ({ ...e })) }),
     getObject: (id) => {
       const n = nodesRef.current.find((x) => x.id === id);
       if (n) return { node: { ...n } };
@@ -1133,6 +1139,18 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
           })()
         : null}
       {nodes.length === 0 && <div className="board-hint">{t('从左侧拖拽形状到画板,或双击空白处新建;拖节点边缘圆点连线;框选多选;Ctrl+滚轮缩放')}</div>}
+      {nodes.length > 0 && (
+        <button className="board-export" title={t('导出为标准 .drawio 文件(drawio 可直接打开)')} onClick={() => {
+          void import('./drawio-io.js').then(({ serializeDrawio }) => {
+            const xml = serializeDrawio(nodesRef.current, edgesRef.current);
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([xml], { type: 'application/xml' }));
+            a.download = '流程图.otterpatch.drawio';
+            a.click();
+            URL.revokeObjectURL(a.href);
+          });
+        }}>{t('导出 .drawio')}</button>
+      )}
       <div className="board-zoom">{Math.round(zoom * 100)}%</div>
     </div>
   );
