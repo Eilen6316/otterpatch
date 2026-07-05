@@ -133,7 +133,7 @@ export interface UniSel {
   rows: number;
   cols: number;
   text: string; // 喂给模型 prompt 的全局概览 + 选区焦点(廉价)
-  sheet?: { a1: string; values: unknown[][] }; // 整表全量(本地传给 serve,供 read_range/aggregate 按需取数)
+  sheet?: { a1: string; values: unknown[][]; name?: string; names?: string[] }; // 整表全量(本地传给 serve,供 read_range/aggregate 按需取数)
 }
 
 const HEADERS = ['日期', '产品', '销量', '单价', '金额', '毛利率'];
@@ -287,7 +287,7 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
       const m = /^([^!]+)!/.exec(a1);
       if (!m) return sheet();
       const wb = apiRef.current?.getActiveWorkbook?.() as { getSheetByName?: (n: string) => FSheetOps | null } | undefined;
-      return wb?.getSheetByName?.(m[1]!) ?? sheet();
+      return wb?.getSheetByName?.(m[1]!) ?? null; // 找不到指定表 → 不落回当前表(否则 Sheet2!B3 会静默误写当前表)
     };
     const bare = (a1: string): string => a1.replace(/^.*!/, '');
     const rangeOf = (a1: string): FRangeOps | undefined => sheetOf(a1)?.getRange(bare(a1)) ?? undefined;
@@ -410,6 +410,10 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
           const wb = apiRef.current?.getActiveWorkbook?.() as { getSheets?: () => Array<{ getSheetName?: () => string; getRange?: (a1: string) => { getValues?: () => unknown[][] } }>; getActiveSheet?: () => { getSheetName?: () => string } } | undefined;
           const shs = wb?.getSheets?.() ?? [];
           const cur = wb?.getActiveSheet?.()?.getSheetName?.() ?? '';
+          const allNames = shs.map((x) => x.getSheetName?.() ?? '?');
+          if (s?.sheet) { s.sheet.name = cur; s.sheet.names = allNames; } // 取数工具据此识破"读不存在的表"
+          if (s && shs.length === 1) s.text = `工作簿仅 1 张表: ${cur}(当前),不存在其它表——别假设 Sheet2 等存在;要写到新表需先让用户手动建表。
+` + s.text;
           if (s && shs.length > 1) {
             // 跨表感知:每张非当前表给内容概览(表头 + 前 2 行样本),Agent 才能有依据地跨表读写
             const briefs = shs.map((x) => {

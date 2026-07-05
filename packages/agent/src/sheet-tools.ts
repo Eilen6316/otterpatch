@@ -138,7 +138,7 @@ export function parseClarify(input: unknown): ClarifyQuestion[] {
 
 // ─────────────── Data-fetch execution (read_range / aggregate) ───────────────
 
-export type SheetData = { a1: string; values: unknown[][] };
+export type SheetData = { a1: string; values: unknown[][]; name?: string; names?: string[] };
 
 function colLetter(n: number): string {
   let s = '';

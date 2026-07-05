@@ -100,7 +100,27 @@ export function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
 interface XY { x: number; y: number }
 export interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string; kind?: string; rot?: number; fill?: string; stroke?: string; fontColor?: string; fontSize?: number; bold?: boolean; text?: boolean; vTop?: boolean; wrap?: boolean; style?: string; shape?: string }
 type ArrowKind = 'classic' | 'open' | 'diamond' | 'circle' | 'none';
-type EdgeStyle = 'ortho' | 'straight';
+type EdgeStyle = 'ortho' | 'straight' | 'curve';
+/** 曲线线型:Catmull-Rom 过点样条(drawio curved=1 语义);无航点时给一个轻微弓弧让曲线可辨。 */
+function smoothPath(pts: XY[]): string {
+  if (pts.length < 2) return '';
+  if (pts.length === 2) {
+    const [a, b] = [pts[0]!, pts[1]!];
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const k = Math.min(24, L * 0.15); // 轻弓,长度钳制
+    const nx = -(b.y - a.y) / L, ny = (b.x - a.x) / L;
+    return `M ${a.x} ${a.y} Q ${mx + nx * k} ${my + ny * k} ${b.x} ${b.y}`;
+  }
+  let d = `M ${pts[0]!.x} ${pts[0]!.y}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)]!, p1 = pts[i]!, p2 = pts[i + 1]!, p3 = pts[Math.min(pts.length - 1, i + 2)]!;
+    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${c1x} ${c1y} ${c2x} ${c2y} ${p2.x} ${p2.y}`;
+  }
+  return d;
+}
 export interface BEdge { id: string; from: string; to: string; arrow?: ArrowKind; style?: EdgeStyle; points?: XY[]; color?: string; width?: number; dash?: boolean; label?: string }
 /** 两节点周界直连(直线线型)。 */
 function straightRoute(a: BNode, b: BNode): XY[] {
@@ -207,7 +227,7 @@ function ortho(a: BNode, b: BNode): XY[] {
     // 竖直方向有重叠 → 两端取重叠区中点做共同 y,得到一条干净的水平直线
     const oy0 = Math.max(a.y, b.y);
     const oy1 = Math.min(a.y + a.h, b.y + b.h);
-    const yy = oy1 > oy0 + 2 ? (oy0 + oy1) / 2 : null;
+    const yy = oy1 > oy0 + 2 ? (oy0 + oy1) / 2 : Math.abs(acy - bcy) <= 8 ? (acy + bcy) / 2 : null; // 近对齐(≤8px)吸成一条直线,别走小台阶
     const p1 = { x: right ? a.x + a.w : a.x, y: yy ?? acy };
     const p2 = { x: right ? b.x : b.x + b.w, y: yy ?? bcy };
     if (Math.abs(p1.y - p2.y) < 0.5) return [{ x: p1.x, y: p1.y }, { x: p2.x, y: p1.y }];
@@ -217,7 +237,7 @@ function ortho(a: BNode, b: BNode): XY[] {
   const down = dy >= 0;
   const ox0 = Math.max(a.x, b.x);
   const ox1 = Math.min(a.x + a.w, b.x + b.w);
-  const xx = ox1 > ox0 + 2 ? (ox0 + ox1) / 2 : null;
+  const xx = ox1 > ox0 + 2 ? (ox0 + ox1) / 2 : Math.abs(acx - bcx) <= 8 ? (acx + bcx) / 2 : null;
   const p1 = { x: xx ?? acx, y: down ? a.y + a.h : a.y };
   const p2 = { x: xx ?? bcx, y: down ? b.y : b.y + b.h };
   if (Math.abs(p1.x - p2.x) < 0.5) return [{ x: p1.x, y: p1.y }, { x: p1.x, y: p2.y }];
@@ -918,12 +938,38 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
           <marker id="m-diamond" markerWidth="13" markerHeight="11" refX="9.5" refY="4" orient="auto"><path d="M0,4 L4.7,0.5 L9.4,4 L4.7,7.5 z" fill="context-stroke" /></marker>
           <marker id="m-circle" markerWidth="11" markerHeight="11" refX="7.6" refY="4" orient="auto"><circle cx="4" cy="4" r="3" fill="context-stroke" /></marker>
         </defs>
-        {edges.map((ed) => {
+        {(() => {
+        // 先整体路由一遍:共用同一垂直/水平通道的 Z 形边分车道错开 10px(drawio 平行段间距语义)
+        const routed = new Map<string, XY[]>();
+        const lanes = new Map<number, string[]>();
+        for (const ed of edges) {
+          const a = nodes.find((n) => n.id === ed.from); const b = nodes.find((n) => n.id === ed.to);
+          if (!a || !b || ed.style === 'curve') continue;
+          const pts = avoidRoute(a, b, ed, nodes);
+          routed.set(ed.id, pts);
+          if (pts.length === 4) {
+            const vert = Math.abs(pts[1]!.x - pts[2]!.x) < 0.5;
+            const key = vert ? Math.round(pts[1]!.x / 20) : 100000 + Math.round(pts[1]!.y / 20);
+            lanes.set(key, [...(lanes.get(key) ?? []), ed.id]);
+          }
+        }
+        for (const ids of lanes.values()) {
+          if (ids.length < 2) continue;
+          ids.forEach((id, i) => {
+            const pts = routed.get(id)!;
+            const off = (i - (ids.length - 1) / 2) * 10;
+            if (Math.abs(pts[1]!.x - pts[2]!.x) < 0.5) { pts[1] = { x: pts[1]!.x + off, y: pts[1]!.y }; pts[2] = { x: pts[2]!.x + off, y: pts[2]!.y }; }
+            else { pts[1] = { x: pts[1]!.x, y: pts[1]!.y + off }; pts[2] = { x: pts[2]!.x, y: pts[2]!.y + off }; }
+          });
+        }
+        return edges.map((ed) => {
           const a = nodes.find((n) => n.id === ed.from);
           const b = nodes.find((n) => n.id === ed.to);
           if (!a || !b) return null;
-          const pts = avoidRoute(a, b, ed, nodes);
-          const d = ed.style === 'straight' && !ed.points?.length ? `M ${pts[0]!.x} ${pts[0]!.y} L ${pts[1]!.x} ${pts[1]!.y}` : roundedPath(pts);
+          const pts = routed.get(ed.id) ?? avoidRoute(a, b, ed, nodes); // 预路由(含分车道)优先
+          const d = ed.style === 'curve'
+            ? smoothPath([straightRoute(a, b)[0]!, ...(ed.points ?? []), straightRoute(a, b)[1]!])
+            : ed.style === 'straight' && !ed.points?.length ? `M ${pts[0]!.x} ${pts[0]!.y} L ${pts[1]!.x} ${pts[1]!.y}` : roundedPath(pts);
           const on = selEdge === ed.id;
           const arrow = ed.arrow ?? 'classic';
           return (
@@ -933,7 +979,8 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
               {ed.label ? (() => { const mi = Math.max(1, Math.floor(pts.length / 2)); const p1 = pts[mi - 1]!, p2 = pts[mi]!; return <text x={(p1.x + p2.x) / 2} y={(p1.y + p2.y) / 2 - 6} className="bedge-label">{ed.label}</text>; })() : null}
             </g>
           );
-        })}
+        });
+      })()}
         {/* 选中边的手柄(端点/航点/虚拟折点)移到节点之上的覆盖层 board-overlay,避免被节点 div 遮挡 */}
         {conn
           ? (() => {
@@ -1174,6 +1221,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
               <div className="etoolbar" style={{ left: mid.x * zoom + pan.x, top: mid.y * zoom + pan.y - 44 }} onPointerDown={(e) => e.stopPropagation()}>
                 <button className={'etb' + (ed.style !== 'straight' ? ' on' : '')} title={t('正交')} onClick={() => setEdge({ style: 'ortho' })}>⌐</button>
                 <button className={'etb' + (ed.style === 'straight' ? ' on' : '')} title={t('直线')} onClick={() => setEdge({ style: 'straight' })}>╱</button>
+                <button className={'etb' + (ed.style === 'curve' ? ' on' : '')} title={t('曲线')} onClick={() => setEdge({ style: 'curve' })}>⌒</button>
                 <span className="etb-sep" />
                 <span className="etb-sep" />
                 <button className={'etb' + (ed.dash ? ' on' : '')} title={t('虚线')} onClick={() => setEdge({ dash: !ed.dash })}>┄</button>

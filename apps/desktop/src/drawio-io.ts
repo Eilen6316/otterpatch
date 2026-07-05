@@ -77,7 +77,7 @@ export function parseDrawio(text: string): { nodes: BNode[]; edges: BEdge[] } {
       edges.push({
         id: c.id, from: c.source, to: c.target,
         arrow: /endArrow=none/.test(st) ? 'none' : /endArrow=open/.test(st) ? 'open' : /endArrow=diamond/.test(st) ? 'diamond' : /endArrow=oval/.test(st) ? 'circle' : 'classic',
-        style: /edgeStyle=/.test(st) ? 'ortho' : 'straight',
+        style: /curved=1/.test(st) ? 'curve' : /edgeStyle=/.test(st) ? 'ortho' : 'straight',
         ...(c.points.length ? { points: c.points } : {}),
         ...(/dashed=1/.test(st) ? { dash: true } : {}),
         ...(/strokeColor=([^;]+)/.exec(st)?.[1] ? { color: /strokeColor=([^;]+)/.exec(st)![1]! } : {}),
@@ -114,7 +114,7 @@ function pageModelXml(nodes: BNode[], edges: BEdge[]): string {
     cells.push(`<mxCell id="${esc(n.id)}" value="${esc(n.label)}" style="${esc(nodeStyle(n))}" vertex="1" parent="1"><mxGeometry x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" as="geometry"/></mxCell>`);
   }
   for (const e of edges) {
-    const st = [`edgeStyle=orthogonalEdgeStyle`, 'rounded=1', 'html=1', `endArrow=${ARROW_OUT[e.arrow ?? 'classic'] ?? 'classic'}`, ...(e.dash ? ['dashed=1'] : []), ...(e.color ? ['strokeColor=' + e.color] : []), ...(e.width ? ['strokeWidth=' + e.width] : [])].join(';') + ';';
+    const st = [e.style === 'curve' ? 'curved=1' : 'edgeStyle=orthogonalEdgeStyle', 'rounded=1', 'html=1', `endArrow=${ARROW_OUT[e.arrow ?? 'classic'] ?? 'classic'}`, ...(e.dash ? ['dashed=1'] : []), ...(e.color ? ['strokeColor=' + e.color] : []), ...(e.width ? ['strokeWidth=' + e.width] : [])].join(';') + ';';
     const pts = e.points?.length ? `<Array as="points">${e.points.map((p) => `<mxPoint x="${p.x}" y="${p.y}"/>`).join('')}</Array>` : '';
     cells.push(`<mxCell id="${esc(e.id)}" value="${esc(e.label ?? '')}" style="${esc(st)}" edge="1" parent="1" source="${esc(e.from)}" target="${esc(e.to)}"><mxGeometry relative="1" as="geometry">${pts}</mxGeometry></mxCell>`);
   }

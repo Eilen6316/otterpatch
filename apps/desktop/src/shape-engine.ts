@@ -232,6 +232,21 @@ const GEN: Record<string, (w: number, h: number) => string> = {
   /* ―― arrows(arrows2 语义:头深/杆宽绝对 px)―― */
   // 右箭头:mxgraph.arrows2.arrow,头深 40px 定值、杆占中间 40% 高
   arrowRight: (w, h) => { const dx = Math.min(40, w), dp = 0.3 * h; return poly([[0, dp], [w - dx, dp], [w - dx, 0], [w, h / 2], [w - dx, h], [w - dx, h - dp], [0, h - dp], [0, h / 2]]); },
+  // 斜向块箭头(↗,drawio mxArrow 语义:沿对角线绘制,头深/杆宽定值不随长度拉伸)
+  diagArrow: (w, h) => {
+    const L = Math.hypot(w, h) || 1; const ux = w / L, uy = -h / L; const vx = -uy, vy = ux; // u=对角单位向量(左下→右上),v=法向
+    const ah = Math.min(40, L * 0.45); const sw2 = Math.min(7, Math.min(w, h) * 0.2); const aw2 = Math.min(15, Math.min(w, h) * 0.42);
+    const sx = 0, sy = h, ex = w, ey = 0; const bx = ex - ux * ah, by = ey - uy * ah; // 箭头基点
+    return poly([[sx + vx * sw2, sy + vy * sw2], [bx + vx * sw2, by + vy * sw2], [bx + vx * aw2, by + vy * aw2], [ex, ey], [bx - vx * aw2, by - vy * aw2], [bx - vx * sw2, by - vy * sw2], [sx - vx * sw2, sy - vy * sw2]]);
+  },
+  // 斜向双头块箭头(↙↗)
+  diagArrowBoth: (w, h) => {
+    const L = Math.hypot(w, h) || 1; const ux = w / L, uy = -h / L; const vx = -uy, vy = ux;
+    const ah = Math.min(40, L * 0.32); const sw2 = Math.min(7, Math.min(w, h) * 0.2); const aw2 = Math.min(15, Math.min(w, h) * 0.42);
+    const sx = 0, sy = h, ex = w, ey = 0;
+    const b1x = sx + ux * ah, b1y = sy + uy * ah; const b2x = ex - ux * ah, b2y = ey - uy * ah;
+    return poly([[sx, sy], [b1x + vx * aw2, b1y + vy * aw2], [b1x + vx * sw2, b1y + vy * sw2], [b2x + vx * sw2, b2y + vy * sw2], [b2x + vx * aw2, b2y + vy * aw2], [ex, ey], [b2x - vx * aw2, b2y - vy * aw2], [b2x - vx * sw2, b2y - vy * sw2], [b1x - vx * sw2, b1y - vy * sw2], [b1x - vx * aw2, b1y - vy * aw2]]);
+  },
   // 左箭头:arrowRight flipH
   arrowLeft: (w, h) => { const dx = Math.min(40, w), dp = 0.3 * h; return poly([[w, dp], [dx, dp], [dx, 0], [0, h / 2], [dx, h], [dx, h - dp], [w, h - dp], [w, h / 2]]); },
   // 上箭头:arrowRight direction=north
@@ -389,6 +404,8 @@ export const SHAPE_DEFS: Array<{ kind: string; name: string; cat: 'general' | 'f
   { kind: 'sequentialData', name: '顺序数据', cat: 'flow' },
   // arrows
   { kind: 'arrowRight', name: '右箭头', cat: 'arrows' },
+  { kind: 'diagArrow', name: '斜向箭头', cat: 'arrows' },
+  { kind: 'diagArrowBoth', name: '斜向双头箭头', cat: 'arrows' },
   { kind: 'arrowLeft', name: '左箭头', cat: 'arrows' },
   { kind: 'arrowUp', name: '上箭头', cat: 'arrows' },
   { kind: 'arrowDown', name: '下箭头', cat: 'arrows' },
@@ -472,7 +489,9 @@ export const SHAPE_ALIASES: Record<string, string> = {
   'mxgraph.arrows2.triadArrow': 'triadArrow',
   'mxgraph.arrows2.calloutArrow': 'calloutArrow',
   'mxgraph.arrows2.calloutDoubleArrow': 'calloutArrow',
-  'singleArrow': 'arrowRight',   // 旧比例式别名(arrows2 绝对 px 语义近似,裁决 1)
+  'singleArrow': 'arrowRight',
+  'diagArrow': 'diagArrow',
+  'diagArrowBoth': 'diagArrowBoth',   // 旧比例式别名(arrows2 绝对 px 语义近似,裁决 1)
   'doubleArrow': 'twoWayArrow',  // 同上
 };
 

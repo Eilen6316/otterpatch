@@ -470,7 +470,8 @@ svg { display: block; }
 .etb-sep { width: 1px; height: 16px; background: var(--line); margin: 0 3px; }
 .board-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--muted); font-size: 13px; background: rgba(255, 255, 255, 0.78); border: 1px solid var(--line); padding: 9px 15px; border-radius: 9px; pointer-events: none; }
 .bnode { position: absolute; cursor: move; display: grid; place-items: center; }
-.bnode > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* overflow visible:描边以路径为中心,向外半个描边会超出 viewBox——默认 hidden 会把椭圆/圆环四个极点削平 */
+.bnode > svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 /* 形状按节点比例拉伸时描边不跟着变形(非等比缩放下横竖描边粗细不一的根因) */
 .bnode > svg :is(path, rect, ellipse, circle, polygon, line) { vector-effect: non-scaling-stroke; }
 /* 导出 .drawio 按钮(画板右下,zoom 读数上方) */
