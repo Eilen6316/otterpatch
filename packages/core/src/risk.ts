@@ -32,6 +32,8 @@ const RISK_BY_KIND: Record<EditOpKind, RiskLevel> = {
   unmergeCells: 'caution',
   freezePanes: 'safe',
   autoFilter: 'safe',
+  addSheet: 'safe',
+  copyRange: 'safe',
   conditionalFormat: 'safe',
   dataValidation: 'safe',
   insertChart: 'caution',

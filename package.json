@@ -30,7 +30,8 @@
     "test:drawio:persist": "node test/drawio-persist.mjs",
     "eval:drawio:multiturn": "node test/eval-drawio-multiturn.mjs",
     "test:drawio:roundtrip": "node test/drawio-roundtrip.mjs",
-    "test:drawio:shapes": "node test/shape-engine-e2e.mjs"
+    "test:drawio:shapes": "node test/shape-engine-e2e.mjs",
+    "eval:excel:copysheet": "node test/eval-excel-copysheet.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",

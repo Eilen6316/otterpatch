@@ -59,6 +59,10 @@ export interface SheetHandle {
   dataValidation(a1: string, rule: { kind: string; list?: string[]; min?: number; max?: number; v?: number }): void;
   createFilter(a1: string): void;
   readGrid(a1: string): unknown[][];
+  /** 新建工作表(复制到新表的一轮闭环:addSheet + copyRange 同提案完成)。 */
+  addSheet(name: string): void;
+  /** 整块复制:值/公式/数字格式原样搬到目标左上角(to 可带表名前缀)。 */
+  copyRange(from: string, to: string): void;
   insertChartImage(a1: string, dataUrl: string, width: number, height: number): void;
 }
 /** 浮动图片构建器(Univer FOverGridImageBuilder 的最小子集)。 */
@@ -330,6 +334,24 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
         });
         return st;
       },
+      addSheet: (name) => safe(() => { (apiRef.current?.getActiveWorkbook?.() as { insertSheet?: (n: string) => unknown } | undefined)?.insertSheet?.(name); }),
+      copyRange: (from, to) => safe(() => {
+        const src = rangeOf(from); if (!src) return;
+        const vals = (src.getValues() as unknown[][]) ?? [];
+        const fs2 = (src as { getFormulas?: () => string[][] }).getFormulas?.() ?? [];
+        const srcSheet = sheetOf(from); const s0 = parseStart(bare(from));
+        const tm = /^([^!]+)!/.exec(to); const tPrefix = tm ? tm[1] + '!' : '';
+        const t0 = parseStart(bare(to));
+        for (let r = 0; r < vals.length; r++) for (let c = 0; c < (vals[r]?.length ?? 0); c++) {
+          const dst = tPrefix + colName(t0.c + c) + (t0.r + r + 1);
+          const f = fs2[r]?.[c];
+          if (f && String(f).startsWith('=')) rangeOf(dst)?.setValue({ f: String(f) });
+          else rangeOf(dst)?.setValue((vals[r]![c] as never) ?? null);
+          const sd = (srcSheet?.getRange(colName(s0.c + c) + (s0.r + r + 1)) as { getCellStyleData?: () => { n?: { pattern?: string } } | null } | undefined)?.getCellStyleData?.();
+          const pat = sd?.n?.pattern;
+          if (pat) rangeOf(dst)?.setNumberFormat(pat);
+        }
+      }),
       insertRows: (row, count, sh) => safe(() => (sh ? sheetOf(sh + '!A1') : sheet())?.insertRows(row, count)),
       deleteRows: (row, count, sh) => safe(() => (sh ? sheetOf(sh + '!A1') : sheet())?.deleteRows(row, count)),
       insertCols: (col, count, sh) => safe(() => (sh ? sheetOf(sh + '!A1') : sheet())?.insertColumns(col, count)),
@@ -412,7 +434,7 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
           const cur = wb?.getActiveSheet?.()?.getSheetName?.() ?? '';
           const allNames = shs.map((x) => x.getSheetName?.() ?? '?');
           if (s?.sheet) { s.sheet.name = cur; s.sheet.names = allNames; } // 取数工具据此识破"读不存在的表"
-          if (s && shs.length === 1) s.text = `工作簿仅 1 张表: ${cur}(当前),不存在其它表——别假设 Sheet2 等存在;要写到新表需先让用户手动建表。
+          if (s && shs.length === 1) s.text = `工作簿仅 1 张表: ${cur}(当前),不存在其它表——别假设 Sheet2 等存在;不存在的表可直接用 addSheet 建(同提案 addSheet+copy 一轮完成)。
 ` + s.text;
           if (s && shs.length > 1) {
             // 跨表感知:每张非当前表给内容概览(表头 + 前 2 行样本),Agent 才能有依据地跨表读写

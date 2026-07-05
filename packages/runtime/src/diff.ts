@@ -91,6 +91,10 @@ function describe(op: EditOp): { badge: DiffBadge; label: string; after?: string
       return { badge: 'modify', label: '取消合并' };
     case 'freezePanes':
       return { badge: 'modify', label: `冻结 ${op.rows} 行 / ${op.cols} 列` };
+    case 'addSheet':
+      return { badge: 'add', label: `新建工作表「${op.name}」` };
+    case 'copyRange':
+      return { badge: 'add', label: `整块复制 → ${op.to}(值/公式/数字格式)` };
     case 'autoFilter':
       return { badge: 'modify', label: '自动筛选' };
     case 'insertChart': {

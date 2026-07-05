@@ -40,7 +40,7 @@ export const EXCEL_OPS = [
   'setValue', 'setFormula', 'setStyle', 'setNumberFormat',
   'insertRows', 'deleteRows', 'insertCols', 'deleteCols',
   'merge', 'unmerge', 'freeze', 'clear', 'sort',
-  'condFormat', 'dataValidation', 'filter', 'chart',
+  'condFormat', 'dataValidation', 'filter', 'chart', 'addSheet', 'copy',
 ] as const;
 export type ExcelOp = (typeof EXCEL_OPS)[number];
 export type CondWhen = 'greaterThan' | 'greaterThanOrEqual' | 'lessThan' | 'between' | 'equalTo' | 'textContains' | 'notEmpty' | 'formula';
@@ -72,6 +72,8 @@ export interface ExcelProposal {
     title?: string; // chart title
     categories?: string[]; // chart inline categories (x-axis/sector names); if given = inline mode, cell is the placement anchor, no summary table is written
     series?: { name: string; data: number[] }[]; // chart inline series; each data must match categories length
+    name?: string; // addSheet: new sheet name
+    to?: string; // copy: destination top-left cell (may carry sheet prefix, e.g. Sheet2!A1)
   }>;
 }
 
@@ -117,6 +119,8 @@ function buildExcelChangeSet(req: ProposeRequest, p: ExcelProposal): ChangeSet {
           : { family: 'object', kind: 'insertChart', chartType: e.chartType ?? 'bar', title: e.title ?? '图表', range: e.cell };
         break;
       case 'clear': op = { family: 'value', kind: 'deleteRange' }; break;
+      case 'addSheet': op = { family: 'structure', kind: 'addSheet', name: e.name ?? '新表' }; break;
+      case 'copy': op = { family: 'structure', kind: 'copyRange', to: e.to ?? 'A1' }; break;
       default: op = { family: 'value', kind: 'setValue', value: (e.value ?? null) as CellValue };
     }
     edits.push({ id: 'e' + i, target: aid, op });
@@ -171,6 +175,8 @@ export const excelDialect: HostDialect = {
             chartType: { type: 'string', enum: ['bar', 'line', 'pie'], description: 'chart 图表类型' },
             title: { type: 'string', description: 'chart 标题' },
             categories: { type: 'array', items: { type: 'string' }, description: 'chart 内联类别(x 轴/扇区名)。做透视图首选:把 aggregate 算出的各组名放这里 → 不写汇总表、表格保持干净;此时 cell 改填【放置图表的左上角空白格】(如 H2)' },
+            name: { type: 'string', description: 'addSheet:新工作表名(如 Sheet2);cell 填 A1 即可' },
+            to: { type: 'string', description: 'copy:目标左上角格,可带表名前缀(如 Sheet2!A1)——把 cell 源区域的值/公式/数字格式整块搬过去' },
             series: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, data: { type: 'array', items: { type: 'number' } } }, required: ['name', 'data'] }, description: 'chart 内联系列:[{name:系列名, data:[数值...]}],每个 data 与 categories 等长' },
           },
           required: ['cell', 'op'],

@@ -35,7 +35,7 @@ interface CellState { v?: unknown; f?: string | null; bg?: string | null; color?
 
 /** 由 applyExcelStructure 直接落网格的"结构/对象操作"kind —— 这些【不能】被 diffToOps 当作写单元格值
  *  (否则会把"插入图表"等的摘要文字写进格子);它们走 applyExcelStructure,不进 playOps。 */
-const ADV_KINDS = new Set(['insertRows', 'deleteRows', 'insertCols', 'deleteCols', 'mergeCells', 'unmergeCells', 'freezePanes', 'sortRange', 'deleteRange', 'conditionalFormat', 'dataValidation', 'autoFilter', 'insertChart']);
+const ADV_KINDS = new Set(['insertRows', 'deleteRows', 'insertCols', 'deleteCols', 'mergeCells', 'unmergeCells', 'freezePanes', 'sortRange', 'deleteRange', 'conditionalFormat', 'dataValidation', 'autoFilter', 'insertChart', 'addSheet', 'copyRange']);
 /** Excel「对照」视图的改动格着色:蓝=改动在案,红=已拒绝(与 Word 修订绿增红删同一语义系)。 */
 const MARK_BG_ON = '#dbeafe';
 const MARK_BG_OFF = '#fee2e2';
@@ -999,6 +999,8 @@ export function App() {
       else if (k === 'conditionalFormat') api.conditionalFormat(pa1, { when: e.op?.when ?? 'notEmpty', v1: e.op?.v1, v2: e.op?.v2 }, e.op?.style ?? {});
       else if (k === 'dataValidation') api.dataValidation(pa1, { kind: e.op?.rule ?? 'list', list: e.op?.list, min: e.op?.min, max: e.op?.max, v: e.op?.v });
       else if (k === 'autoFilter') api.createFilter(pa1);
+      else if (k === 'addSheet') api.addSheet((e.op as { name?: string })?.name ?? '新表');
+      else if (k === 'copyRange') api.copyRange(full, (e.op as { to?: string })?.to ?? 'A1');
       else if (k === 'insertChart') {
         const inline = (e.op?.categories?.length ?? 0) > 0;
         let spec = null;
