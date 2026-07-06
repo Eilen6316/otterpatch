@@ -109,3 +109,11 @@ test('回归#3:多格式 quote 改一词,未改词保留原 run 格式', () => {
   assert.match(xml, /<w:r><w:rPr><w:b\/><\/w:rPr><w:t xml:space="preserve">World<\/w:t><\/w:r>/); // unchanged "World" still bold
   assert.match(xml, /<w:delText xml:space="preserve">Hello<\/w:delText>/);
 });
+
+test('word redline: paraIdx targets the duplicate paragraph instead of first quote hit', () => {
+  const xml0 = '<w:document><w:body><w:p><w:r><w:t>same</w:t></w:r></w:p><w:p><w:r><w:t>same</w:t></w:r></w:p></w:body></w:document>';
+  const { xml, appliedEditIds, droppedEdits } = redlineDocumentXml(xml0, [{ id: 'e1', old: 'same', new: 'second', paraIdx: 1 }]);
+  assert.deepEqual(appliedEditIds, ['e1']);
+  assert.deepEqual(droppedEdits, []);
+  assert.match(xml, /<w:p><w:r><w:t>same<\/w:t><\/w:r><\/w:p><w:p>.*second/s);
+});

@@ -163,7 +163,7 @@ export class OpenAICompatModelClient implements ModelClient {
           continue;
         }
         const cs = dialect.buildChangeSet(req, parsed);
-        if (opts?.verify && repairsLeft > 0) {
+        if (opts?.verify) {
           const v = await opts.verify(cs);
           if (!v.ok) {
             repairsLeft--;
@@ -243,7 +243,7 @@ export class OpenAICompatModelClient implements ModelClient {
           continue;
         }
         const cs = dialect.buildChangeSet(req, parsed);
-        if (opts?.verify && repairsLeft > 0) {
+        if (opts?.verify) {
           onEvent({ type: 'tool', name: 'verify' });
           const v = await opts.verify(cs);
           if (!v.ok) {

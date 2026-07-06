@@ -490,8 +490,9 @@ export function App() {
   const [cfgOpen, setCfgOpen] = useState(false);
   const [provider, setProvider] = useState(() => lsGet('oa.provider', 'claude'));
   const [model, setModel] = useState(() => lsGet('oa.model', 'claude-opus-4-8'));
-  const [apiKey, setApiKey] = useState(() => lsGet('oa.apiKey', ''));
+  const [apiKey, setApiKey] = useState('');
   const [server, setServer] = useState(() => lsGet('oa.server', 'http://localhost:4319'));
+  useEffect(() => { try { localStorage.removeItem('oa.apiKey'); } catch { /* ignore */ } }, []);
   const [uniSel, setUniSel] = useState<UniSel | null>(null);
   const [excelDiff, setExcelDiff] = useState<'orig' | 'mark' | 'final'>('final'); // Excel 改动视图:原文/对照(改动格着色)/改后
   const [boardDiff, setBoardDiff] = useState<'orig' | 'final'>('final'); // drawio 改动视图:原文(隐提案)/改后
@@ -1267,7 +1268,7 @@ export function App() {
     telemetry('reject', itemKind(turn, it));
     if (!silent) setReviewIdx(idx + 1);
   };
-  const acceptAll = (turn: Extract<Turn, { kind: 'diff' }>, ti: number): void => {
+  const acceptAll = async (turn: Extract<Turn, { kind: 'diff' }>, ti: number): Promise<void> => {
     const pendingWord = (turn.word ?? []).filter((w) => turn.diff.items.some((it) => it.editId === w.editId && !accepted.has(akey(turn.diff.changeSetId, it.editId))));
     for (const w of [...pendingWord.filter((x) => !x.remove), ...pendingWord.filter((x) => x.remove).sort((a, b) => (b.blockIdx ?? -1) - (a.blockIdx ?? -1))]) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w)); // 删段降序,同初次落地
     for (const it of turn.diff.items) {
@@ -1281,9 +1282,13 @@ export function App() {
     const all = turn.diff.items.map((x) => x.editId);
     setAccepted((prev) => new Set([...prev, ...turn.diff.items.map((x) => akey(turn.diff.changeSetId, x.editId))]));
     setReviewIdx(all.length);
-    markCommitted(ti, all.length);
-    if ((isExcel || fmt === 'word') && fileB64) void doCommit(all); // 有上传文件 → 外科写回并下载(Word 走 w:ins/w:del 修订落盘)
-    else notify((fmt === 'drawio' ? t('已采纳到画板') : fmt === 'word' ? t('已采纳到文档') : t('已采纳到表格')) + ' · ' + all.length + ' ' + t('处'));
+    if ((isExcel || fmt === 'word') && fileB64) {
+      const committed = await doCommit(all);
+      if (committed) markCommitted(ti, all.length);
+    } else {
+      markCommitted(ti, all.length);
+      notify('Accepted ' + all.length + ' changes');
+    }
     // 自动续批:plan 声明了分批 + 开关开着 → 采纳后自动续发(串行,每批重新锚定+校验+审阅;上限防失控)
     if (autoBatch && BATCH_RX.test(turn.diff.intent ?? '')) {
       if (autoBatchRun.current >= AUTO_BATCH_CAP) { notify(t('自动续批已达上限,请确认后手动继续')); return; }
@@ -1358,19 +1363,19 @@ export function App() {
       return next;
     });
   /** 接受子集 → otterpatch-serve /commit → 外科写回 → 下载结果文件。 */
-  const doCommit = async (ids: string[]): Promise<void> => {
+  const doCommit = async (ids: string[]): Promise<boolean> => {
     const ep = server.trim().replace(/\/$/, '');
     if (!ep || !realCs) {
       notify(t('请先用 otterpatch-serve 生成提案'));
-      return;
+      return false;
     }
     if (!fileB64) {
       notify(t('请先上传要写回的文件'));
-      return;
+      return false;
     }
     if (!ids.length) {
       notify(t('没有要接受的改动'));
-      return;
+      return false;
     }
     setBusy(true);
     try {
@@ -1380,17 +1385,19 @@ export function App() {
         body: JSON.stringify({ format: fmt, fileBase64: fileB64, changeSet: realCs, acceptedEditIds: ids }),
       });
       const data = (await r.json()) as { ok?: boolean; fileBase64?: string; touchedParts?: string[]; fidelity?: { score: number }; appliedEditIds?: string[]; droppedEdits?: Array<{ editId: string; reason: string }>; error?: string };
-      if (!r.ok || !data.fileBase64) throw new Error(data.error ?? 'commit failed');
-      downloadB64(data.fileBase64, outName(fileName));
+      if (!r.ok) throw new Error(data.error ?? 'commit failed');
       const droppedN = data.droppedEdits?.length ?? 0;
-      if (droppedN > 0) {
-        // 诚实写回:有 edit 没落盘就不报"成功",明确写了几条、丢了几条、为什么。
-        notify('⚠ ' + t('部分写回') + ' · ' + t('已写') + ' ' + (data.appliedEditIds?.length ?? 0) + ' · ' + t('丢弃') + ' ' + droppedN + ' · ' + (data.droppedEdits?.[0]?.reason ?? ''));
-      } else {
-        notify(t('已写回') + ' · ' + (data.touchedParts?.join(', ') ?? '') + ' · ' + Math.round((data.fidelity?.score ?? 1) * 100) + '%');
+      if (data.ok === false || droppedN > 0) {
+        notify('Commit partial writeback: applied ' + (data.appliedEditIds?.length ?? 0) + ', dropped ' + droppedN + ': ' + (data.droppedEdits?.[0]?.reason ?? data.error ?? 'writeback failed'));
+        return false;
       }
+      if (!data.fileBase64) throw new Error(data.error ?? 'commit failed');
+      downloadB64(data.fileBase64, outName(fileName));
+      notify('Committed ' + (data.touchedParts?.join(', ') ?? '') + ' ' + Math.round((data.fidelity?.score ?? 1) * 100) + '%');
+      return true;
     } catch (e) {
-      notify('Commit · ' + (e instanceof Error ? e.message : String(e)));
+      notify('Commit: ' + (e instanceof Error ? e.message : String(e)));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -1695,7 +1702,7 @@ export function App() {
               model={model}
               onModel={(v) => { setModel(v); lsSet('oa.model', v); }}
               apiKey={apiKey}
-              onApiKey={(v) => { setApiKey(v); lsSet('oa.apiKey', v); }}
+              onApiKey={(v) => setApiKey(v)}
               server={server}
               onServer={(v) => { setServer(v); lsSet('oa.server', v); }}
               selChip={

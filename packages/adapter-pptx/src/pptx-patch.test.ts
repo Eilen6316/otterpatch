@@ -54,3 +54,28 @@ test('pptx 外科写回:Hello → World,仅 slide1.xml 变', async () => {
   const b = unzipSync(res.bytes);
   assert.equal(Buffer.compare(Buffer.from(a['ppt/presentation.xml']!), Buffer.from(b['ppt/presentation.xml']!)), 0);
 });
+
+test('pptx writeback: missing quote reports dropped edit and ok=false', async () => {
+  const a0 = 'a0' as AnchorId;
+  const anchor: LogicalAnchor = {
+    id: a0,
+    hostId: 'h' as unknown as HostId,
+    kind: 'flow',
+    ref: {},
+    portable: { kind: 'flow', path: [0], quote: { prefix: '', text: 'Missing', suffix: '' }, bias: 'left' },
+    baseRev: 0 as DocRev,
+  };
+  const cs: ChangeSet = {
+    id: 'c-missing',
+    hostId: 'h',
+    baseRev: 0 as DocRev,
+    anchors: { [a0]: anchor },
+    origin: { by: 'human' },
+    meta: { intent: 'retitle' },
+    edits: [{ id: 'e0', target: a0, op: { family: 'text', kind: 'replaceText', text: 'World' } }],
+  };
+  const res = await new SurgicalOoxmlWriteback(buildPptxCompiler()).commit(cs, { hostId: 'h', bytes: makePptx('Hello'), rev: 0 as DocRev });
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.appliedEditIds, []);
+  assert.match(res.droppedEdits?.[0]?.reason ?? '', /not found/);
+});

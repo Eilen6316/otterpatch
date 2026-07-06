@@ -11,6 +11,25 @@ const { spawn } = require('node:child_process');
 
 const isDev = !!process.env.OTTERPATCH_DEV;
 
+function isSafeExternalUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    return u.protocol === 'https:' || u.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedAppNavigation(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    if (isDev) return u.origin === 'http://localhost:5173';
+    return u.protocol === 'file:';
+  } catch {
+    return false;
+  }
+}
+
 // 自动启动本机 Agent 服务(otterpatch-serve),让非技术用户开箱即用、无需手动跑命令。
 let serveProc = null;
 function startServe() {
@@ -48,6 +67,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
 
@@ -58,8 +78,14 @@ function createWindow() {
     void win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
 
+  win.webContents.on('will-navigate', (event, url) => {
+    if (isAllowedAppNavigation(url)) return;
+    event.preventDefault();
+    if (isSafeExternalUrl(url)) void shell.openExternal(url);
+  });
+
   win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (isSafeExternalUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
 }

@@ -9,6 +9,7 @@
 import type {
   ChangeSet,
   DocHandle,
+  EditId,
   EditOpKind,
   FidelityReport,
   OoxmlPart,
@@ -41,16 +42,26 @@ export class PdfFormWriteback implements WritebackBackend {
     const form = pdf.getForm();
 
     const touched: string[] = [];
+    const appliedEditIds: EditId[] = [];
+    const droppedEdits: Array<{ editId: EditId; reason: string }> = [];
     const drift: FidelityReport['drift'] = [];
     for (const e of cs.edits) {
-      if (e.op.kind !== 'setValue') continue;
+      if (e.op.kind !== 'setValue') {
+        droppedEdits.push({ editId: e.id, reason: `unsupported op ${e.op.kind}` });
+        continue;
+      }
       const anchor = cs.anchors[e.target];
       const field = anchor && anchor.portable.kind === 'object' ? anchor.portable.elementId : '';
-      if (!field) continue;
+      if (!field) {
+        droppedEdits.push({ editId: e.id, reason: 'missing PDF form field anchor' });
+        continue;
+      }
       try {
         form.getTextField(field).setText(e.op.value == null ? '' : String(e.op.value));
         touched.push(field);
+        appliedEditIds.push(e.id);
       } catch {
+        droppedEdits.push({ editId: e.id, reason: 'field not found or not a text field' });
         drift.push({ part: field, kind: 'content', note: 'field not found or not a text field' });
       }
     }
@@ -58,10 +69,12 @@ export class PdfFormWriteback implements WritebackBackend {
     const bytes = await pdf.save();
     const total = touched.length + drift.length;
     return {
-      ok: touched.length > 0 && drift.length === 0,
+      ok: appliedEditIds.length === cs.edits.length && droppedEdits.length === 0,
       bytes,
       touchedParts: touched,
       fidelity: { score: total === 0 ? 1 : touched.length / total, drift },
+      appliedEditIds,
+      ...(droppedEdits.length ? { droppedEdits } : {}),
     };
   }
 

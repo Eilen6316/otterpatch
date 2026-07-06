@@ -33,12 +33,18 @@ const numToCol = (n: number): string => {
 };
 function parseRef(ref: string): { col: number; row: number } {
   const m = /^([A-Za-z]+)([0-9]+)$/.exec(ref);
-  return { col: m ? colToNum(m[1]!) : 1, row: m ? parseInt(m[2]!, 10) : 1 };
+  if (!m) throw new Error('invalid A1 reference ' + ref);
+  const row = parseInt(m[2]!, 10);
+  if (row < 1) throw new Error('invalid A1 reference ' + ref);
+  return { col: colToNum(m[1]!), row };
 }
 /** A1 or A1:B3 → list of cell refs (ranges expanded row by row, column by column). */
 function expandCells(a1: string): string[] {
   const [from, to] = a1.split(':');
-  if (!to) return [from!.toUpperCase()];
+  if (!to) {
+    const a = parseRef(from!);
+    return [numToCol(a.col) + a.row];
+  }
   const a = parseRef(from!);
   const b = parseRef(to);
   const out: string[] = [];
@@ -52,12 +58,18 @@ export function resolveSheetPart(parts: OoxmlParts, sheetName?: string): string 
   const fallback = 'xl/worksheets/sheet1.xml';
   const wbBytes = parts['xl/workbook.xml'];
   const relBytes = parts['xl/_rels/workbook.xml.rels'];
-  if (!wbBytes || !relBytes) return fallback;
+  if (!wbBytes || !relBytes) {
+    if (sheetName) throw new Error(`sheet '${sheetName}' not found`);
+    if (parts[fallback]) return fallback;
+    throw new Error('workbook relationships missing; cannot resolve worksheet');
+  }
   const wb = dec.decode(wbBytes);
   const rels = dec.decode(relBytes);
 
   let rid: string | undefined;
+  let sheetCount = 0;
   for (const m of wb.matchAll(/<sheet\b[^>]*?\/?>/g)) {
+    sheetCount++;
     const tag = m[0] ?? '';
     const name = /\bname="([^"]*)"/.exec(tag)?.[1];
     const id = /\br:id="([^"]*)"/.exec(tag)?.[1];
@@ -67,14 +79,20 @@ export function resolveSheetPart(parts: OoxmlParts, sheetName?: string): string 
       break;
     }
   }
-  if (!rid) return fallback;
+  if (!rid) {
+    if (sheetName) throw new Error(`sheet '${sheetName}' not found`);
+    if (sheetCount > 1) throw new Error('sheet name required for multi-sheet workbook');
+    if (parts[fallback]) return fallback;
+    throw new Error('worksheet not found');
+  }
 
   const relTag = new RegExp(`<Relationship\\b[^>]*?\\bId="${rid}"[^>]*?>`).exec(rels)?.[0];
   const target = relTag ? /\bTarget="([^"]*)"/.exec(relTag)?.[1] : undefined;
-  if (!target) return fallback;
-  return target.startsWith('/') ? target.slice(1) : 'xl/' + target;
+  if (!target) throw new Error(`relationship '${rid}' target not found`);
+  const path = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\.\//, '')}`;
+  if (!parts[path]) throw new Error(`worksheet part '${path}' not found`);
+  return path;
 }
-
 function escapeXml(s: string): string {
   return s
     .replace(/&/g, '&amp;')

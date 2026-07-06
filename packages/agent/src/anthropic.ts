@@ -115,7 +115,7 @@ export class AnthropicModelClient implements ModelClient {
       const propose = toolUses.find((b) => b.name === dialect.toolName);
       if (propose) {
         const cs = dialect.buildChangeSet(req, propose.input);
-        if (opts?.verify && repairsLeft > 0) {
+        if (opts?.verify) {
           const v = await opts.verify(cs);
           if (!v.ok) {
             repairsLeft--;
@@ -188,7 +188,7 @@ export class AnthropicModelClient implements ModelClient {
         const parsed = salvageProposalArgs(propose.json || '{}');
         if (parsed.truncated && !parsed.edits?.length && !parsed.ops?.length) { const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK }; onEvent({ type: 'done', result }); return result; }
         const cs = dialect.buildChangeSet(req, parsed);
-        if (opts?.verify && repairsLeft > 0) {
+        if (opts?.verify) {
           onEvent({ type: 'tool', name: 'verify' });
           const v = await opts.verify(cs);
           if (!v.ok) {

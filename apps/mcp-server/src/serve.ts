@@ -1,14 +1,4 @@
 #!/usr/bin/env node
-/**
- * otterpatch-serve —— OtterPatch runtime 的本地 HTTP 桥。让驾驶舱 UI(浏览器 / Electron)直接 fetch 跑
- * 真实 propose → diff → commit(BYOK),绕开浏览器对各模型厂商的 CORS 限制。
- *
- *   GET  /health            → { ok, formats, skills }
- *   POST /propose           { format, intent, context, provider, model?, apiKey } → { changeSet, diff }
- *   POST /commit            { format, fileBase64, changeSet, acceptedEditIds? } → { ok, fileBase64, touchedParts, fidelity }
- *
- * 仅监听 localhost;CORS 放开供本机 UI(:5173)调用。
- */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
 import { createModelClient, EXCEL_OPS, type Provider } from '@otterpatch/agent';
@@ -17,25 +7,73 @@ import { OtterPatchRuntime } from '@otterpatch/runtime';
 
 const rt = new OtterPatchRuntime();
 const PORT = Number(process.env.OtterPatch_PORT ?? 4319);
+const HOST = '127.0.0.1';
+const MAX_BODY_BYTES = Number(process.env.OtterPatch_MAX_BODY_BYTES ?? 64 * 1024 * 1024);
 
-function cors(res: ServerResponse): void {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+  if (origin === 'null') return true; // packaged Electron file:// renderer
+  try {
+    const u = new URL(origin);
+    return (u.protocol === 'http:' || u.protocol === 'https:') && ['localhost', '127.0.0.1', '::1'].includes(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function cors(req: IncomingMessage, res: ServerResponse): boolean {
+  const origin = req.headers.origin;
+  if (Array.isArray(origin) || !isAllowedOrigin(origin)) return false;
+  if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  return true;
 }
-function send(res: ServerResponse, code: number, data: unknown): void {
-  cors(res);
+
+function send(req: IncomingMessage, res: ServerResponse, code: number, data: unknown): void {
+  cors(req, res);
   res.setHeader('Content-Type', 'application/json');
   res.statusCode = code;
   res.end(JSON.stringify(data));
 }
+
 function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    let b = '';
-    req.on('data', (c) => (b += c));
+    const len = Number(req.headers['content-length'] ?? 0);
+    if (Number.isFinite(len) && len > MAX_BODY_BYTES) {
+      reject(new HttpError(413, `request body too large (max ${MAX_BODY_BYTES} bytes)`));
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let failed = false;
+    req.on('data', (c: Buffer | string) => {
+      if (failed) return;
+      const chunk = Buffer.isBuffer(c) ? c : Buffer.from(c);
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        failed = true;
+        req.pause();
+        reject(new HttpError(413, `request body too large (max ${MAX_BODY_BYTES} bytes)`));
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on('end', () => {
+      if (failed) return;
       try {
-        resolve(b ? (JSON.parse(b) as Record<string, unknown>) : {});
+        const body = Buffer.concat(chunks).toString('utf8');
+        resolve(body ? (JSON.parse(body) as Record<string, unknown>) : {});
       } catch (e) {
         reject(e instanceof Error ? e : new Error(String(e)));
       }
@@ -43,20 +81,26 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
     req.on('error', reject);
   });
 }
+
 const emsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 const server = createServer((req: IncomingMessage, res: ServerResponse) => {
   void (async () => {
     try {
+      if (!cors(req, res)) {
+        res.setHeader('Content-Type', 'application/json');
+        res.statusCode = 403;
+        res.end(JSON.stringify({ error: 'origin not allowed' }));
+        return;
+      }
       if (req.method === 'OPTIONS') {
-        cors(res);
         res.statusCode = 204;
         res.end();
         return;
       }
       const url = (req.url ?? '').split('?')[0];
       if (req.method === 'GET' && url === '/health') {
-        send(res, 200, { ok: true, formats: rt.formats(), skills: BUILTIN_SKILLS.map((s) => s.name), excelOps: EXCEL_OPS });
+        send(req, res, 200, { ok: true, formats: rt.formats(), skills: BUILTIN_SKILLS.map((s) => s.name), excelOps: EXCEL_OPS });
         return;
       }
       if (req.method === 'POST' && url === '/propose') {
@@ -79,9 +123,9 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
           },
           model,
         );
-        if (r.kind === 'answer') send(res, 200, { answer: r.text });
-        else if (r.kind === 'clarify') send(res, 200, { questions: r.questions });
-        else send(res, 200, { changeSet: r.changeSet, diff: rt.diff(r.changeSet) });
+        if (r.kind === 'answer') send(req, res, 200, { answer: r.text });
+        else if (r.kind === 'clarify') send(req, res, 200, { questions: r.questions });
+        else send(req, res, 200, { changeSet: r.changeSet, diff: rt.diff(r.changeSet) });
         return;
       }
       if (req.method === 'POST' && url === '/propose-stream') {
@@ -90,7 +134,6 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
           apiKey: a.apiKey as string | undefined,
           ...(a.model ? { model: a.model as string } : {}),
         });
-        cors(res);
         res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
         const sse = (e: unknown): void => { res.write(`data: ${JSON.stringify(e)}\n\n`); };
         try {
@@ -132,19 +175,21 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
           changeSet: a.changeSet as ChangeSet,
           ...(Array.isArray(a.acceptedEditIds) ? { acceptedEditIds: a.acceptedEditIds as string[] } : {}),
         });
-        send(res, 200, { ok: r.ok, fileBase64: Buffer.from(r.bytes).toString('base64'), touchedParts: r.touchedParts, fidelity: r.fidelity, ...(r.appliedEditIds ? { appliedEditIds: r.appliedEditIds } : {}), ...(r.droppedEdits ? { droppedEdits: r.droppedEdits } : {}) });
+        send(req, res, 200, { ok: r.ok, fileBase64: Buffer.from(r.bytes).toString('base64'), touchedParts: r.touchedParts, fidelity: r.fidelity, ...(r.appliedEditIds ? { appliedEditIds: r.appliedEditIds } : {}), ...(r.droppedEdits ? { droppedEdits: r.droppedEdits } : {}) });
         return;
       }
-      send(res, 404, { error: 'not found' });
+      send(req, res, 404, { error: 'not found' });
     } catch (e) {
-      send(res, 500, { error: emsg(e) });
+      send(req, res, e instanceof HttpError ? e.status : 500, { error: emsg(e) });
     }
   })();
 });
 
-server.listen(PORT, () => {
-  // 启动横幅:打印已加载的 Excel 能力,便于核对 serve 是不是最新代码(避免"改了但 serve 还是旧的")
-  process.stderr.write(`\n[otterpatch] serve on http://localhost:${PORT}\n`);
-  process.stderr.write(`[otterpatch] Excel 能力(${EXCEL_OPS.length}): ${EXCEL_OPS.join(', ')}\n`);
-  process.stderr.write(`[otterpatch] 看到上面这行=已是最新;若缺 insertRows/merge/freeze/sort 等,说明 serve 仍是旧进程,请重启 npm run serve\n\n`);
+server.requestTimeout = 30_000;
+server.headersTimeout = 10_000;
+
+server.listen(PORT, HOST, () => {
+  process.stderr.write(`\n[otterpatch] serve on http://${HOST}:${PORT}\n`);
+  process.stderr.write(`[otterpatch] Excel ops (${EXCEL_OPS.length}): ${EXCEL_OPS.join(', ')}\n`);
+  process.stderr.write('[otterpatch] If expected Excel ops are missing, restart npm run serve.\n\n');
 });

@@ -39,6 +39,13 @@
       "electron/**",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "../mcp-server/dist",
+        "to": "serve",
+        "filter": ["**/*"]
+      }
+    ],
     "directories": {
       "output": "release"
     },

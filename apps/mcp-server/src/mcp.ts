@@ -46,6 +46,9 @@ server.registerTool(
       provider: z.string().default('claude').describe('claude | openai | deepseek | glm | kimi | doubao | minimax | gemini'),
       model: z.string().optional(),
       apiKey: z.string().optional(),
+      sheet: z.object({ a1: z.string(), values: z.array(z.array(z.unknown())) }).optional(),
+      doc: z.object({ blocks: z.array(z.object({ style: z.string(), text: z.string(), font: z.string().optional(), size: z.number().optional(), align: z.string().optional(), lineSpacing: z.number().optional() })) }).optional(),
+      history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).optional(),
     },
   },
   async (a) => {
@@ -54,11 +57,23 @@ server.registerTool(
         apiKey: a.apiKey ?? process.env.OtterPatch_API_KEY,
         ...(a.model ? { model: a.model } : {}),
       });
-      const cs = await rt.propose(
-        { hostId: 'mcp', format: a.format, intent: a.intent, baseRev: 0 as DocRev, anchors: [], context: a.context ?? '' },
+      const r = await rt.respond(
+        {
+          hostId: 'mcp',
+          format: a.format,
+          intent: a.intent,
+          baseRev: 0 as DocRev,
+          anchors: [],
+          context: a.context ?? '',
+          ...(a.sheet ? { sheet: a.sheet } : {}),
+          ...(a.doc ? { doc: a.doc } : {}),
+          ...(a.history ? { history: a.history } : {}),
+        },
         model,
       );
-      return ok({ changeSet: cs, diff: rt.diff(cs) });
+      if (r.kind === 'answer') return ok({ answer: r.text });
+      if (r.kind === 'clarify') return ok({ questions: r.questions });
+      return ok({ changeSet: r.changeSet, diff: rt.diff(r.changeSet) });
     } catch (e) {
       return fail('propose failed: ' + emsg(e));
     }

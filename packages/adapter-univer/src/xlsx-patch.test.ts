@@ -156,3 +156,22 @@ test('P0 诚实写回:不支持的 op 进 droppedEdits 且 ok=false(不再静默
   assert.match(res.droppedEdits![0]!.reason, /replaceText/);
   assert.deepEqual(res.touchedParts, [], '什么都没写');
 });
+
+test('xlsx writeback: invalid A1 is dropped instead of falling back to A1', async () => {
+  const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
+  const res = await wb.commit(csOp({ family: 'value', kind: 'setValue', value: 7 }, 'Sheet1!not-a-cell'), { hostId: 'h1', bytes: makeXlsx(), rev: 0 as DocRev });
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.appliedEditIds, []);
+  assert.match(res.droppedEdits?.[0]?.reason ?? '', /invalid A1/i);
+  assert.deepEqual(res.touchedParts, []);
+});
+
+test('xlsx writeback: explicit missing sheet is dropped instead of falling back to sheet1', async () => {
+  const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
+  const res = await wb.commit(csOp({ family: 'value', kind: 'setValue', value: 7 }, 'Missing!B1'), { hostId: 'h1', bytes: makeXlsx(), rev: 0 as DocRev });
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.appliedEditIds, []);
+  assert.match(res.droppedEdits?.[0]?.reason ?? '', /Missing|not found/);
+  const sheet = dec.decode(readOoxmlParts(res.bytes)['xl/worksheets/sheet1.xml']!);
+  assert.match(sheet, /<c r="B1" s="2"><v>20<\/v><\/c>/);
+});

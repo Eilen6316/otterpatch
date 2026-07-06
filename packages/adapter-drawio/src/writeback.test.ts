@@ -68,3 +68,19 @@ test('drawio 写回:add + delete 跨两个 diagram', async () => {
   assert.match(out, /id="n1"[^>]*parent="1"/);
   assert.doesNotMatch(out, /id="9"/); // the cell in d1 is deleted
 });
+
+test('drawio writeback: out-of-range diagram reports dropped edit', async () => {
+  const cs: ChangeSet = {
+    id: 'cs-out-of-range',
+    hostId: 'h1',
+    baseRev: 0 as DocRev,
+    anchors: { a0: anchor('a0', 99, '2') } as Record<AnchorId, LogicalAnchor>,
+    origin: { by: 'agent', sessionId: 't' },
+    meta: { intent: 'bad page' },
+    edits: [{ id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'setObjectProps', props: { value: 'x' } } }],
+  };
+  const res = await new DrawioSurgicalWriteback().commit(cs, { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev });
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.appliedEditIds, []);
+  assert.match(res.droppedEdits?.[0]?.reason ?? '', /out of range/);
+});

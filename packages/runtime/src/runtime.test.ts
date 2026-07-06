@@ -88,3 +88,19 @@ test('runtime: 未注册格式 commit 抛错;已注册含 excel/word/pdf/ppt/dra
     /no writeback backend/,
   );
 });
+
+test('runtime: legacy propose path runs verifier and fails closed', async () => {
+  const rt = new OtterPatchRuntime();
+  rt.registerVerifier('excel', () => async () => ({ ok: false, report: 'forced verifier failure' }));
+  const model = new MockModelClient(() => ({ plan: 'bad ref', edits: [{ cell: 'Sheet1!A1', op: 'setValue', value: 1 }] }));
+  await assert.rejects(
+    () => rt.propose({ hostId: 'h1', format: 'excel', intent: 'bad', baseRev: 0 as DocRev, anchors: [], context: 'A1=1' }, model),
+    /forced verifier failure/,
+  );
+});
+
+test('runtime: commit rejects stale base revision', async () => {
+  const rt = new OtterPatchRuntime();
+  const cs = { id: 'c', hostId: 'h', baseRev: 0 as DocRev, anchors: {}, origin: { by: 'human' as const }, meta: { intent: 'x' }, edits: [] };
+  await assert.rejects(() => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, currentRev: 1 as DocRev }), /stale/);
+});

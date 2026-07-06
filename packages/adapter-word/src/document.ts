@@ -11,16 +11,17 @@
  */
 import { buildRedlineXml, diffWords, type RedlineOptions } from './redline.js';
 import { charElems, paraElems, mergeRPr, mergePPr, type CharProps, type ParaProps } from './style.js';
+import type { EditId } from '@otterpatch/core';
 import { esc, paraText, parsePara, splitBody, sliceRuns } from './runs.js';
 
 /** Text rewrite (compatible with the legacy signature). */
-export interface ParaEdit { old: string; new: string }
+export interface ParaEdit { id?: EditId; old: string; new: string; paraIdx?: number }
 /** Format revision (character and/or paragraph; both may coexist). paraIdx anchors empty/duplicate paragraphs by top-level block index. */
-export interface FmtEdit { kind: 'fmt'; quote: string; char?: CharProps; para?: ParaProps; paraIdx?: number }
+export interface FmtEdit { id?: EditId; kind: 'fmt'; quote: string; char?: CharProps; para?: ParaProps; paraIdx?: number }
 /** Whole-paragraph deletion as a native revision: every run wrapped in <w:del> (w:t→w:delText) + paragraph-mark deletion in pPr, so accepting the revision leaves no empty paragraph behind. */
-export interface DelParaEdit { kind: 'delPara'; quote?: string; paraIdx?: number }
+export interface DelParaEdit { id?: EditId; kind: 'delPara'; quote?: string; paraIdx?: number }
 /** Image op on the drawing inside the anchored paragraph: remove (run wrapped in <w:del>) or resize (wp:extent/a:ext rewritten in EMU, aspect kept). */
-export interface ImgEdit { kind: 'img'; action: 'remove' | 'resize'; width?: number; quote?: string; paraIdx?: number }
+export interface ImgEdit { id?: EditId; kind: 'img'; action: 'remove' | 'resize'; width?: number; quote?: string; paraIdx?: number }
 export type DocEdit = ParaEdit | FmtEdit | DelParaEdit | ImgEdit;
 
 const isText = (e: DocEdit): e is ParaEdit => 'old' in e;
@@ -136,6 +137,7 @@ function tryApply(para: string, edit: DocEdit, ctx: Ctx, blkIdx?: number): strin
     return open + mergePPr(pPr, paraElems(edit.para), ctx.id++, ctx.author, ctx.date) + body + '</w:p>';
   }
   if (!quote) return null;
+  if (isText(edit) && edit.paraIdx != null && edit.paraIdx !== blkIdx) return null;
   const full = paraText(para);
   if (!full.includes(quote)) return null;
 
@@ -181,11 +183,13 @@ function tryApply(para: string, edit: DocEdit, ctx: Ctx, blkIdx?: number): strin
 /** Apply a set of edits to document.xml; each edit locates its first matching paragraph and rewrites it surgically.
  *  Block indexing mirrors the workspace importer: top-level <w:tbl> consumes its inner paragraphs and counts
  *  as ONE block, so paraIdx from the workspace ("第N段") lands on the same paragraph here. */
-export function redlineDocumentXml(documentXml: string, edits: DocEdit[], opts: RedlineOptions = {}): { xml: string; changed: number } {
+export function redlineDocumentXml(documentXml: string, edits: DocEdit[], opts: RedlineOptions = {}): { xml: string; changed: number; appliedEditIds: EditId[]; droppedEdits: Array<{ editId: EditId; reason: string }> } {
   const authorRaw = opts.author ?? 'OtterPatch';
   const ctx: Ctx = { id: opts.idStart ?? 1, author: escAttr(authorRaw), authorRaw, date: opts.date ?? '1970-01-01T00:00:00Z' };
   let xml = documentXml;
   let changed = 0;
+  const appliedEditIds: EditId[] = [];
+  const droppedEdits: Array<{ editId: EditId; reason: string }> = [];
   for (const edit of edits) {
     let applied = false;
     let blk = -1; // top-level block cursor (w:tbl = one block, its inner w:p don't count)
@@ -198,7 +202,12 @@ export function redlineDocumentXml(documentXml: string, edits: DocEdit[], opts: 
       applied = true;
       return res;
     });
-    if (applied) changed++;
+    if (applied) {
+      changed++;
+      if (edit.id) appliedEditIds.push(edit.id);
+    } else if (edit.id) {
+      droppedEdits.push({ editId: edit.id, reason: 'anchor did not match document.xml' });
+    }
   }
-  return { xml, changed };
+  return { xml, changed, appliedEditIds, droppedEdits };
 }

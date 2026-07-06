@@ -17,7 +17,13 @@ export async function serveDist(root = 'apps/desktop/dist') {
     try {
       let p = decodeURIComponent((req.url || '/').split('?')[0]);
       if (p === '/') p = '/index.html';
-      const d = await readFile(path.join(abs, p));
+      const target = path.resolve(abs, '.' + p);
+      if (target !== abs && !target.startsWith(abs + path.sep)) {
+        res.statusCode = 403;
+        res.end('403');
+        return;
+      }
+      const d = await readFile(target);
       res.setHeader('Content-Type', EXT[path.extname(p)] || 'application/octet-stream');
       res.end(d);
     } catch {

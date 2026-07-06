@@ -435,12 +435,26 @@ const PORTS: XY[] = [{ x: 0.5, y: 0 }, { x: 1, y: 0.5 }, { x: 0.5, y: 1 }, { x: 
 /** 高度复刻 drawio 的交互画板:周界正交圆角连线、悬停连接点拖拽连线(绿色目标高亮)、8 缩放手柄、网格吸附、改名、删边删点、双击空白建节点。 */
 const BOARD_KEY = 'oa.board';
 export interface BoardPage { name: string; nodes: BNode[]; edges: BEdge[] }
+
+const FALLBACK_INNER = '<rect x="4" y="5" width="32" height="20"/>';
+const FORBIDDEN_SVG_INNER = /<\s*(script|foreignObject|iframe|object|embed|image|use|a|audio|video|canvas|style|animate|set)\b|\bon[a-z]+\s*=|(?:href|xlink:href)\s*=|javascript:/i;
+const isKnownShape = (shape?: string): shape is string => !!shape && SHAPE_DEFS.some((s) => s.kind === shape);
+const safeSvgInner = (inner: string | undefined): string => {
+  if (!inner) return '';
+  return FORBIDDEN_SVG_INNER.test(inner) ? FALLBACK_INNER : inner;
+};
+function sanitizeNode(n: BNode): BNode {
+  const next: BNode = { ...n, inner: safeSvgInner(n.inner) };
+  if (next.shape && !isKnownShape(next.shape)) delete next.shape;
+  return next;
+}
+const sanitizePage = (p: BoardPage): BoardPage => ({ name: p.name, nodes: (p.nodes ?? []).map(sanitizeNode), edges: p.edges ?? [] });
 /** 读持久化画板(多页;兼容旧单页 {nodes,edges} 格式迁移)。 */
 function loadBoardStore(): { pages: BoardPage[]; cur: number } {
   try {
     const j = JSON.parse(localStorage.getItem(BOARD_KEY) ?? '{}') as { pages?: BoardPage[]; cur?: number; nodes?: BNode[]; edges?: BEdge[] };
-    if (Array.isArray(j.pages) && j.pages.length) return { pages: j.pages, cur: Math.min(Math.max(j.cur ?? 0, 0), j.pages.length - 1) };
-    if (j.nodes?.length || j.edges?.length) return { pages: [{ name: 'Page-1', nodes: j.nodes ?? [], edges: j.edges ?? [] }], cur: 0 };
+    if (Array.isArray(j.pages) && j.pages.length) return { pages: j.pages.map(sanitizePage), cur: Math.min(Math.max(j.cur ?? 0, 0), j.pages.length - 1) };
+    if (j.nodes?.length || j.edges?.length) return { pages: [sanitizePage({ name: 'Page-1', nodes: j.nodes ?? [], edges: j.edges ?? [] })], cur: 0 };
   } catch { /* 损坏则重建 */ }
   return { pages: [{ name: 'Page-1', nodes: [], edges: [] }], cur: 0 };
 }
@@ -456,7 +470,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
   useEffect(() => {
     stashRef.current[curPage] = { nodes, edges };
     const timer = window.setTimeout(() => {
-      try { localStorage.setItem(BOARD_KEY, JSON.stringify({ pages: pageNames.map((name, i) => ({ name, ...(stashRef.current[i] ?? { nodes: [], edges: [] }) })), cur: curPage })); } catch { /* 配额满忽略 */ }
+      try { localStorage.setItem(BOARD_KEY, JSON.stringify({ pages: pageNames.map((name, i) => sanitizePage({ name, ...(stashRef.current[i] ?? { nodes: [], edges: [] }) })), cur: curPage })); } catch { /* 配额满忽略 */ }
     }, 300);
     return () => window.clearTimeout(timer);
   }, [nodes, edges, pageNames, curPage]);
@@ -469,7 +483,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
   useImperativeHandle(apiRef, () => ({
     addObjects: (nn, ee) => {
       if (nn.length || ee.length) commit();
-      if (nn.length) setNodes((ns) => [...ns, ...nn]);
+      if (nn.length) setNodes((ns) => [...ns, ...nn.map(sanitizeNode)]);
       if (ee.length) setEdges((es) => [...es, ...ee]);
       setSelIds(new Set(nn.map((n) => n.id)));
       setSelEdge(null);
@@ -488,9 +502,9 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
       setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...(box.x != null ? { x: snap(box.x) } : {}), ...(box.y != null ? { y: snap(box.y) } : {}), ...(box.w != null ? { w: box.w } : {}), ...(box.h != null ? { h: box.h } : {}) } : n)));
     },
     highlight: (id) => { setHi(id); setSelIds(new Set([id])); setSelEdge(null); },
-    loadBoard: (nn, ee) => { commit(); setNodes(nn); setEdges(ee); setSelIds(new Set()); setSelEdge(null); },
+    loadBoard: (nn, ee) => { commit(); setNodes(nn.map(sanitizeNode)); setEdges(ee); setSelIds(new Set()); setSelEdge(null); },
     loadPages: (pgs) => {
-      const pages = pgs.length ? pgs : [{ name: 'Page-1', nodes: [], edges: [] }];
+      const pages = (pgs.length ? pgs : [{ name: 'Page-1', nodes: [], edges: [] }]).map(sanitizePage);
       stashRef.current = pages.map((x) => ({ nodes: x.nodes, edges: x.edges }));
       setPageNames(pages.map((x) => x.name));
       setCurPage(0);
@@ -506,7 +520,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
       return e ? { edge: { ...e } } : null;
     },
     restoreObject: (obj) => {
-      if (obj.node) { const nd = obj.node; setNodes((ns) => (ns.some((n) => n.id === nd.id) ? ns.map((n) => (n.id === nd.id ? nd : n)) : [...ns, nd])); }
+      if (obj.node) { const nd = sanitizeNode(obj.node); setNodes((ns) => (ns.some((n) => n.id === nd.id) ? ns.map((n) => (n.id === nd.id ? nd : n)) : [...ns, nd])); }
       if (obj.edge) { const ed = obj.edge; setEdges((es) => (es.some((e) => e.id === ed.id) ? es.map((e) => (e.id === ed.id ? ed : e)) : [...es, ed])); }
     },
   }));
@@ -610,9 +624,12 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
     e.preventDefault();
     const raw = e.dataTransfer.getData('otterpatch/shape');
     if (!raw) return;
-    const s = JSON.parse(raw) as { name: string; inner?: string; shape?: string };
+    let s: { shape?: unknown };
+    try { s = JSON.parse(raw) as { shape?: unknown }; } catch { return; }
+    const shape = typeof s.shape === 'string' ? SHAPE_DEFS.find((d) => d.kind === s.shape) : undefined;
+    if (!shape) return;
     const { x, y } = pt(e);
-    addNode(x, y, s.inner ?? '', '', s.name, s.shape); // 拖入即参数化形状(shape kind),缩放不变形;kind 存中文名供 Agent 感知
+    addNode(x, y, '', '', shape.name, shape.kind);
   };
 
   const onMove = (e: { clientX: number; clientY: number; shiftKey?: boolean }): void => {

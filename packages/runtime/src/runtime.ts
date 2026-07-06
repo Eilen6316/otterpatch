@@ -28,6 +28,8 @@ export interface CommitInput {
   changeSet: ChangeSet;
   /** Commit only these edits (result of per-block acceptance); omitted = accept all. */
   acceptedEditIds?: string[];
+  /** Live document revision observed by the caller immediately before commit. */
+  currentRev?: import('@otterpatch/core').DocRev;
 }
 
 export interface OtterPatchRuntimeOptions {
@@ -89,7 +91,9 @@ export class OtterPatchRuntime {
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
       const agent = new Agent(model, undefined, this.skills);
-      const cs = await agent.propose(req);
+      const r = await agent.respond(req, this.verifyOpts(req));
+      if (r.kind !== 'changeset') throw new Error(r.kind === 'answer' ? r.text : 'proposal requires clarification');
+      const cs = r.changeSet;
       this.emit({ type: 'propose:done', changeSetId: cs.id, editCount: cs.edits.length, ...(cs.meta.planSummary ? { planSummary: cs.meta.planSummary } : {}) });
       return cs;
     } catch (err) {
@@ -150,6 +154,9 @@ export class OtterPatchRuntime {
     const make = this.backends[input.format];
     if (!make) throw new Error(`OtterPatchRuntime: no writeback backend for format "${input.format}"`);
     const backend = make();
+    if (input.currentRev !== undefined && input.currentRev !== input.changeSet.baseRev) {
+      throw new Error('changeset is stale: baseRev ' + input.changeSet.baseRev + ' != currentRev ' + input.currentRev);
+    }
     const cs: ChangeSet = input.acceptedEditIds
       ? { ...input.changeSet, edits: input.changeSet.edits.filter((e) => input.acceptedEditIds!.includes(e.id)) }
       : input.changeSet;

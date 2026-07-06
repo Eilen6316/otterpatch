@@ -80,7 +80,12 @@ export class MockModelClient implements ModelClient {
   async proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet> {
     return dialect.buildChangeSet(req, this.fn(req));
   }
-  async respond(req: ProposeRequest, dialect: HostDialect, _opts?: RespondOptions): Promise<AgentResponse> {
-    return { kind: 'changeset', changeSet: dialect.buildChangeSet(req, this.fn(req)) };
+  async respond(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Promise<AgentResponse> {
+    const cs = dialect.buildChangeSet(req, this.fn(req));
+    if (opts?.verify) {
+      const v = await opts.verify(cs);
+      if (!v.ok) return { kind: 'answer', text: 'Proposal verification failed.\\n' + v.report };
+    }
+    return { kind: 'changeset', changeSet: cs };
   }
 }

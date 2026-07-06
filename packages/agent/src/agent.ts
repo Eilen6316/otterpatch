@@ -78,7 +78,18 @@ export class Agent {
   async respondStream(req: ProposeRequest, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
     const d = this.dialectFor(req);
     if (this.model.respondStream) return this.model.respondStream(req, d, onEvent, this.withSkillTools(opts));
-    const r = this.model.respond ? await this.model.respond(req, d, this.withSkillTools(opts)) : { kind: 'changeset' as const, changeSet: await this.model.proposeChangeSet(req, d) };
+    let r: AgentResponse;
+    if (this.model.respond) {
+      r = await this.model.respond(req, d, this.withSkillTools(opts));
+    } else {
+      const cs = await this.model.proposeChangeSet(req, d);
+      if (opts?.verify) {
+        const v = await opts.verify(cs);
+        r = v.ok ? { kind: 'changeset' as const, changeSet: cs } : { kind: 'answer' as const, text: '提案校验失败。\n' + v.report };
+      } else {
+        r = { kind: 'changeset', changeSet: cs };
+      }
+    }
     if (r.kind === 'answer') onEvent({ type: 'answer', delta: r.text });
     onEvent({ type: 'done', result: r });
     return r;

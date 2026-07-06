@@ -121,7 +121,8 @@ function buildExcelChangeSet(req: ProposeRequest, p: ExcelProposal): ChangeSet {
       case 'clear': op = { family: 'value', kind: 'deleteRange' }; break;
       case 'addSheet': op = { family: 'structure', kind: 'addSheet', name: e.name ?? '新表' }; break;
       case 'copy': op = { family: 'structure', kind: 'copyRange', to: e.to ?? 'A1' }; break;
-      default: op = { family: 'value', kind: 'setValue', value: (e.value ?? null) as CellValue };
+      case 'setValue': op = { family: 'value', kind: 'setValue', value: (e.value ?? null) as CellValue }; break;
+      default: throw new Error('excel dialect: unknown op ' + (e as { op: string }).op);
     }
     edits.push({ id: 'e' + i, target: aid, op });
   });

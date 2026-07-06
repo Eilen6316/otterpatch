@@ -69,3 +69,20 @@ test('PDF 表单填写:未知字段 → drift,不 ok', async () => {
   assert.equal(res.ok, false);
   assert.equal(res.fidelity.drift.length, 1);
 });
+
+test('PDF form fill: missing anchor reports dropped edit', async () => {
+  const original = await makePdfWithField('name', 'old');
+  const cs: ChangeSet = {
+    id: 'c-missing-anchor',
+    hostId: 'h',
+    baseRev: 0 as DocRev,
+    anchors: {},
+    origin: { by: 'human' },
+    meta: { intent: 'fill' },
+    edits: [{ id: 'e0', target: 'missing' as AnchorId, op: { family: 'value', kind: 'setValue', value: 'x' } }],
+  };
+  const res = await new PdfFormWriteback().commit(cs, { hostId: 'h', bytes: original, rev: 0 as DocRev });
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.appliedEditIds, []);
+  assert.match(res.droppedEdits?.[0]?.reason ?? '', /anchor/);
+});

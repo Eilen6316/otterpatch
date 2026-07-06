@@ -63,8 +63,9 @@ export function buildGridVerifier(sheet: SheetSnapshot): (cs: ChangeSet) => Prom
     try {
       const res = await new GridChangeSetEngine().shadowApply(cs, shadow);
       recalculated = res.effects.recalculated ?? [];
-    } catch {
-      return { ok: true, report: '' }; // shadow apply failed → don't block the proposal
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { ok: false, report: `影子校验执行失败: ${msg}\n请修正提案后重新调用 propose_changeset。` };
     }
 
     const issues: string[] = [];

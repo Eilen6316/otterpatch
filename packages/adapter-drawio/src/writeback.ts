@@ -12,6 +12,7 @@
 import type {
   ChangeSet,
   DocHandle,
+  EditId,
   EditOp,
   EditOpKind,
   FidelityReport,
@@ -82,7 +83,7 @@ export class DrawioSurgicalWriteback implements WritebackBackend {
     const matches = [...xml.matchAll(DIAGRAM_RE)];
 
     // Group edits by diagram index
-    const byDiagram = new Map<number, DrawioEdit[]>();
+    const byDiagram = new Map<number, Array<{ editId: EditId; edit: DrawioEdit }>>();
     for (const e of cs.edits) {
       const anchor = cs.anchors[e.target];
       if (!anchor || anchor.portable.kind !== 'object') {
@@ -94,22 +95,26 @@ export class DrawioSurgicalWriteback implements WritebackBackend {
         list = [];
         byDiagram.set(di, list);
       }
-      list.push(mapOp(anchor, e.op));
+      list.push({ editId: e.id, edit: mapOp(anchor, e.op) });
     }
 
     // Reassemble: pass through gap bytes and untouched diagrams verbatim; rewrite only targeted diagrams
     let out = '';
     let pos = 0;
     const touched: string[] = [];
+    const applied: EditId[] = [];
+    const dropped: Array<{ editId: EditId; reason: string }> = [];
     matches.forEach((m, idx) => {
       out += xml.slice(pos, m.index);
-      const edits = byDiagram.get(idx);
-      if (edits && edits.length) {
+      const entries = byDiagram.get(idx);
+      if (entries && entries.length) {
+        const edits = entries.map((x) => x.edit);
         const inner = m[2]!;
         if (!inner.includes('<mxGraphModel')) {
           throw new Error('DrawioSurgicalWriteback: 压缩 diagram 暂不支持(请设 compressed=false)');
         }
         out += `<diagram${m[1]!}>${applyEditsToModel(inner, edits)}</diagram>`;
+        applied.push(...entries.map((x) => x.editId));
         touched.push(attrOf(m[1]!, 'id') ?? `#${idx}`);
       } else {
         out += m[0];
@@ -123,7 +128,19 @@ export class DrawioSurgicalWriteback implements WritebackBackend {
       score: total === 0 ? 1 : (total - touched.length) / total,
       drift: [],
     };
-    return { ok: true, bytes: encd.encode(out), touchedParts: touched, fidelity };
+    for (const [idx, entries] of byDiagram) {
+      if (idx < 0 || idx >= matches.length) {
+        dropped.push(...entries.map((x) => ({ editId: x.editId, reason: `diagram index ${idx} out of range` })));
+      }
+    }
+    return {
+      ok: dropped.length === 0 && applied.length === cs.edits.length,
+      bytes: encd.encode(out),
+      touchedParts: touched,
+      fidelity,
+      appliedEditIds: applied,
+      ...(dropped.length ? { droppedEdits: dropped } : {}),
+    };
   }
 
   async verify(before: DocHandle, after: DocHandle, _cs: ChangeSet): Promise<FidelityReport> {

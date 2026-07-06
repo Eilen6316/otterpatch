@@ -7,6 +7,7 @@
  */
 import type {
   ChangeSet,
+  EditId,
   DocHandle,
   EditOpKind,
   FidelityReport,
@@ -58,24 +59,23 @@ export class WordRedlineWriteback implements WritebackBackend {
 
     const edits: DocEdit[] = [];
     const page: PagePatch = {};
-    const dropped: Array<{ editId: typeof cs.edits[number]['id']; reason: string }> = [];
-    const applied: Array<typeof cs.edits[number]['id']> = [];
+    const dropped: Array<{ editId: EditId; reason: string }> = [];
+    const pageApplied: EditId[] = [];
     for (const e of cs.edits) {
       const anchor = cs.anchors[e.target];
       const quote = anchor && anchor.portable.kind === 'flow' ? anchor.portable.quote.text : '';
       const paraIdx = anchor && anchor.portable.kind === 'flow' ? anchor.portable.path[0] : undefined; // 段号锚(0-based):空段/重复文本的定位通道
       if (e.op.kind === 'replaceText') {
-        if (quote) { edits.push({ old: quote, new: e.op.text }); applied.push(e.id); }
+        if (quote) { edits.push({ id: e.id, old: quote, new: e.op.text, ...(paraIdx != null ? { paraIdx } : {}) }); }
         else dropped.push({ editId: e.id, reason: '文本改写缺少 quote 锚点,无法定位' });
       } else if (e.op.kind === 'deleteRange') {
-        if (quote || paraIdx != null) { edits.push({ kind: 'delPara', ...(quote ? { quote } : {}), ...(paraIdx != null ? { paraIdx } : {}) }); applied.push(e.id); }
+        if (quote || paraIdx != null) { edits.push({ id: e.id, kind: 'delPara', ...(quote ? { quote } : {}), ...(paraIdx != null ? { paraIdx } : {}) }); }
         else dropped.push({ editId: e.id, reason: '删段缺少 quote/para 锚点,无法定位' });
       } else if (e.op.kind === 'setObjectProps') {
         const p = e.op.props as { imgAction?: 'remove' | 'resize'; width?: number };
         if (p.imgAction !== 'remove' && p.imgAction !== 'resize') { dropped.push({ editId: e.id, reason: `setObjectProps 仅支持图片操作(imgAction),得到 ${JSON.stringify(e.op.props).slice(0, 60)}` }); continue; }
         if (!quote && paraIdx == null) { dropped.push({ editId: e.id, reason: '图片操作缺少 quote/para 锚点,无法定位' }); continue; }
-        edits.push({ kind: 'img', action: p.imgAction, ...(p.width != null ? { width: p.width } : {}), ...(quote ? { quote } : {}), ...(paraIdx != null ? { paraIdx } : {}) });
-        applied.push(e.id);
+        edits.push({ id: e.id, kind: 'img', action: p.imgAction, ...(p.width != null ? { width: p.width } : {}), ...(quote ? { quote } : {}), ...(paraIdx != null ? { paraIdx } : {}) });
       } else if (e.op.kind === 'setStyle') {
         const st0 = e.op.style;
         // Page-level (columns/margins/orientation): inherently document-wide, handled via surgical sectPr patch
@@ -83,7 +83,7 @@ export class WordRedlineWriteback implements WritebackBackend {
           if (st0.columns != null) page.columns = st0.columns;
           if (st0.margin != null) page.margin = st0.margin;
           if (st0.orient != null) page.orient = st0.orient;
-          applied.push(e.id);
+          pageApplied.push(e.id);
           // If the same edit also carries character/paragraph fields and has a quote, fall through to the format-revision path below; purely page-level edits stop here
           if (!quote && st0.font == null && st0.size == null && st0.bold == null && st0.align == null && st0.lineSpacing == null) continue;
         }
@@ -107,16 +107,19 @@ export class WordRedlineWriteback implements WritebackBackend {
         if (st.bgColor != null) para.bgColor = st.bgColor;
         const hasChar = Object.keys(char).length > 0;
         const hasPara = Object.keys(para).length > 0;
-        if (hasChar || hasPara) { edits.push({ kind: 'fmt', quote, ...(paraIdx != null ? { paraIdx } : {}), ...(hasChar ? { char } : {}), ...(hasPara ? { para } : {}) }); applied.push(e.id); }
+        if (hasChar || hasPara) { edits.push({ id: e.id, kind: 'fmt', quote, ...(paraIdx != null ? { paraIdx } : {}), ...(hasChar ? { char } : {}), ...(hasPara ? { para } : {}) }); }
       }
     }
 
     const opts: ParaEditOpts = {};
     if (this.opts.author !== undefined) opts.author = this.opts.author;
     if (this.opts.date !== undefined) opts.date = this.opts.date;
-    const { xml: redlined, changed } = redlineDocumentXml(dec.decode(docXml), edits, opts);
-    const sect = patchSectPr(redlined, page); // Page-level sectPr patch (columns/margins/orientation)
-    const totalChanged = changed + (sect.changed ? 1 : 0);
+    const redline = redlineDocumentXml(dec.decode(docXml), edits, opts);
+    const sect = patchSectPr(redline.xml, page); // Page-level sectPr patch (columns/margins/orientation)
+    const applied = [...redline.appliedEditIds, ...(sect.changed ? pageApplied : [])];
+    const pageDropped = sect.changed ? [] : pageApplied.map((editId) => ({ editId, reason: 'section properties were unchanged' }));
+    dropped.push(...redline.droppedEdits, ...pageDropped);
+    const totalChanged = redline.changed + (sect.changed ? 1 : 0);
     const bytes = repackOoxml(doc.bytes, { [DOC_PART]: enc.encode(sect.xml) });
 
     const integrity = comparePartsIntegrity(doc.bytes, bytes);
