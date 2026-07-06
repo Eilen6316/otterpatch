@@ -8,4 +8,5 @@ const { contextBridge } = require('electron');
 contextBridge.exposeInMainWorld('otterpatch', {
   version: '0.0.1',
   platform: process.platform,
+  serveToken: process.env.OtterPatch_TOKEN || '',
 });

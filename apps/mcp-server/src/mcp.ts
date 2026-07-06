@@ -43,6 +43,7 @@ server.registerTool(
       format: z.string().describe('excel | drawio | word | ...'),
       intent: z.string().describe('natural-language edit intent'),
       context: z.string().default('').describe('read-only snapshot of the selected region, fed to the model'),
+      baseRev: z.number().int().nonnegative().default(0).describe('document revision used as the ChangeSet base revision'),
       provider: z.string().default('claude').describe('claude | openai | deepseek | glm | kimi | doubao | minimax | gemini'),
       model: z.string().optional(),
       apiKey: z.string().optional(),
@@ -62,7 +63,7 @@ server.registerTool(
           hostId: 'mcp',
           format: a.format,
           intent: a.intent,
-          baseRev: 0 as DocRev,
+          baseRev: a.baseRev as DocRev,
           anchors: [],
           context: a.context ?? '',
           ...(a.sheet ? { sheet: a.sheet } : {}),
@@ -101,18 +102,21 @@ server.registerTool(
       fileBase64: z.string().describe('original document bytes, base64'),
       changeSet: z.string().describe('ChangeSet JSON (from otterpatch_propose)'),
       acceptedEditIds: z.array(z.string()).optional().describe('subset of edit ids to commit; omit = accept all'),
+      currentRev: z.number().int().nonnegative().optional().describe('live document revision observed immediately before commit'),
     },
   },
   async (a) => {
     try {
       const bytes = new Uint8Array(Buffer.from(a.fileBase64, 'base64'));
+      const changeSet = JSON.parse(a.changeSet) as ChangeSet;
       const res = await rt.commit({
         format: a.format,
         bytes,
-        changeSet: JSON.parse(a.changeSet) as ChangeSet,
+        changeSet,
         ...(a.acceptedEditIds ? { acceptedEditIds: a.acceptedEditIds } : {}),
+        currentRev: (a.currentRev ?? changeSet.baseRev) as DocRev,
       });
-      return ok({ ok: res.ok, fileBase64: Buffer.from(res.bytes).toString('base64'), touchedParts: res.touchedParts, fidelity: res.fidelity });
+      return ok({ ok: res.ok, ...(res.ok ? { fileBase64: Buffer.from(res.bytes).toString('base64') } : { partialFileBase64: Buffer.from(res.bytes).toString('base64') }), touchedParts: res.touchedParts, fidelity: res.fidelity, ...(res.appliedEditIds ? { appliedEditIds: res.appliedEditIds } : {}), ...(res.droppedEdits ? { droppedEdits: res.droppedEdits } : {}) });
     } catch (e) {
       return fail('commit failed: ' + emsg(e));
     }

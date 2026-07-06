@@ -84,3 +84,28 @@ test('drawio writeback: out-of-range diagram reports dropped edit', async () => 
   assert.deepEqual(res.appliedEditIds, []);
   assert.match(res.droppedEdits?.[0]?.reason ?? '', /out of range/);
 });
+
+test('drawio writeback: rejects unsafe mxCell attrs and invalid geometry per edit', async () => {
+  const base = {
+    id: 'cs-unsafe',
+    hostId: 'h1',
+    baseRev: 0 as DocRev,
+    anchors: { a0: anchor('a0', 0, '2'), a1: anchor('a1', 0, '1') } as Record<AnchorId, LogicalAnchor>,
+    origin: { by: 'agent' as const, sessionId: 't' },
+    meta: { intent: 'unsafe' },
+  };
+  const res = await new DrawioSurgicalWriteback().commit({
+    ...base,
+    edits: [
+      { id: 'e0', target: 'a0' as AnchorId, op: { family: 'object' as const, kind: 'setObjectProps' as const, props: { 'value" onclick="alert(1)': 'x' } } },
+      { id: 'e1', target: 'a1' as AnchorId, op: { family: 'object' as const, kind: 'addObject' as const, payload: { id: 'n1', vertex: true, geometry: { x: Number.NaN } } } },
+    ],
+  }, { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev });
+
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.appliedEditIds, []);
+  assert.equal(res.droppedEdits?.length, 2);
+  const out = dec.decode(res.bytes);
+  assert.doesNotMatch(out, /onclick/);
+  assert.doesNotMatch(out, /id="n1"/);
+});

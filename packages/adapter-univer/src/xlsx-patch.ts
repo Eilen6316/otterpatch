@@ -89,9 +89,16 @@ export function resolveSheetPart(parts: OoxmlParts, sheetName?: string): string 
   const relTag = new RegExp(`<Relationship\\b[^>]*?\\bId="${rid}"[^>]*?>`).exec(rels)?.[0];
   const target = relTag ? /\bTarget="([^"]*)"/.exec(relTag)?.[1] : undefined;
   if (!target) throw new Error(`relationship '${rid}' target not found`);
-  const path = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\.\//, '')}`;
+  const path = normalizeWorksheetPartTarget(target);
   if (!parts[path]) throw new Error(`worksheet part '${path}' not found`);
   return path;
+}
+function normalizeWorksheetPartTarget(target: string): string {
+  const raw = target.startsWith('/') ? target.slice(1) : (target.startsWith('xl/') ? target : `xl/${target}`);
+  const parts = raw.split('/');
+  if (parts.some((p) => !p || p === '.' || p === '..')) throw new Error(`invalid worksheet relationship target '${target}'`);
+  if (!/^xl\/worksheets\/[^/]+\.xml$/.test(raw)) throw new Error(`invalid worksheet relationship target '${target}'`);
+  return raw;
 }
 function escapeXml(s: string): string {
   return s
@@ -296,7 +303,10 @@ export function buildXlsxCompiler() {
     }
 
     const out: OoxmlParts = {};
-    for (const [path, xml] of sheetCache) out[path] = encoder.encode(xml);
+    for (const [path, xml] of sheetCache) {
+      const original = parts[path];
+      if (!original || dec.decode(original) !== xml) out[path] = encoder.encode(xml);
+    }
     if (styleBox.ed && styleBox.ed.dirty && stylesPath) out[stylesPath] = encoder.encode(styleBox.ed.toXml());
     return { parts: out, report: { applied, dropped } };
   };

@@ -38,6 +38,17 @@ interface Cell {
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+
+const SAFE_CELL_ATTRS = new Set(['id', 'value', 'style', 'vertex', 'edge', 'parent', 'source', 'target']);
+const SAFE_GEOMETRY_ATTRS = new Set(['x', 'y', 'width', 'height']);
+function assertSafeCellAttr(name: string): void {
+  if (!SAFE_CELL_ATTRS.has(name)) throw new Error('drawio: unsupported mxCell attribute ' + name);
+}
+function assertSafeGeometryAttr(name: string, value: number): void {
+  if (!SAFE_GEOMETRY_ATTRS.has(name)) throw new Error('drawio: unsupported mxGeometry attribute ' + name);
+  if (!Number.isFinite(value)) throw new Error('drawio: invalid mxGeometry ' + name);
+}
+
 const attr = (raw: string, name: string): string | undefined =>
   new RegExp(`\\b${name}="([^"]*)"`).exec(raw)?.[1];
 
@@ -61,6 +72,7 @@ const serializeCells = (cells: Cell[]): string => cells.map((c) => c.raw).join('
 
 /** Set an attribute on a single tag string (up to the first >): replace if present, else insert before > or />. */
 function setTagAttr(tag: string, name: string, val: string): string {
+  assertSafeCellAttr(name);
   const re = new RegExp(`(\\b${name}=")[^"]*(")`);
   if (re.test(tag)) return tag.replace(re, `$1${esc(val)}$2`);
   return tag.replace(/(\s*\/?>)\s*$/, ` ${name}="${esc(val)}"$1`);
@@ -76,7 +88,13 @@ function editOpenTag(raw: string, fn: (tag: string) => string): string {
 function setGeometry(raw: string, box: Record<string, number | undefined>): string {
   return raw.replace(/<mxGeometry\b[^>]*?\/?>/, (g) => {
     let t = g;
-    for (const [k, v] of Object.entries(box)) if (v != null) t = setTagAttr(t, k, String(v));
+    for (const [k, v] of Object.entries(box)) {
+      if (v == null) continue;
+      assertSafeGeometryAttr(k, v);
+      const re = new RegExp(`(\\b${k}=")[^"]*(")`);
+      if (re.test(t)) t = t.replace(re, `$1${String(v)}$2`);
+      else t = t.replace(/(\s*\/?>)\s*$/, ` ${k}="${String(v)}"$1`);
+    }
     return t;
   });
 }
@@ -91,6 +109,7 @@ function buildCell(s: DrawioObjectSpec): string {
   if (s.source != null) a.push(`source="${esc(s.source)}"`);
   if (s.target != null) a.push(`target="${esc(s.target)}"`);
   const g = s.geometry ?? {};
+  for (const [k, v] of Object.entries(g)) if (v != null) assertSafeGeometryAttr(k, v);
   const geo =
     `<mxGeometry` +
     (g.x != null ? ` x="${g.x}"` : '') +

@@ -12,10 +12,11 @@ export async function streamPropose<E>(
   payload: unknown,
   onOpen: () => void,
   onEvent: (e: E) => void | Promise<void>,
+  token = '',
 ): Promise<void> {
   const resp = await fetch(endpoint + '/propose-stream', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(token ? { 'X-OtterPatch-Token': token } : {}) },
     body: JSON.stringify(payload),
   });
   if (!resp.ok || !resp.body) throw new Error('propose failed (' + resp.status + ')');

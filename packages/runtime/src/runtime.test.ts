@@ -104,3 +104,20 @@ test('runtime: commit rejects stale base revision', async () => {
   const cs = { id: 'c', hostId: 'h', baseRev: 0 as DocRev, anchors: {}, origin: { by: 'human' as const }, meta: { intent: 'x' }, edits: [] };
   await assert.rejects(() => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, currentRev: 1 as DocRev }), /stale/);
 });
+
+test('runtime: commit rejects invalid acceptedEditIds', async () => {
+  const rt = new OtterPatchRuntime();
+  const aid = 'a0' as import('@otterpatch/core').AnchorId;
+  const cs = {
+    id: 'c',
+    hostId: 'h',
+    baseRev: 0 as DocRev,
+    anchors: { [aid]: { id: aid, hostId: 'h' as import('@otterpatch/core').HostId, kind: 'grid' as const, ref: null, baseRev: 0 as DocRev, portable: { kind: 'grid' as const, sheet: 'Sheet1', a1: 'B1' } } },
+    origin: { by: 'human' as const },
+    meta: { intent: 'x' },
+    edits: [{ id: 'e1', target: aid, op: { family: 'value' as const, kind: 'setValue' as const, value: 1 } }],
+  };
+  await assert.rejects(() => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, acceptedEditIds: [] }), /must not be empty/);
+  await assert.rejects(() => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, acceptedEditIds: ['missing'] }), /unknown edit id/);
+  await assert.rejects(() => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, acceptedEditIds: ['e1', 'e1'] }), /duplicate edit id/);
+});

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
 import { createModelClient, EXCEL_OPS, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
@@ -8,7 +9,11 @@ import { OtterPatchRuntime } from '@otterpatch/runtime';
 const rt = new OtterPatchRuntime();
 const PORT = Number(process.env.OtterPatch_PORT ?? 4319);
 const HOST = '127.0.0.1';
-const MAX_BODY_BYTES = Number(process.env.OtterPatch_MAX_BODY_BYTES ?? 64 * 1024 * 1024);
+const DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024;
+const parsedMaxBodyBytes = Number(process.env.OtterPatch_MAX_BODY_BYTES ?? DEFAULT_MAX_BODY_BYTES);
+const MAX_BODY_BYTES = Number.isSafeInteger(parsedMaxBodyBytes) && parsedMaxBodyBytes > 0 ? parsedMaxBodyBytes : DEFAULT_MAX_BODY_BYTES;
+const AUTH_TOKEN = String(process.env.OtterPatch_TOKEN || '');
+const generatedToken = AUTH_TOKEN ? '' : randomBytes(24).toString('base64url');
 
 class HttpError extends Error {
   constructor(
@@ -21,7 +26,7 @@ class HttpError extends Error {
 
 function isAllowedOrigin(origin: string | undefined): boolean {
   if (!origin) return true;
-  if (origin === 'null') return true; // packaged Electron file:// renderer
+  if (origin === 'null') return Boolean(AUTH_TOKEN); // packaged Electron file:// renderer must use the local token
   try {
     const u = new URL(origin);
     return (u.protocol === 'http:' || u.protocol === 'https:') && ['localhost', '127.0.0.1', '::1'].includes(u.hostname);
@@ -36,8 +41,21 @@ function cors(req: IncomingMessage, res: ServerResponse): boolean {
   if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-OtterPatch-Token');
   return true;
+}
+
+
+
+function readDocRev(value: unknown, fallback: number): DocRev {
+  const n = Number(value ?? fallback);
+  return (Number.isSafeInteger(n) && n >= 0 ? n : fallback) as DocRev;
+}
+
+function hasValidToken(req: IncomingMessage): boolean {
+  if (!AUTH_TOKEN) return true;
+  const header = req.headers['x-otterpatch-token'];
+  return !Array.isArray(header) && header === AUTH_TOKEN;
 }
 
 function send(req: IncomingMessage, res: ServerResponse, code: number, data: unknown): void {
@@ -103,6 +121,10 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         send(req, res, 200, { ok: true, formats: rt.formats(), skills: BUILTIN_SKILLS.map((s) => s.name), excelOps: EXCEL_OPS });
         return;
       }
+      if (req.method === 'POST' && !hasValidToken(req)) {
+        send(req, res, 401, { error: 'missing or invalid local token' });
+        return;
+      }
       if (req.method === 'POST' && url === '/propose') {
         const a = await readBody(req);
         const model = createModelClient((a.provider as Provider) || 'claude', {
@@ -114,7 +136,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
             hostId: 'serve',
             format: String(a.format),
             intent: String(a.intent ?? ''),
-            baseRev: 0 as DocRev,
+            baseRev: readDocRev(a.baseRev, 0),
             anchors: [],
             context: String(a.context ?? ''),
             ...(a.sheet ? { sheet: a.sheet as { a1: string; values: unknown[][] } } : {}),
@@ -142,7 +164,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               hostId: 'serve',
               format: String(a.format),
               intent: String(a.intent ?? ''),
-              baseRev: 0 as DocRev,
+              baseRev: readDocRev(a.baseRev, 0),
               anchors: [],
               context: String(a.context ?? ''),
               ...(a.sheet ? { sheet: a.sheet as { a1: string; values: unknown[][] } } : {}),
@@ -174,8 +196,9 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
           bytes,
           changeSet: a.changeSet as ChangeSet,
           ...(Array.isArray(a.acceptedEditIds) ? { acceptedEditIds: a.acceptedEditIds as string[] } : {}),
+          currentRev: readDocRev(a.currentRev, Number((a.changeSet as ChangeSet | undefined)?.baseRev ?? 0)),
         });
-        send(req, res, 200, { ok: r.ok, fileBase64: Buffer.from(r.bytes).toString('base64'), touchedParts: r.touchedParts, fidelity: r.fidelity, ...(r.appliedEditIds ? { appliedEditIds: r.appliedEditIds } : {}), ...(r.droppedEdits ? { droppedEdits: r.droppedEdits } : {}) });
+        send(req, res, 200, { ok: r.ok, ...(r.ok ? { fileBase64: Buffer.from(r.bytes).toString('base64') } : { partialFileBase64: Buffer.from(r.bytes).toString('base64') }), touchedParts: r.touchedParts, fidelity: r.fidelity, ...(r.appliedEditIds ? { appliedEditIds: r.appliedEditIds } : {}), ...(r.droppedEdits ? { droppedEdits: r.droppedEdits } : {}) });
         return;
       }
       send(req, res, 404, { error: 'not found' });
@@ -190,6 +213,7 @@ server.headersTimeout = 10_000;
 
 server.listen(PORT, HOST, () => {
   process.stderr.write(`\n[otterpatch] serve on http://${HOST}:${PORT}\n`);
+  process.stderr.write(AUTH_TOKEN ? '[otterpatch] POST auth enabled via X-OtterPatch-Token.\n' : '[otterpatch] POST auth disabled; set OtterPatch_TOKEN to require X-OtterPatch-Token. Suggested token: ' + generatedToken + '\n');
   process.stderr.write(`[otterpatch] Excel ops (${EXCEL_OPS.length}): ${EXCEL_OPS.join(', ')}\n`);
   process.stderr.write('[otterpatch] If expected Excel ops are missing, restart npm run serve.\n\n');
 });

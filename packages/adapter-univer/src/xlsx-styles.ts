@@ -34,7 +34,11 @@ const DEFAULT_CELL_XF = '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfI
 
 /** #abc / #aabbcc → AARRGGBB (defaults to opaque FF alpha). */
 export function toArgb(color: string): string {
-  let h = color.replace(/^#/, '').trim();
+  const raw = color.trim();
+  if (!/^#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(raw)) {
+    throw new Error('invalid ARGB color: ' + color);
+  }
+  let h = raw.replace(/^#/, '');
   if (h.length === 3) h = h.split('').map((c) => c + c).join('');
   if (h.length === 6) h = 'FF' + h;
   return h.toUpperCase();

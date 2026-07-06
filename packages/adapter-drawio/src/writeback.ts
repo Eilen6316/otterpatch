@@ -49,6 +49,7 @@ function mapOp(anchor: LogicalAnchor, op: EditOp): DrawioEdit {
       case 'moveObject':
         return { cellId, op: { kind: 'move', box: { x: op.box.left, y: op.box.top, width: op.box.width, height: op.box.height } } };
       case 'addObject': {
+        if (!op.payload || typeof op.payload !== 'object') throw new Error('drawio: addObject payload must be an object');
         const spec = { ...(op.payload as DrawioObjectSpec) };
         if (spec.parent == null && cellId) spec.parent = cellId;
         return { cellId, op: { kind: 'add', spec } };
@@ -84,26 +85,29 @@ export class DrawioSurgicalWriteback implements WritebackBackend {
 
     // Group edits by diagram index
     const byDiagram = new Map<number, Array<{ editId: EditId; edit: DrawioEdit }>>();
+    const dropped: Array<{ editId: EditId; reason: string }> = [];
     for (const e of cs.edits) {
-      const anchor = cs.anchors[e.target];
-      if (!anchor || anchor.portable.kind !== 'object') {
-        throw new Error('DrawioSurgicalWriteback: edit anchor must be a drawio object locator');
+      try {
+        const anchor = cs.anchors[e.target];
+        if (!anchor || anchor.portable.kind !== 'object') {
+          throw new Error('DrawioSurgicalWriteback: edit anchor must be a drawio object locator');
+        }
+        const di = anchor.portable.slide;
+        let list = byDiagram.get(di);
+        if (!list) {
+          list = [];
+          byDiagram.set(di, list);
+        }
+        list.push({ editId: e.id, edit: mapOp(anchor, e.op) });
+      } catch (err) {
+        dropped.push({ editId: e.id, reason: err instanceof Error ? err.message : String(err) });
       }
-      const di = anchor.portable.slide;
-      let list = byDiagram.get(di);
-      if (!list) {
-        list = [];
-        byDiagram.set(di, list);
-      }
-      list.push({ editId: e.id, edit: mapOp(anchor, e.op) });
     }
-
     // Reassemble: pass through gap bytes and untouched diagrams verbatim; rewrite only targeted diagrams
     let out = '';
     let pos = 0;
     const touched: string[] = [];
     const applied: EditId[] = [];
-    const dropped: Array<{ editId: EditId; reason: string }> = [];
     matches.forEach((m, idx) => {
       out += xml.slice(pos, m.index);
       const entries = byDiagram.get(idx);
@@ -113,9 +117,14 @@ export class DrawioSurgicalWriteback implements WritebackBackend {
         if (!inner.includes('<mxGraphModel')) {
           throw new Error('DrawioSurgicalWriteback: 压缩 diagram 暂不支持(请设 compressed=false)');
         }
-        out += `<diagram${m[1]!}>${applyEditsToModel(inner, edits)}</diagram>`;
-        applied.push(...entries.map((x) => x.editId));
-        touched.push(attrOf(m[1]!, 'id') ?? `#${idx}`);
+        try {
+          out += `<diagram${m[1]!}>${applyEditsToModel(inner, edits)}</diagram>`;
+          applied.push(...entries.map((x) => x.editId));
+          touched.push(attrOf(m[1]!, 'id') ?? `#${idx}`);
+        } catch (err) {
+          out += m[0];
+          dropped.push(...entries.map((x) => ({ editId: x.editId, reason: err instanceof Error ? err.message : String(err) })));
+        }
       } else {
         out += m[0];
       }

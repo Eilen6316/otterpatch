@@ -22,8 +22,12 @@ jobs:
         run: npm run typecheck
       - name: Test (all workspaces)
         run: npm test
-      - name: Build cockpit
-        run: npm run build -w apps/desktop
+      - name: Real writeback regression
+        run: npm run test:real-writeback
+      - name: Build all workspaces
+        run: npm run build
+      - name: Serve security regression
+        run: npm run test:serve-security
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: Headless e2e (mocked model, no key) — the behavior contract

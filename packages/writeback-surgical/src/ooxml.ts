@@ -8,6 +8,11 @@ import { unzipSync, zipSync, type Zippable } from 'fflate';
 
 export type OoxmlParts = Record<string, Uint8Array>;
 
+function assertSafePartPath(path: string): void {
+  if (path.startsWith('/') || path.startsWith('\\') || /^[A-Za-z]:/.test(path)) throw new Error('unsafe OOXML part path: ' + path);
+  const parts = path.replace(/\\/g, '/').split('/');
+  if (parts.some((p) => !p || p === '.' || p === '..')) throw new Error('unsafe OOXML part path: ' + path);
+}
 /** Read all parts of a .docx/.xlsx (zip) as path → bytes. */
 export function readOoxmlParts(bytes: Uint8Array): OoxmlParts {
   return unzipSync(bytes);
@@ -27,6 +32,7 @@ export function repackOoxml(originalBytes: Uint8Array, patches: OoxmlParts): Uin
     out[path] = patched ?? data; // patched → new content; otherwise → original bytes
   }
   for (const [path, data] of Object.entries(patches)) {
+    assertSafePartPath(path);
     if (!(path in parts)) out[path] = data; // newly added parts
   }
   return zipSync(out);

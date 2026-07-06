@@ -71,7 +71,12 @@ export class Agent {
   async respond(req: ProposeRequest, opts?: RespondOptions): Promise<AgentResponse> {
     const d = this.dialectFor(req);
     if (this.model.respond) return this.model.respond(req, d, this.withSkillTools(opts));
-    return { kind: 'changeset', changeSet: await this.model.proposeChangeSet(req, d) };
+    const cs = await this.model.proposeChangeSet(req, d);
+    if (opts?.verify) {
+      const v = await opts.verify(cs);
+      if (!v.ok) throw new Error(v.report || 'proposal verification failed');
+    }
+    return { kind: 'changeset', changeSet: cs };
   }
 
   /** Streaming routing: pass through if respondStream exists; otherwise fall back to a one-shot result and emit delta/done events. */
@@ -108,7 +113,8 @@ export class Agent {
       const cs = await this.model.proposeChangeSet(r, d);
       if (!validator) return cs;
       const v = validator(cs);
-      if (v.ok || attempt >= maxRetries) return cs;
+      if (v.ok) return cs;
+      if (attempt >= maxRetries) throw new Error('proposal validation failed: ' + v.errors.join('; '));
       errors = v.errors;
     }
   }

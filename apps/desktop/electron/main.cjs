@@ -8,13 +8,17 @@ const { app, BrowserWindow, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
+const { randomBytes } = require('node:crypto');
 
 const isDev = !!process.env.OTTERPATCH_DEV;
+const appDistDir = path.resolve(__dirname, '..', 'dist');
+const serveToken = process.env.OtterPatch_TOKEN || randomBytes(24).toString('base64url');
+process.env.OtterPatch_TOKEN = serveToken;
 
 function isSafeExternalUrl(rawUrl) {
   try {
     const u = new URL(rawUrl);
-    return u.protocol === 'https:' || u.protocol === 'http:';
+    return u.protocol === 'https:' || (u.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(u.hostname));
   } catch {
     return false;
   }
@@ -41,7 +45,7 @@ function startServe() {
     const servePath = candidates.find((p) => p && fs.existsSync(p));
     if (!servePath) return;
     serveProc = spawn(process.execPath, [servePath], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', OtterPatch_TOKEN: serveToken },
       stdio: 'ignore',
       windowsHide: true,
     });

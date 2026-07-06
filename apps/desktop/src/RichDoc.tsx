@@ -168,6 +168,42 @@ interface CmdState { bold: boolean; italic: boolean; underline: boolean; strike:
 const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] ?? c));
 /** CSS 属性选择器安全转义(domId 里可能出现任意字符)。 */
 const cssq = (s: string): string => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"'));
+
+const SAFE_HTML_TAGS = new Set([
+  'A', 'B', 'BR', 'BLOCKQUOTE', 'CAPTION', 'CIRCLE', 'CODE', 'COL', 'COLGROUP', 'DD', 'DEL', 'DIV', 'DL', 'DT', 'EM', 'FIGCAPTION', 'FIGURE', 'H1', 'H2', 'H3', 'H4', 'HR', 'I', 'IMG', 'INS', 'LI', 'LINE', 'NAV', 'OL', 'P', 'PATH', 'POLYGON', 'POLYLINE', 'PRE', 'RECT', 'RT', 'RUBY', 'SECTION', 'SMALL', 'SPAN', 'STRONG', 'SUB', 'SUP', 'SVG', 'TABLE', 'TBODY', 'TD', 'TEXT', 'TFOOT', 'TH', 'THEAD', 'TR', 'U', 'UL',
+]);
+const SAFE_URI_ATTRS = new Set(['href', 'src']);
+const SAFE_HTML_ATTRS = new Set([
+  'alt', 'class', 'colspan', 'contenteditable', 'cx', 'cy', 'd', 'data-cid', 'data-kind', 'data-label', 'download', 'fill', 'height', 'href', 'id', 'r', 'rowspan', 'rx', 'ry', 'src', 'stroke', 'stroke-width', 'style', 'target', 'title', 'viewbox', 'width', 'x', 'x1', 'x2', 'y', 'y1', 'y2',
+]);
+function safeHtmlUrl(value: string): boolean {
+  const v = value.trim().toLowerCase();
+  return v === '' || v.startsWith('#') || v.startsWith('data:image/') || v.startsWith('data:application/') || v.startsWith('blob:') || v.startsWith('http://localhost') || v.startsWith('http://127.0.0.1') || v.startsWith('https://');
+}
+function sanitizeHtml(html: string): string {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const walk = (node: Node): void => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === Node.COMMENT_NODE) { child.remove(); continue; }
+      if (!(child instanceof Element)) { walk(child); continue; }
+      if (!SAFE_HTML_TAGS.has(child.tagName)) {
+        child.replaceWith(...Array.from(child.childNodes));
+        continue;
+      }
+      for (const attr of Array.from(child.attributes)) {
+        const name = attr.name.toLowerCase();
+        const value = attr.value;
+        if (name.startsWith('on') || !SAFE_HTML_ATTRS.has(name)) { child.removeAttribute(attr.name); continue; }
+        if (SAFE_URI_ATTRS.has(name) && !safeHtmlUrl(value)) { child.removeAttribute(attr.name); continue; }
+        if (name === 'style' && /url\s*\(|expression\s*\(|javascript:/i.test(value)) child.removeAttribute(attr.name);
+      }
+      walk(child);
+    }
+  };
+  walk(template.content);
+  return template.innerHTML;
+}
 /** 最近块祖先(跨块命中要拒绝:deleteContents 会把两段搅成一段)。 */
 function blockOf(n: Node, root: HTMLElement): Node | null {
   let e: Node | null = n;
@@ -350,7 +386,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (edRef.current) edRef.current.innerHTML = saved && saved.trim() ? saved : DEMO_HTML;
+    if (edRef.current) edRef.current.innerHTML = sanitizeHtml(saved && saved.trim() ? saved : DEMO_HTML);
     { const nx = edRef.current?.querySelectorAll('[data-cid]').length ?? 0; setChgCount(nx); setHasDiff(nx > 0); }
     try { document.execCommand('styleWithCSS', false, 'true'); } catch { /* 老浏览器忽略 */ }
     const onSel = (): void => {
@@ -461,7 +497,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       const el = edRef.current; if (!el) return;
       const c = el.cloneNode(true) as HTMLElement; // 存洗净克隆:瞬态类(到达脉冲/高亮/联动)不进持久层,重开不复播
       c.querySelectorAll('.is-new, .is-active, .is-linked, .rd-flash, .rd-settle').forEach((x) => x.classList.remove('is-new', 'is-active', 'is-linked', 'rd-flash', 'rd-settle'));
-      localStorage.setItem(STORAGE_KEY, c.innerHTML);
+      localStorage.setItem(STORAGE_KEY, sanitizeHtml(c.innerHTML));
     } catch { /* 配额满忽略 */ }
   };
   const notify = (m: string): void => setToast(m);
@@ -830,7 +866,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     },
     loadHTML: (html) => { // 真实 docx 导入:整篇替换,修订/撤销状态清零
       const root = edRef.current; if (!root) return;
-      root.innerHTML = html;
+      root.innerHTML = sanitizeHtml(html);
       undoMap.current.clear();
       setDocChanges([]);
       refreshHasDiff();
@@ -842,7 +878,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   // ── 基础命令(execCommand + CSS;先恢复选区) ──
   const exec = (cmd: string, val?: string): void => { restoreSel(); document.execCommand(cmd, false, val); persist(); };
   const withSel = (fn: () => void): void => { restoreSel(); fn(); persist(); };
-  const insertHTML = (html: string): void => { restoreSel(); document.execCommand('insertHTML', false, html); persist(); };
+  const insertHTML = (html: string): void => { restoreSel(); document.execCommand('insertHTML', false, sanitizeHtml(html)); persist(); };
   const insertText = (txt: string): void => { restoreSel(); document.execCommand('insertText', false, txt); persist(); };
   const setFont = (f: string): void => { if (f) exec('fontName', f); };
 
@@ -964,7 +1000,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     const reader = new FileReader();
     reader.onload = (): void => {
       if (f.type.startsWith('image/')) insertHTML(`<img src="${String(reader.result)}" alt="" />`);
-      else insertHTML(`<a class="rd-object" href="${String(reader.result)}" download="${f.name}">📎 ${f.name}</a>`);
+      else insertHTML(`<a class="rd-object" href="${String(reader.result)}" download="${esc(f.name)}">${esc(f.name)}</a>`);
     };
     reader.readAsDataURL(f);
   };
@@ -1054,7 +1090,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
           const blob = await it.getType('text/html');
           let html = await blob.text();
           if (mode === 'merge') html = html.replace(/style="[^"]*"/g, '').replace(/<(font|span)[^>]*>/gi, '<$1>');
-          document.execCommand('insertHTML', false, html);
+          document.execCommand('insertHTML', false, sanitizeHtml(html));
           persist();
           return;
         }

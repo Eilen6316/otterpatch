@@ -16,6 +16,8 @@
     "build": "npm run build --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
     "test:ui": "node test/ui-smoke.mjs",
+    "test:real-writeback": "node test/real-writeback-regression.mjs",
+    "test:serve-security": "node test/serve-security.mjs",
     "test:agent": "node test/excel-agent.mjs",
     "smoke": "node scripts/real-smoke.mjs",
     "eval:excel": "node test/eval-excel.mjs",

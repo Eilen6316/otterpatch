@@ -158,7 +158,7 @@ export class OtterPatchRuntime {
       throw new Error('changeset is stale: baseRev ' + input.changeSet.baseRev + ' != currentRev ' + input.currentRev);
     }
     const cs: ChangeSet = input.acceptedEditIds
-      ? { ...input.changeSet, edits: input.changeSet.edits.filter((e) => input.acceptedEditIds!.includes(e.id)) }
+      ? { ...input.changeSet, edits: filterAcceptedEdits(input.changeSet, input.acceptedEditIds) }
       : input.changeSet;
     this.emit({ type: 'commit:start', format: input.format, strategy: backend.strategy, editCount: cs.edits.length });
     try {
@@ -173,6 +173,18 @@ export class OtterPatchRuntime {
       throw err;
     }
   }
+}
+
+function filterAcceptedEdits(cs: ChangeSet, acceptedEditIds: string[]): ChangeSet['edits'] {
+  if (!acceptedEditIds.length) throw new Error('acceptedEditIds must not be empty');
+  const editIds = new Set(cs.edits.map((e) => e.id));
+  const seen = new Set<string>();
+  for (const id of acceptedEditIds) {
+    if (!editIds.has(id)) throw new Error('acceptedEditIds contains unknown edit id: ' + id);
+    if (seen.has(id)) throw new Error('acceptedEditIds contains duplicate edit id: ' + id);
+    seen.add(id);
+  }
+  return cs.edits.filter((e) => seen.has(e.id));
 }
 
 function errMsg(err: unknown): string {

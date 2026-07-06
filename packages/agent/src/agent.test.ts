@@ -105,20 +105,33 @@ test('Agent reask: 校验失败 → 同回合重试修正', async () => {
   assert.equal(cs.edits.length, 1);
 });
 
-test('Agent reask: 用尽重试返回最后一次(调用 1+maxRetries 次)', async () => {
+test('Agent reask: exhausted retries fail closed', async () => {
   let n = 0;
   const mock = new MockModelClient(() => {
     n++;
     return { plan: 'x', edits: [] };
   });
-  const cs = await new Agent(mock, undefined, undefined, undefined, {
-    validator: () => ({ ok: false, errors: ['always fail'] }),
-    maxRetries: 2,
-  }).propose({ hostId: 'h1', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' });
+  await assert.rejects(
+    () => new Agent(mock, undefined, undefined, undefined, {
+      validator: () => ({ ok: false, errors: ['always fail'] }),
+      maxRetries: 2,
+    }).propose({ hostId: 'h1', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' }),
+    /proposal validation failed: always fail/,
+  );
   assert.equal(n, 3); // 1 + 2 retries
-  assert.equal(cs.edits.length, 0); // returns the last (invalid) result; downstream decides
 });
 
+test('Agent respond fallback runs verifier and fails closed', async () => {
+  const baseMock = new MockModelClient(() => ({ plan: 'x', edits: [] }));
+  const mock = { proposeChangeSet: baseMock.proposeChangeSet.bind(baseMock) };
+  await assert.rejects(
+    () => new Agent(mock).respond(
+      { hostId: 'h1', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' },
+      { verify: async () => ({ ok: false, report: 'forced verifier failure' }) },
+    ),
+    /forced verifier failure/,
+  );
+});
 test('createModelClient 覆盖 8 家厂商(9 个 provider key)', () => {
   const providers: Provider[] = ['claude', 'openai', 'chatgpt', 'deepseek', 'glm', 'kimi', 'doubao', 'minimax', 'gemini'];
   for (const p of providers) {

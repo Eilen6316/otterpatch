@@ -461,6 +461,28 @@ const FMT_ALIGN: Record<string, 'left' | 'center' | 'right'> = { 左对齐: 'lef
 interface AgentStyle { bold?: boolean; italic?: boolean; color?: string; bgColor?: string; align?: string; numberFormat?: string }
 interface AgentDiffItem { editId: string; ref: string; kind?: string; badge: string; label: string; after?: string; style?: AgentStyle }
 interface AgentDiff { changeSetId: string; hostId: string; intent: string; items: AgentDiffItem[] }
+function localServeToken(): string {
+  try {
+    const w = window as unknown as { otterpatch?: { serveToken?: string } };
+    return String(w.otterpatch?.serveToken || localStorage.getItem('oa.serveToken') || '');
+  } catch {
+    return '';
+  }
+}
+
+function normalizeLocalEndpoint(raw: string): string | null {
+  try {
+    const u = new URL(raw.trim());
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    if (!['http:', 'https:'].includes(u.protocol)) return null;
+    if (!['localhost', '127.0.0.1', '::1'].includes(host)) return null;
+    u.hash = '';
+    u.search = '';
+    return u.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
+}
 /** Agent 反向澄清:像 Claude Code 那样给引导选择表(2-4 项)+ 允许自填。 */
 // ClarifyOption / ClarifyQuestion moved to ./ThreadCards.tsx.
 
@@ -723,7 +745,12 @@ export function App() {
           : `\n[当前选区·用户此刻圈选了这段(${selDesc})]:"${wordSel.text}"\n若指令含"这段/这句/这里/选中的/选中/它",优先针对它;quote 用这段真实原文定位。`) : '\n[未圈选文字]:请基于整篇文档理解。')
       : selectionContext();
     setSendErr(null);
-    const ep = server.trim().replace(/\/$/, '');
+    const ep = normalizeLocalEndpoint(server);
+    if (server.trim() && !ep) {
+      setCfgOpen(true);
+      setSendErr('Agent 服务地址必须是本机地址: http://localhost、http://127.0.0.1 或 http://[::1]');
+      return;
+    }
     if (ep && apiKey) {
       sendingRef.current = true;
       setBusy(true);
@@ -742,7 +769,7 @@ export function App() {
         type StreamEvt = { type: string; delta?: string; name?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; questions?: ClarifyQuestion[]; message?: string };
         await streamPropose<StreamEvt>(
           ep,
-          { format: fmt, intent: theIntent, context: ctx, provider, model, apiKey, ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildHistory(thread) } : {}) },
+          { format: fmt, intent: theIntent, context: ctx, baseRev: 0, provider, model, apiKey, ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildHistory(thread) } : {}) },
           () => {
             if (theIntent.trim()) setRecent((rr) => [{ t: theIntent.trim(), time: t('刚刚') }, ...rr.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
             setSent(true);
@@ -842,6 +869,7 @@ export function App() {
               }
             }
           },
+          localServeToken(),
         );
       } catch (e) {
         const m = e instanceof Error ? e.message : String(e);
@@ -1381,8 +1409,8 @@ export function App() {
     try {
       const r = await fetch(ep + '/commit', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ format: fmt, fileBase64: fileB64, changeSet: realCs, acceptedEditIds: ids }),
+        headers: { 'Content-Type': 'application/json', ...(localServeToken() ? { 'X-OtterPatch-Token': localServeToken() } : {}) },
+        body: JSON.stringify({ format: fmt, fileBase64: fileB64, changeSet: realCs, acceptedEditIds: ids, currentRev: (realCs as { baseRev?: number } | null)?.baseRev ?? 0 }),
       });
       const data = (await r.json()) as { ok?: boolean; fileBase64?: string; touchedParts?: string[]; fidelity?: { score: number }; appliedEditIds?: string[]; droppedEdits?: Array<{ editId: string; reason: string }>; error?: string };
       if (!r.ok) throw new Error(data.error ?? 'commit failed');
