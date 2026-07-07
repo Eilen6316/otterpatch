@@ -107,7 +107,9 @@ export class OpenAICompatModelClient implements ModelClient {
     if (!call || call.type !== 'function') {
       throw new Error(`OpenAICompatModelClient: model did not call ${dialect.toolName}`);
     }
-    return dialect.buildChangeSet(req, salvageProposalArgs(call.function.arguments));
+    const parsed = salvageProposalArgs(call.function.arguments);
+    if (parsed.truncated) throw new Error(TRUNCATED_FALLBACK);
+    return dialect.buildChangeSet(req, parsed);
   }
 
   /** Assemble messages (system + multi-turn history + current instruction) and the tool menu (edit-proposal / answer_user / read-only data / host extras). */
@@ -155,6 +157,7 @@ export class OpenAICompatModelClient implements ModelClient {
         const parsed = salvageProposalArgs(propose.function.arguments);
         if (parsed.truncated && !parsed.edits?.length && !parsed.ops?.length) return { kind: 'answer', text: TRUNCATED_FALLBACK };
         // 部分截断:抢救出了一截(如 18 条只剩 3 条,值还可能熔接)——别把残图当成品交付,回炉让模型分批重提
+        if (parsed.truncated && repairsLeft <= 0) return { kind: 'answer', text: TRUNCATED_FALLBACK };
         if (parsed.truncated && repairsLeft > 0) {
           repairsLeft--;
           const got = (parsed.ops?.length ?? parsed.edits?.length ?? 0);
@@ -234,6 +237,11 @@ export class OpenAICompatModelClient implements ModelClient {
           return result;
         }
         // 部分截断 → 回炉分批(与非流式路径同语义),别把残图当成品交付
+        if (parsed.truncated && repairsLeft <= 0) {
+          const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK };
+          onEvent({ type: 'done', result });
+          return result;
+        }
         if (parsed.truncated && repairsLeft > 0) {
           repairsLeft--;
           onEvent({ type: 'tool', name: 'retry:truncated' });

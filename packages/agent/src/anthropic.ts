@@ -187,6 +187,13 @@ export class AnthropicModelClient implements ModelClient {
       if (propose) {
         const parsed = salvageProposalArgs(propose.json || '{}');
         if (parsed.truncated && !parsed.edits?.length && !parsed.ops?.length) { const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK }; onEvent({ type: 'done', result }); return result; }
+        if (parsed.truncated && repairsLeft <= 0) { const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK }; onEvent({ type: 'done', result }); return result; }
+        if (parsed.truncated && repairsLeft > 0) {
+          repairsLeft--;
+          messages.push({ role: 'assistant', content: assistantBlocks(text, [propose]) });
+          messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: propose.id, content: TRUNCATED_FALLBACK }] });
+          continue;
+        }
         const cs = dialect.buildChangeSet(req, parsed);
         if (opts?.verify) {
           onEvent({ type: 'tool', name: 'verify' });

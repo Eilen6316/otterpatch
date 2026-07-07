@@ -15,6 +15,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
+import { assertChangeSet } from '@otterpatch/core';
 import { createModelClient, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
 import { OtterPatchRuntime } from '@otterpatch/runtime';
@@ -86,7 +87,9 @@ server.registerTool(
   { description: 'Render a reviewable diff for a ChangeSet (passed as JSON string).', inputSchema: { changeSet: z.string().describe('ChangeSet JSON') } },
   async (a) => {
     try {
-      return ok(rt.diff(JSON.parse(a.changeSet) as ChangeSet));
+      const changeSet = JSON.parse(a.changeSet) as ChangeSet;
+      assertChangeSet(changeSet);
+      return ok(rt.diff(changeSet));
     } catch (e) {
       return fail('diff failed: ' + emsg(e));
     }

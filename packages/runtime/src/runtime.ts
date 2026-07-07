@@ -11,6 +11,7 @@
 import { Agent, buildDocVerifier, buildDrawioVerifier } from '@otterpatch/agent';
 import type { AgentResponse, ChangeSetVerifier, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from '@otterpatch/agent';
 import type { ChangeSet, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
+import { assertChangeSet } from '@otterpatch/core';
 import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
 import { buildXlsxCompiler, buildGridVerifier } from '@otterpatch/adapter-univer';
 import { DrawioSurgicalWriteback } from '@otterpatch/adapter-drawio';
@@ -144,6 +145,7 @@ export class OtterPatchRuntime {
 
   /** ChangeSet → reviewable diff. */
   diff(cs: ChangeSet): OtterPatchDiff {
+    assertChangeSet(cs);
     const d = buildDiff(cs);
     this.emit({ type: 'diff:done', diff: d });
     return d;
@@ -151,6 +153,7 @@ export class OtterPatchRuntime {
 
   /** Accepted subset → surgical writeback → new bytes + fidelity report. */
   async commit(input: CommitInput): Promise<WritebackResult> {
+    assertChangeSet(input.changeSet);
     const make = this.backends[input.format];
     if (!make) throw new Error(`OtterPatchRuntime: no writeback backend for format "${input.format}"`);
     const backend = make();

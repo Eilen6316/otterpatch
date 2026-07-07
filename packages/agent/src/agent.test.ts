@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { DocRev } from '@otterpatch/core';
-import { Agent, ConventionStack, MockModelClient, conventionFromMarkdown, createModelClient, normalizeMessages, PROVIDERS, type Provider } from './index.js';
+import { Agent, ConventionStack, MockModelClient, OpenAICompatModelClient, conventionFromMarkdown, createModelClient, excelDialect, normalizeMessages, PROVIDERS, type Provider } from './index.js';
 import { defaultLibrary } from '@otterpatch/skills';
 
 test('Agent excel: 意图 + Mock → grid setValue ChangeSet', async () => {
@@ -172,4 +172,22 @@ test('normalizeMessages: system 之后若以 assistant 起头则丢弃(provider 
     { role: 'user', content: '当前指令' },
   ]);
   assert.deepEqual(out.map((m) => m.role), ['system', 'user']);
+});
+
+test('OpenAI forced proposal rejects truncated tool args', async () => {
+  const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'test-model' }) as unknown as {
+    client: { chat: { completions: { create: () => Promise<unknown> } } };
+    proposeChangeSet: OpenAICompatModelClient['proposeChangeSet'];
+  };
+  client.client = {
+    chat: {
+      completions: {
+        create: async () => ({ choices: [{ message: { tool_calls: [{ type: 'function', function: { arguments: '{"plan":"x","edits":[{"cell":"A1","op":"setValue","value":1}' } }] } }] }),
+      },
+    },
+  };
+  await assert.rejects(
+    () => client.proposeChangeSet({ hostId: 'h1', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' }, excelDialect),
+    /truncated|截断|输出/i,
+  );
 });

@@ -14,6 +14,7 @@ import type { RichDocHandle, DocFmt, WordSel } from './RichDoc.js';
 import { docxToHtml } from './docximport.js';
 import { akey, BATCH_RX, AUTO_BATCH_CAP } from './review-shared.js';
 import { streamPropose } from './agent-client.js';
+import { commitWriteback } from './commit-client.js';
 import { ReviewBox } from './ReviewBox.js';
 import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
@@ -45,7 +46,7 @@ export type Turn =
   | { role: 'user'; text: string }
   | { role: 'assistant'; kind: 'answer'; text: string; reasoning?: string; streaming?: boolean }
   | { role: 'assistant'; kind: 'clarify'; questions: ClarifyQuestion[]; reasoning?: string; answered?: boolean; answerText?: string }
-  | { role: 'assistant'; kind: 'diff'; diff: AgentDiff; ops: GridOp[]; board?: BoardPatch; word?: WordEdit[]; text?: string; reasoning?: string; reverted?: boolean; committed?: boolean; committedCount?: number };
+  | { role: 'assistant'; kind: 'diff'; format: Fmt; changeSet?: unknown; diff: AgentDiff; ops: GridOp[]; board?: BoardPatch; word?: WordEdit[]; text?: string; reasoning?: string; reverted?: boolean; committed?: boolean; committedCount?: number };
 /** The diff-review turn shape consumed by ReviewBox. */
 export type DiffTurn = Extract<Turn, { kind: 'diff' }>;
 
@@ -828,7 +829,7 @@ export function App() {
                     board = { byEdit: { ...b.byEdit, ...mut.byEdit }, objs: b.objs, muts: mut.muts };
                     if (b.nodes.length || b.edges.length) void playBoard(b.nodes, b.edges); // 兜底:逐个补图
                   }
-                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], board, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, changeSet: cs, diff, ops: [], board, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                 } else if (fmt === 'word') {
                   // Word:从 changeSet 取每条 edit —— 文本改写(replaceText)或格式(setStyle),按 diff 顺序建审阅项
                   const wcs = cs as { edits?: Array<{ id: string; target: string; op?: { kind?: string; text?: string; style?: DocFmt; props?: { imgAction?: 'remove' | 'resize'; width?: number } } }>; anchors?: Record<string, { portable?: { quote?: { text?: string }; path?: number[] } }> } | null;
@@ -848,7 +849,7 @@ export function App() {
                   // 落地顺序:先非删段(段号锚不受影响),删段按段号【降序】——升序会让先删的段把后续段号顶前,删错段(实测会误删含图段)
                   const applyOrder = [...wordEdits.filter((w) => !w.remove), ...wordEdits.filter((w) => w.remove).sort((a, b) => (b.blockIdx ?? -1) - (a.blockIdx ?? -1))];
                   for (const w of applyOrder) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w));
-                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops: [], word: wordEdits, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, changeSet: cs, diff, ops: [], word: wordEdits, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                   setReviewIdx(0);
                   if (wordEdits[0]) wordRef.current?.highlight(wordEdits[0].domId); // 审阅期定位第一条
                 } else {
@@ -857,7 +858,7 @@ export function App() {
                   const api = univerRef.current; // 采集整格改前状态(值/公式/填充/字色/加粗),供 git-diff 展示 + "撤销/拒绝"精确还原
                   if (api) for (const op of ops) { op.before = api.getValue(op.a1); op.beforeState = api.getCellState(op.a1); }
                   setExcelDiff('final'); // 新提案到达,速览条回到"改后"基准
-                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', diff, ops, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, changeSet: cs, diff, ops, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                   if (ops.length) void playOps(ops); // 边画边改
                 }
               } else if (e.kind === 'clarify' && e.questions?.length) {
@@ -1236,16 +1237,16 @@ export function App() {
   /** 高亮当前审阅的改动:Excel 聚焦该格、drawio 高亮该对象。 */
   const highlightItem = (turn: Extract<Turn, { kind: 'diff' }>, item: AgentDiffItem | undefined): void => {
     if (!item) return;
-    if (isExcel) univerRef.current?.focus(item.ref.replace(/^.*!/, ''));
-    else if (fmt === 'drawio') { const id = turn.board?.byEdit[item.editId]; if (id) boardRef.current?.highlight(id); }
-    else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === item.editId); if (w) wordRef.current?.highlight(w.domId); } // 定位当前条
+    if (turn.format === 'excel') univerRef.current?.focus(item.ref.replace(/^.*!/, ''));
+    else if (turn.format === 'drawio') { const id = turn.board?.byEdit[item.editId]; if (id) boardRef.current?.highlight(id); }
+    else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === item.editId); if (w) wordRef.current?.highlight(w.domId); } // 定位当前条
   };
   /** 接受率飞轮:按 格式×改动类型 统计逐条处置,localStorage 持久化;接受率最低的类别就是 skills/prompt 下一轮的靶子。
    *  控制台 window.__otterTelemetry() 可随时查看汇总。 */
-  const telemetry = (verb: 'accept' | 'reject', kind: string): void => {
+  const telemetry = (format: Fmt, verb: 'accept' | 'reject', kind: string): void => {
     try {
       const t = JSON.parse(localStorage.getItem('oa.telemetry') ?? '{}') as Record<string, Record<string, { accept: number; reject: number }>>;
-      const f = (t[fmt] ??= {});
+      const f = (t[format] ??= {});
       const k = (f[kind] ??= { accept: 0, reject: 0 });
       k[verb]++;
       localStorage.setItem('oa.telemetry', JSON.stringify(t));
@@ -1253,23 +1254,24 @@ export function App() {
   };
   /** 一条审阅项的改动类型(遥测口径):word=text/style,excel=value/style/structure,drawio=object。 */
   const itemKind = (turn: Extract<Turn, { kind: 'diff' }>, it: AgentDiffItem): string => {
-    if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); return w?.style || it.style ? 'style' : 'text'; }
-    if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (!op) return 'structure'; return op.value !== undefined ? 'value' : 'style'; }
-    if (fmt === 'drawio') return 'object';
+    if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); return w?.style || it.style ? 'style' : 'text'; }
+    if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (!op) return 'structure'; return op.value !== undefined ? 'value' : 'style'; }
+    if (turn.format === 'drawio') return 'object';
     return 'other';
   };
   const acceptItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number, silent = false): void => {
+    if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
     const it = turn.diff.items[idx]; if (!it) return;
     const k = akey(turn.diff.changeSetId, it.editId);
     if (!accepted.has(k)) { // 之前被拒 → 重新落回工作区(applyEdit 幂等,重复接受不叠标记)
-      if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
-      else if (fmt === 'drawio') { const m = turn.board?.muts?.[it.editId]; if (m) { if (m.next) boardRef.current?.restoreObject(m.next); else { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); } } else { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); } }
-      else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w)); }
+      if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
+      else if (turn.format === 'drawio') { const m = turn.board?.muts?.[it.editId]; if (m) { if (m.next) boardRef.current?.restoreObject(m.next); else { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); } } else { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); } }
+      else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w)); }
       toggleAccept(k, true);
     }
-    if (isExcel && excelDiff === 'mark') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) univerRef.current?.setBackground(op.a1, realBg(op, true)); } // 已处置的格退出着色 → 网格上直观看到审阅进度
-    if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.markResolved(w.domId, 'accepted'); } // 物理定稿:删 del、ins 落地
-    telemetry('accept', itemKind(turn, it));
+    if (turn.format === 'excel' && excelDiff === 'mark') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) univerRef.current?.setBackground(op.a1, realBg(op, true)); } // 已处置的格退出着色 → 网格上直观看到审阅进度
+    if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.markResolved(w.domId, 'accepted'); } // 物理定稿:删 del、ins 落地
+    telemetry(turn.format, 'accept', itemKind(turn, it));
     if (!silent) setReviewIdx(idx + 1);
   };
   /** 行内卡片 ✓/✕ → 复用 rail 的接受/拒绝(按 domId 找回条目);老回合的处置不动当前回合的审阅游标。 */
@@ -1287,31 +1289,33 @@ export function App() {
     }
   };
   const rejectItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number, silent = false): void => {
+    if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
     const it = turn.diff.items[idx]; if (!it) return;
     const k = akey(turn.diff.changeSetId, it.editId);
-    if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) { revertGridOp(op); if (excelDiff === 'mark') univerRef.current?.setBackground(op.a1, realBg(op, false)); } }
-    else if (fmt === 'drawio') { const m = turn.board?.muts?.[it.editId]; if (m) boardRef.current?.restoreObject(m.prior); else { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); } } // 改/删/移动现有对象 → 按改前快照还原,不是删对象
-    else if (fmt === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w && !wordRef.current?.revert(w.domId) && accepted.has(k)) notify(t('该改动已定稿,未找到可还原的位置')); } // undoMap 缺失时 revert 自带 DOM 兜底
+    if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) { revertGridOp(op); if (excelDiff === 'mark') univerRef.current?.setBackground(op.a1, realBg(op, false)); } }
+    else if (turn.format === 'drawio') { const m = turn.board?.muts?.[it.editId]; if (m) boardRef.current?.restoreObject(m.prior); else { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); } } // 改/删/移动现有对象 → 按改前快照还原,不是删对象
+    else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w && !wordRef.current?.revert(w.domId) && accepted.has(k)) notify(t('该改动已定稿,未找到可还原的位置')); } // undoMap 缺失时 revert 自带 DOM 兜底
     toggleAccept(k, false);
-    telemetry('reject', itemKind(turn, it));
+    telemetry(turn.format, 'reject', itemKind(turn, it));
     if (!silent) setReviewIdx(idx + 1);
   };
   const acceptAll = async (turn: Extract<Turn, { kind: 'diff' }>, ti: number): Promise<void> => {
+    if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
     const pendingWord = (turn.word ?? []).filter((w) => turn.diff.items.some((it) => it.editId === w.editId && !accepted.has(akey(turn.diff.changeSetId, it.editId))));
     for (const w of [...pendingWord.filter((x) => !x.remove), ...pendingWord.filter((x) => x.remove).sort((a, b) => (b.blockIdx ?? -1) - (a.blockIdx ?? -1))]) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w)); // 删段降序,同初次落地
     for (const it of turn.diff.items) {
-      if (fmt === 'word' || accepted.has(akey(turn.diff.changeSetId, it.editId))) continue;
-      if (isExcel) { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
-      else if (fmt === 'drawio') { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
+      if (turn.format === 'word' || accepted.has(akey(turn.diff.changeSetId, it.editId))) continue;
+      if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
+      else if (turn.format === 'drawio') { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
     }
-    if (fmt === 'word') for (const w of turn.word ?? []) wordRef.current?.markResolved(w.domId, 'accepted'); // 全部接受同样物理定稿,与逐条路径一致
-    if (isExcel && excelDiff === 'mark') { for (const op of turn.ops) univerRef.current?.setBackground(op.a1, realBg(op, true)); setExcelDiff('final'); } // 提交前退出对照着色,别把审阅色写回文件
-    for (const it of turn.diff.items) telemetry('accept', itemKind(turn, it)); // 批量确认也计入接受
+    if (turn.format === 'word') for (const w of turn.word ?? []) wordRef.current?.markResolved(w.domId, 'accepted'); // 全部接受同样物理定稿,与逐条路径一致
+    if (turn.format === 'excel' && excelDiff === 'mark') { for (const op of turn.ops) univerRef.current?.setBackground(op.a1, realBg(op, true)); setExcelDiff('final'); } // 提交前退出对照着色,别把审阅色写回文件
+    for (const it of turn.diff.items) telemetry(turn.format, 'accept', itemKind(turn, it)); // 批量确认也计入接受
     const all = turn.diff.items.map((x) => x.editId);
     setAccepted((prev) => new Set([...prev, ...turn.diff.items.map((x) => akey(turn.diff.changeSetId, x.editId))]));
     setReviewIdx(all.length);
-    if ((isExcel || fmt === 'word') && fileB64) {
-      const committed = await doCommit(all);
+    if ((turn.format === 'excel' || turn.format === 'word' || turn.format === 'drawio') && fileB64) {
+      const committed = await doCommit(all, turn);
       if (committed) markCommitted(ti, all.length);
     } else {
       markCommitted(ti, all.length);
@@ -1331,8 +1335,6 @@ export function App() {
     reader.onload = () => {
       const res = String(reader.result);
       const b64 = res.slice(res.indexOf(',') + 1);
-      setFileB64(b64);
-      setFileName(f.name);
       if (fmt === 'word' && /\.docx$/i.test(f.name)) {
         try {
           const bin = atob(b64);
@@ -1340,6 +1342,8 @@ export function App() {
           for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
           const r = docxToHtml(bytes);
           wordRef.current?.loadHTML(r.html);
+          setFileB64(b64);
+          setFileName(f.name);
           notify(t('已载入并渲染') + ' · ' + f.name + (r.skipped.length ? `(${r.skipped.join('、')}${t('以占位显示')})` : ''));
           return;
         } catch (e) {
@@ -1351,12 +1355,21 @@ export function App() {
         // 标准 .drawio 导入:mxGraphModel → 画板(压撤销栈,Ctrl+Z 可回导入前);Agent 拿到完整拓扑即可改
         try {
           const xml = decodeURIComponent(escape(atob(b64))); // base64 → UTF-8 文本
-          void import('./drawio-io.js').then(({ parseDrawioPages }) => {
-            const pages = parseDrawioPages(xml).filter((g) => g.nodes.length || g.edges.length);
-            if (!pages.length) { notify(t('未解析出图形(不是有效的 .drawio?)')); return; }
+          void import('./drawio-io.js').then(({ parseDrawioFile }) => {
+            const parsed = parseDrawioFile(xml);
+            if (parsed.skipped.length) {
+              setFileB64('');
+              setFileName('');
+              notify(`Drawio import blocked: ${parsed.skipped.length}/${parsed.total} page(s) could not be decoded. Exporting now would lose pages.`);
+              return;
+            }
+            const pages = parsed.pages.filter((g) => g.nodes.length || g.edges.length);
+            if (!pages.length) { setFileB64(''); setFileName(''); notify(t('未解析出图形(不是有效的 .drawio?)')); return; }
             boardRef.current?.loadPages(pages);
+            setFileB64(b64);
+            setFileName(f.name);
             const tn = pages.reduce((sum, g) => sum + g.nodes.length, 0); const te = pages.reduce((sum, g) => sum + g.edges.length, 0);
-            notify(t('已载入并渲染') + ' · ' + f.name + ` (${pages.length} ${t('页')} · ${tn} ${t('节点')} · ${te} ${t('连线')})`);
+            notify(`导入 drawio: ${pages.length} 页 / ${tn} 节点 / ${te} 连线`);
           });
           return;
         } catch (e) {
@@ -1364,6 +1377,8 @@ export function App() {
           return;
         }
       }
+      setFileB64(b64);
+      setFileName(f.name);
       notify(t('已载入') + ' · ' + f.name);
     };
     reader.readAsDataURL(f);
@@ -1391,9 +1406,14 @@ export function App() {
       return next;
     });
   /** 接受子集 → otterpatch-serve /commit → 外科写回 → 下载结果文件。 */
-  const doCommit = async (ids: string[]): Promise<boolean> => {
-    const ep = server.trim().replace(/\/$/, '');
-    if (!ep || !realCs) {
+  const doCommit = async (ids: string[], turn: Extract<Turn, { kind: 'diff' }>): Promise<boolean> => {
+    const ep = normalizeLocalEndpoint(server);
+    if (server.trim() && !ep) {
+      notify('Agent 服务地址必须是本机地址');
+      return false;
+    }
+    const changeSet = turn.changeSet ?? realCs;
+    if (!ep || !changeSet) {
       notify(t('请先用 otterpatch-serve 生成提案'));
       return false;
     }
@@ -1407,13 +1427,7 @@ export function App() {
     }
     setBusy(true);
     try {
-      const r = await fetch(ep + '/commit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(localServeToken() ? { 'X-OtterPatch-Token': localServeToken() } : {}) },
-        body: JSON.stringify({ format: fmt, fileBase64: fileB64, changeSet: realCs, acceptedEditIds: ids, currentRev: (realCs as { baseRev?: number } | null)?.baseRev ?? 0 }),
-      });
-      const data = (await r.json()) as { ok?: boolean; fileBase64?: string; touchedParts?: string[]; fidelity?: { score: number }; appliedEditIds?: string[]; droppedEdits?: Array<{ editId: string; reason: string }>; error?: string };
-      if (!r.ok) throw new Error(data.error ?? 'commit failed');
+      const data = await commitWriteback({ endpoint: ep, token: localServeToken(), format: turn.format, fileBase64: fileB64, changeSet, acceptedEditIds: ids });
       const droppedN = data.droppedEdits?.length ?? 0;
       if (data.ok === false || droppedN > 0) {
         notify('Commit partial writeback: applied ' + (data.appliedEditIds?.length ?? 0) + ', dropped ' + droppedN + ': ' + (data.droppedEdits?.[0]?.reason ?? data.error ?? 'writeback failed'));
@@ -1669,7 +1683,7 @@ export function App() {
                           </div>
                         </div>
                       );
-                    const active = i === lastDiffIdx && !turn.committed && !turn.reverted;
+                    const active = i === lastDiffIdx && turn.format === fmt && !turn.committed && !turn.reverted;
                     return (
                       <div key={i} className="ai-msg">
                         <img className="ai-av" src="/favicon.png" alt="" />
@@ -1686,7 +1700,7 @@ export function App() {
                             autoBatch={autoBatch}
                             wordRef={wordRef}
                             lockedEdits={(() => { // 历史重审守卫:该条的格子被后续回合改过 → 锁行内 ✓/✕(先撤销后面的回合)
-                              if (!isExcel || i === lastDiffIdx) return undefined;
+                              if (turn.format !== 'excel' || i === lastDiffIdx) return undefined;
                               const laterA1 = new Set<string>();
                               for (let j = i + 1; j < thread.length; j++) { const t2 = thread[j]; if (t2 && t2.role === 'assistant' && t2.kind === 'diff') for (const op of t2.ops) laterA1.add(op.a1); }
                               return new Set(turn.ops.filter((o) => o.editId && laterA1.has(o.a1)).map((o) => o.editId!));

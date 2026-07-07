@@ -2,6 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
+import { assertChangeSet } from '@otterpatch/core';
 import { createModelClient, EXCEL_OPS, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
 import { OtterPatchRuntime } from '@otterpatch/runtime';
@@ -191,6 +192,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       if (req.method === 'POST' && url === '/commit') {
         const a = await readBody(req);
         const bytes = new Uint8Array(Buffer.from(String(a.fileBase64 ?? ''), 'base64'));
+        assertChangeSet(a.changeSet);
         const r = await rt.commit({
           format: String(a.format),
           bytes,
