@@ -13,6 +13,7 @@ export interface UseReviewStateOptions<Turn extends ReviewThreadTurn> {
 export interface UseReviewStateResult {
   clearAccepted: () => void;
   toggleAccept: (id: string, on: boolean) => void;
+  acceptMany: (ids: string[]) => void;
   markCommitted: (index: number, count: number) => void;
   markReverted: (index: number) => void;
   markClarifyAnswered: (index: number, answerText: string) => void;
@@ -33,6 +34,10 @@ export function useReviewState<Turn extends ReviewThreadTurn>({
       else next.delete(id);
       return next;
     });
+  };
+
+  const acceptMany = (ids: string[]): void => {
+    setAccepted((prev) => new Set([...prev, ...ids]));
   };
 
   const markCommitted = (index: number, count: number): void => {
@@ -59,5 +64,5 @@ export function useReviewState<Turn extends ReviewThreadTurn>({
     );
   };
 
-  return { clearAccepted, toggleAccept, markCommitted, markReverted, markClarifyAnswered };
+  return { clearAccepted, toggleAccept, acceptMany, markCommitted, markReverted, markClarifyAnswered };
 }

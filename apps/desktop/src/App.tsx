@@ -11,12 +11,13 @@ import { asLang, LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
 import type { RichDocHandle, DocFmt, WordSel } from './RichDoc.js';
-import { akey, BATCH_RX, AUTO_BATCH_CAP } from './review-shared.js';
+import { akey } from './review-shared.js';
 import { streamPropose } from './agent-client.js';
 import type { FileSnapshot } from './file-snapshot.js';
 import { useFileImport } from './use-file-import.js';
 import { useCommitWriteback } from './use-commit-writeback.js';
 import { useReviewState } from './use-review-state.js';
+import { reviewItemKind, useReviewActions } from './use-review-actions.js';
 import { ReviewBox } from './ReviewBox.js';
 import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
@@ -34,7 +35,7 @@ import { chartToPngDataUrl, gridToChartSpec, buildChartGrid, specFromInline } fr
 interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bold?: boolean; numFmt?: string; align?: 'left' | 'center' | 'right'; note: string; before?: unknown; beforeState?: CellState; editId?: string }
 /** 提案到达时采集的整格改前状态(值/公式/填充/字色/加粗/对齐)——拒绝/原文视图按"改了哪个维度还原哪个维度"精确回放。 */
 interface CellState { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean; align?: 'left' | 'center' | 'right' | null }
-// akey / BATCH_RX / AUTO_BATCH_CAP moved to ./review-shared.ts (god-file decomposition).
+// Shared review ids and batch guards live in ./review-shared.ts (god-file decomposition).
 
 /** 由 applyExcelStructure 直接落网格的"结构/对象操作"kind —— 这些【不能】被 diffToOps 当作写单元格值
  *  (否则会把"插入图表"等的摘要文字写进格子);它们走 applyExcelStructure,不进 playOps。 */
@@ -563,7 +564,7 @@ export function App() {
   const [realDiff, setRealDiff] = useState<AgentDiff | null>(null);
   const [realCs, setRealCs] = useState<unknown>(null);
   const [accepted, setAccepted] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('oa.accepted') ?? '[]') as string[]); } catch { return new Set(); } }); // 随 thread 持久化:刷新后审批处置不丢
-  const { clearAccepted, toggleAccept, markCommitted, markReverted, markClarifyAnswered } = useReviewState({ setThread, setAccepted });
+  const { clearAccepted, toggleAccept, acceptMany, markCommitted, markReverted, markClarifyAnswered } = useReviewState({ setThread, setAccepted });
   useEffect(() => { try { localStorage.setItem('oa.accepted', JSON.stringify([...accepted])); } catch { /* 配额忽略 */ } }, [accepted]);
   useEffect(() => { // 接受率遥测读取口:控制台 __otterTelemetry() 看 格式×改动类型 的 accept/reject 分布
     (window as unknown as { __otterTelemetry?: () => unknown }).__otterTelemetry = () => { try { return JSON.parse(localStorage.getItem('oa.telemetry') ?? '{}'); } catch { return {}; } };
@@ -836,7 +837,7 @@ export function App() {
                 const cs = e.changeSet ?? null;
                 setRealCs(cs);
                 setRealDiff(diff);
-                setAccepted((prev) => new Set([...prev, ...diff.items.map((it) => akey(diff.changeSetId, it.editId))])); // 合并而非覆写:老回合的处置不被新提案冲掉
+                acceptMany(diff.items.map((it) => akey(diff.changeSetId, it.editId))); // 合并而非覆写:老回合的处置不被新提案冲掉
                 setReviewIdx(0);
                 if (fmt === 'drawio') {
                   // drawio:先把【改/删/移动现有节点】落到画板;新增节点则复用流式已画的、或一次性补画
@@ -1273,12 +1274,8 @@ export function App() {
       localStorage.setItem('oa.telemetry', JSON.stringify(t));
     } catch { /* 配额/解析问题不影响主流程 */ }
   };
-  /** 一条审阅项的改动类型(遥测口径):word=text/style,excel=value/style/structure,drawio=object。 */
-  const itemKind = (turn: Extract<Turn, { kind: 'diff' }>, it: AgentDiffItem): string => {
-    if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); return w?.style || it.style ? 'style' : 'text'; }
-    if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (!op) return 'structure'; return op.value !== undefined ? 'value' : 'style'; }
-    if (turn.format === 'drawio') return 'object';
-    return 'other';
+  const applyWordEdit = (w: WordEdit): void => {
+    wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w));
   };
   const acceptItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number, silent = false): void => {
     if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
@@ -1287,12 +1284,12 @@ export function App() {
     if (!accepted.has(k)) { // 之前被拒 → 重新落回工作区(applyEdit 幂等,重复接受不叠标记)
       if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
       else if (turn.format === 'drawio') { const m = turn.board?.muts?.[it.editId]; if (m) { if (m.next) boardRef.current?.restoreObject(m.next); else { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); } } else { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); } }
-      else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w)); }
+      else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) applyWordEdit(w); }
       toggleAccept(k, true);
     }
     if (turn.format === 'excel' && excelDiff === 'mark') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) univerRef.current?.setBackground(op.a1, realBg(op, true)); } // 已处置的格退出着色 → 网格上直观看到审阅进度
     if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.markResolved(w.domId, 'accepted'); } // 物理定稿:删 del、ins 落地
-    telemetry(turn.format, 'accept', itemKind(turn, it));
+    telemetry(turn.format, 'accept', reviewItemKind(turn, it));
     if (!silent) setReviewIdx(idx + 1);
   };
   /** 行内卡片 ✓/✕ → 复用 rail 的接受/拒绝(按 domId 找回条目);老回合的处置不动当前回合的审阅游标。 */
@@ -1317,40 +1314,33 @@ export function App() {
     else if (turn.format === 'drawio') { const m = turn.board?.muts?.[it.editId]; if (m) boardRef.current?.restoreObject(m.prior); else { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); } } // 改/删/移动现有对象 → 按改前快照还原,不是删对象
     else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w && !wordRef.current?.revert(w.domId) && accepted.has(k)) notify(t('该改动已定稿,未找到可还原的位置')); } // undoMap 缺失时 revert 自带 DOM 兜底
     toggleAccept(k, false);
-    telemetry(turn.format, 'reject', itemKind(turn, it));
+    telemetry(turn.format, 'reject', reviewItemKind(turn, it));
     if (!silent) setReviewIdx(idx + 1);
   };
-  const acceptAll = async (turn: Extract<Turn, { kind: 'diff' }>, ti: number): Promise<void> => {
-    if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
-    const writebackFormat = turn.format === 'excel' || turn.format === 'word' || turn.format === 'drawio';
-    if (writebackFormat && (fileB64 || turn.fileSnapshot) && !ensureCommitFile(turn)) return;
-    const pendingWord = (turn.word ?? []).filter((w) => turn.diff.items.some((it) => it.editId === w.editId && !accepted.has(akey(turn.diff.changeSetId, it.editId))));
-    for (const w of [...pendingWord.filter((x) => !x.remove), ...pendingWord.filter((x) => x.remove).sort((a, b) => (b.blockIdx ?? -1) - (a.blockIdx ?? -1))]) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w)); // 删段降序,同初次落地
-    for (const it of turn.diff.items) {
-      if (turn.format === 'word' || accepted.has(akey(turn.diff.changeSetId, it.editId))) continue;
-      if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
-      else if (turn.format === 'drawio') { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); }
-    }
-    if (turn.format === 'word') for (const w of turn.word ?? []) wordRef.current?.markResolved(w.domId, 'accepted'); // 全部接受同样物理定稿,与逐条路径一致
-    if (turn.format === 'excel' && excelDiff === 'mark') { for (const op of turn.ops) univerRef.current?.setBackground(op.a1, realBg(op, true)); setExcelDiff('final'); } // 提交前退出对照着色,别把审阅色写回文件
-    for (const it of turn.diff.items) telemetry(turn.format, 'accept', itemKind(turn, it)); // 批量确认也计入接受
-    const all = turn.diff.items.map((x) => x.editId);
-    setAccepted((prev) => new Set([...prev, ...turn.diff.items.map((x) => akey(turn.diff.changeSetId, x.editId))]));
-    setReviewIdx(all.length);
-    if ((turn.format === 'excel' || turn.format === 'word' || turn.format === 'drawio') && fileB64) {
-      const committed = await doCommit(all, turn);
-      if (committed) markCommitted(ti, all.length);
-    } else {
-      markCommitted(ti, all.length);
-      notify('Accepted ' + all.length + ' changes');
-    }
-    // 自动续批:plan 声明了分批 + 开关开着 → 采纳后自动续发(串行,每批重新锚定+校验+审阅;上限防失控)
-    if (autoBatch && BATCH_RX.test(turn.diff.intent ?? '')) {
-      if (autoBatchRun.current >= AUTO_BATCH_CAP) { notify(t('自动续批已达上限,请确认后手动继续')); return; }
-      autoBatchRun.current++;
-      window.setTimeout(() => { void send('下一批'); }, 900);
-    }
-  };
+  const { acceptAll } = useReviewActions({
+    format: fmt,
+    accepted,
+    autoBatch,
+    autoBatchRun,
+    excelDiff,
+    fileBase64: fileB64,
+    wordRef,
+    univerRef,
+    notify,
+    t,
+    acceptMany,
+    setReviewIdx,
+    setExcelDiff,
+    ensureCommitFile,
+    doCommit,
+    markCommitted,
+    applyGridOp,
+    applyWordEdit,
+    reapplyBoardObj,
+    realBg,
+    telemetry,
+    send,
+  });
   const openDrop = (it: string, el: HTMLElement): void => {
     const r = el.getBoundingClientRect();
     setDrop({ key: it, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 3 });
