@@ -46,11 +46,18 @@ export async function openApp({ storage } = {}) {
     if (m.type() === 'error') errors.push(m.text().slice(0, 160));
   });
   if (storage) {
+    const { 'oa.apiKey': apiKey, ...persistedStorage } = storage;
     await page.addInitScript((kv) => {
       for (const [k, v] of Object.entries(kv)) localStorage.setItem(k, v);
-    }, storage);
+    }, persistedStorage);
   }
   await page.goto(url + '/index.html', { waitUntil: 'networkidle' });
+  const apiKey = storage?.['oa.apiKey'];
+  if (apiKey) {
+    await page.locator('.composer .model').click();
+    await page.locator('.modelcfg input[type="password"]').fill(apiKey);
+    await page.locator('.composer .model').click();
+  }
   return {
     page,
     browser,

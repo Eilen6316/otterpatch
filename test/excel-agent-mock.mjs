@@ -42,7 +42,10 @@ try {
   ok('hunk 头含单元格引用 C2', await page.evaluate(() => [...document.querySelectorAll('.gd-ref')].some((e) => /C2/.test(e.textContent))));
 
   // Excel 工作区"原文/改后"速览条
-  ok('Excel 出现"原文/改后"速览条(2 段)', await page.evaluate(() => document.querySelectorAll('.excel-difftoggle .rd-dt-seg').length === 2));
+  ok('Excel 出现"原文/对照/改后"速览条(3 段)', await page.evaluate(() => {
+    const segs = [...document.querySelectorAll('.excel-difftoggle .rd-dt-seg')].map((e) => e.textContent || '');
+    return segs.length === 3 && segs.some((t) => /对照/.test(t));
+  }));
   await page.locator('.excel-difftoggle .rd-dt-seg', { hasText: '原文' }).click();
   await sleep(250);
   ok('切"原文"→ 按钮激活、无报错', await page.evaluate(() => !!document.querySelector('.excel-difftoggle .rd-dt-seg.on')));
