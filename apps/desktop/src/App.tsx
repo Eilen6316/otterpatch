@@ -11,11 +11,11 @@ import { asLang, LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
 import type { RichDocHandle, DocFmt, WordSel } from './RichDoc.js';
-import { docxToHtml } from './docximport.js';
 import { akey, BATCH_RX, AUTO_BATCH_CAP } from './review-shared.js';
 import { streamPropose } from './agent-client.js';
 import { commitWriteback } from './commit-client.js';
-import { makeFileSnapshot, sameFileSnapshot, type FileSnapshot } from './file-snapshot.js';
+import { sameFileSnapshot, type FileSnapshot } from './file-snapshot.js';
+import { useFileImport } from './use-file-import.js';
 import { ReviewBox } from './ReviewBox.js';
 import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
@@ -510,6 +510,11 @@ export function App() {
   const [drop, setDrop] = useState<{ key: string; x: number; y: number } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notify = (msg: string): void => {
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 1600);
+  };
   const [intent, setIntent] = useState('');
   const [cfgOpen, setCfgOpen] = useState(false);
   const [provider, setProvider] = useState(() => lsGet('oa.provider', 'claude'));
@@ -526,6 +531,13 @@ export function App() {
   const univerRef = useRef<SheetHandle>(null);
   const boardRef = useRef<BoardHandle>(null);
   const wordRef = useRef<RichDocHandle>(null);
+  const { fileB64, fileName, fileSnapshot, onFile } = useFileImport({
+    format: fmt,
+    wordRef,
+    boardRef,
+    notify,
+    t,
+  });
   const applySeqRef = useRef(0);
   const chartRects = useRef<Array<{ row: number; col: number }>>([]); // 已插入图表的锚点(会话级):新图撞上就下移,别叠在一起
   // drawio「边生成边画」流式状态
@@ -558,10 +570,6 @@ export function App() {
   const [autoBatch, setAutoBatch] = useState(() => localStorage.getItem('oa.autobatch') === '1');
   useEffect(() => { try { localStorage.setItem('oa.autobatch', autoBatch ? '1' : '0'); } catch { /* 忽略 */ } }, [autoBatch]);
   const autoBatchRun = useRef(0); // 连续自动批次计数(手动指令即清零,上限 AUTO_BATCH_CAP)
-  const [fileB64, setFileB64] = useState('');
-  const [fileName, setFileName] = useState('');
-  const [fileSnapshot, setFileSnapshot] = useState<FileSnapshot | null>(null);
-  const fileLoadSeqRef = useRef(0);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [sel, setSel] = useState<Sel>({ ar: 1, ac: 2, br: 5, bc: 5 });
@@ -584,19 +592,6 @@ export function App() {
     setLang(l);
     lsSet('oa.lang', l);
   };
-  const setLoadedFile = (format: Fmt, name: string, b64: string): FileSnapshot => {
-    const snap = makeFileSnapshot(format, name, b64);
-    setFileB64(b64);
-    setFileName(name);
-    setFileSnapshot(snap);
-    return snap;
-  };
-  const clearLoadedFile = (): void => {
-    setFileB64('');
-    setFileName('');
-    setFileSnapshot(null);
-  };
-
   useEffect(() => {
     const up = (): void => {
       dragRef.current = false;
@@ -1357,63 +1352,6 @@ export function App() {
       window.setTimeout(() => { void send('下一批'); }, 900);
     }
   };
-  /** 读入要写回的真实文件(.xlsx/.docx/.pdf/.drawio)为 base64;Word 的 .docx 同时解析渲染进工作区(hero 闭环)。 */
-  const onFile = (f: File | undefined): void => {
-    if (!f) return;
-    const loadFormat = fmt;
-    const loadSeq = ++fileLoadSeqRef.current;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (loadSeq !== fileLoadSeqRef.current) return;
-      const res = String(reader.result);
-      const b64 = res.slice(res.indexOf(',') + 1);
-      if (loadFormat === 'word' && /\.docx$/i.test(f.name)) {
-        try {
-          const bin = atob(b64);
-          const bytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-          const r = docxToHtml(bytes);
-          wordRef.current?.loadHTML(r.html);
-          setLoadedFile(loadFormat, f.name, b64);
-          notify(t('已载入并渲染') + ' · ' + f.name + (r.skipped.length ? `(${r.skipped.join('、')}${t('以占位显示')})` : ''));
-          return;
-        } catch (e) {
-          setLoadedFile(loadFormat, f.name, b64);
-          notify(t('已载入(渲染失败,仍可写回)') + ':' + (e instanceof Error ? e.message : String(e)));
-          return;
-        }
-      }
-      if (loadFormat === 'drawio' && /\.(drawio|xml)$/i.test(f.name)) {
-        // 标准 .drawio 导入:mxGraphModel → 画板(压撤销栈,Ctrl+Z 可回导入前);Agent 拿到完整拓扑即可改
-        try {
-          const xml = decodeURIComponent(escape(atob(b64))); // base64 → UTF-8 文本
-          void import('./drawio-io.js').then(({ parseDrawioFile }) => {
-            if (loadSeq !== fileLoadSeqRef.current) return;
-            const parsed = parseDrawioFile(xml);
-            if (parsed.skipped.length) {
-              clearLoadedFile();
-              notify(`Drawio import blocked: ${parsed.skipped.length}/${parsed.total} page(s) could not be decoded. Exporting now would lose pages.`);
-              return;
-            }
-            const pages = parsed.pages.filter((g) => g.nodes.length || g.edges.length);
-            if (!pages.length) { clearLoadedFile(); notify(t('未解析出图形(不是有效的 .drawio?)')); return; }
-            boardRef.current?.loadPages(pages);
-            setLoadedFile(loadFormat, f.name, b64);
-            const tn = pages.reduce((sum, g) => sum + g.nodes.length, 0); const te = pages.reduce((sum, g) => sum + g.edges.length, 0);
-            notify(`导入 drawio: ${pages.length} 页 / ${tn} 节点 / ${te} 连线`);
-          });
-          return;
-        } catch (e) {
-          clearLoadedFile();
-          notify(t('已载入(渲染失败)') + ':' + (e instanceof Error ? e.message : String(e)));
-          return;
-        }
-      }
-      setLoadedFile(loadFormat, f.name, b64);
-      notify(t('已载入') + ' · ' + f.name);
-    };
-    reader.readAsDataURL(f);
-  };
   const downloadB64 = (b64: string, name: string): void => {
     const bin = atob(b64);
     const arr = new Uint8Array(bin.length);
@@ -1479,11 +1417,6 @@ export function App() {
   const openDrop = (it: string, el: HTMLElement): void => {
     const r = el.getBoundingClientRect();
     setDrop({ key: it, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 3 });
-  };
-  const notify = (msg: string): void => {
-    setToast(msg);
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 1600);
   };
   /** 每个功能都可用:格式化命令真实套用到选区,有下拉的开面板,其余给执行反馈。 */
   const act = (it: string, el: HTMLElement): void => {
