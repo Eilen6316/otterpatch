@@ -13,9 +13,9 @@ import type { UniSel, SheetHandle } from './UniverSheet.js';
 import type { RichDocHandle, DocFmt, WordSel } from './RichDoc.js';
 import { akey, BATCH_RX, AUTO_BATCH_CAP } from './review-shared.js';
 import { streamPropose } from './agent-client.js';
-import { commitWriteback } from './commit-client.js';
-import { sameFileSnapshot, type FileSnapshot } from './file-snapshot.js';
+import type { FileSnapshot } from './file-snapshot.js';
 import { useFileImport } from './use-file-import.js';
+import { useCommitWriteback } from './use-commit-writeback.js';
 import { ReviewBox } from './ReviewBox.js';
 import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
@@ -572,6 +572,18 @@ export function App() {
   const autoBatchRun = useRef(0); // 连续自动批次计数(手动指令即清零,上限 AUTO_BATCH_CAP)
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
+  const { ensureCommitFile, doCommit } = useCommitWriteback({
+    server,
+    realChangeSet: realCs,
+    fileBase64: fileB64,
+    fileName,
+    fileSnapshot,
+    notify,
+    t,
+    setBusy,
+    localServeToken,
+    normalizeLocalEndpoint,
+  });
   const [sel, setSel] = useState<Sel>({ ar: 1, ac: 2, br: 5, bc: 5 });
   const dragRef = useRef(false);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
@@ -1310,17 +1322,6 @@ export function App() {
     telemetry(turn.format, 'reject', itemKind(turn, it));
     if (!silent) setReviewIdx(idx + 1);
   };
-  const ensureCommitFile = (turn: Extract<Turn, { kind: 'diff' }>): boolean => {
-    if (!turn.fileSnapshot) {
-      notify('Upload the target file, then regenerate this proposal before committing.');
-      return false;
-    }
-    if (!fileSnapshot || !sameFileSnapshot(fileSnapshot, turn.fileSnapshot)) {
-      notify('The target file changed. Regenerate the proposal for the current file before committing.');
-      return false;
-    }
-    return true;
-  };
   const acceptAll = async (turn: Extract<Turn, { kind: 'diff' }>, ti: number): Promise<void> => {
     if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
     const writebackFormat = turn.format === 'excel' || turn.format === 'word' || turn.format === 'drawio';
@@ -1352,21 +1353,6 @@ export function App() {
       window.setTimeout(() => { void send('下一批'); }, 900);
     }
   };
-  const downloadB64 = (b64: string, name: string): void => {
-    const bin = atob(b64);
-    const arr = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    const url = URL.createObjectURL(new Blob([arr]));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-  const outName = (n: string): string => {
-    const dot = n.lastIndexOf('.');
-    return dot > 0 ? n.slice(0, dot) + '.otterpatch' + n.slice(dot) : (n || 'out') + '.otterpatch';
-  };
   const toggleAccept = (id: string, on: boolean): void =>
     setAccepted((prev) => {
       const next = new Set(prev);
@@ -1374,46 +1360,6 @@ export function App() {
       else next.delete(id);
       return next;
     });
-  /** 接受子集 → otterpatch-serve /commit → 外科写回 → 下载结果文件。 */
-  const doCommit = async (ids: string[], turn: Extract<Turn, { kind: 'diff' }>): Promise<boolean> => {
-    const ep = normalizeLocalEndpoint(server);
-    if (server.trim() && !ep) {
-      notify('Agent 服务地址必须是本机地址');
-      return false;
-    }
-    const changeSet = turn.changeSet ?? realCs;
-    if (!ep || !changeSet) {
-      notify(t('请先用 otterpatch-serve 生成提案'));
-      return false;
-    }
-    if (!fileB64) {
-      notify(t('请先上传要写回的文件'));
-      return false;
-    }
-    if (!ensureCommitFile(turn)) return false;
-    if (!ids.length) {
-      notify(t('没有要接受的改动'));
-      return false;
-    }
-    setBusy(true);
-    try {
-      const data = await commitWriteback({ endpoint: ep, token: localServeToken(), format: turn.format, fileBase64: fileB64, changeSet, acceptedEditIds: ids });
-      const droppedN = data.droppedEdits?.length ?? 0;
-      if (data.ok === false || droppedN > 0) {
-        notify('Commit partial writeback: applied ' + (data.appliedEditIds?.length ?? 0) + ', dropped ' + droppedN + ': ' + (data.droppedEdits?.[0]?.reason ?? data.error ?? 'writeback failed'));
-        return false;
-      }
-      if (!data.fileBase64) throw new Error(data.error ?? 'commit failed');
-      downloadB64(data.fileBase64, outName(fileName));
-      notify('Committed ' + (data.touchedParts?.join(', ') ?? '') + ' ' + Math.round((data.fidelity?.score ?? 1) * 100) + '%');
-      return true;
-    } catch (e) {
-      notify('Commit: ' + (e instanceof Error ? e.message : String(e)));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  };
   const openDrop = (it: string, el: HTMLElement): void => {
     const r = el.getBoundingClientRect();
     setDrop({ key: it, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 3 });
