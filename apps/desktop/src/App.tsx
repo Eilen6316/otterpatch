@@ -16,6 +16,7 @@ import { streamPropose } from './agent-client.js';
 import type { FileSnapshot } from './file-snapshot.js';
 import { useFileImport } from './use-file-import.js';
 import { useCommitWriteback } from './use-commit-writeback.js';
+import { useReviewState } from './use-review-state.js';
 import { ReviewBox } from './ReviewBox.js';
 import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
@@ -562,6 +563,7 @@ export function App() {
   const [realDiff, setRealDiff] = useState<AgentDiff | null>(null);
   const [realCs, setRealCs] = useState<unknown>(null);
   const [accepted, setAccepted] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('oa.accepted') ?? '[]') as string[]); } catch { return new Set(); } }); // 随 thread 持久化:刷新后审批处置不丢
+  const { clearAccepted, toggleAccept, markCommitted, markReverted, markClarifyAnswered } = useReviewState({ setThread, setAccepted });
   useEffect(() => { try { localStorage.setItem('oa.accepted', JSON.stringify([...accepted])); } catch { /* 配额忽略 */ } }, [accepted]);
   useEffect(() => { // 接受率遥测读取口:控制台 __otterTelemetry() 看 格式×改动类型 的 accept/reject 分布
     (window as unknown as { __otterTelemetry?: () => unknown }).__otterTelemetry = () => { try { return JSON.parse(localStorage.getItem('oa.telemetry') ?? '{}'); } catch { return {}; } };
@@ -928,7 +930,7 @@ export function App() {
     setSent(false);
     setRealDiff(null);
     setRealCs(null);
-    setAccepted(new Set());
+    clearAccepted();
     setPlayList([]);
     setPlayIdx(-1);
     setAnswer(null);
@@ -938,7 +940,7 @@ export function App() {
     setThread([]);
     resetDiff();
     setSendErr(null);
-    setAccepted(new Set()); // 处置记账随对话清零
+    clearAccepted(); // 处置记账随对话清零
     wordRef.current?.closeUndoWindow();
   };
   /** 撤销某条改动:把该回合写过的格子还原到改前值,并清掉它加的底色。 */
@@ -958,16 +960,12 @@ export function App() {
     } else {
       for (const op of turn.ops) revertGridOp(op); // 走维度级精确回放(公式/填充/加粗不丢)
     }
-    setThread((th) => th.map((tt, i) => (i === idx ? ({ ...tt, reverted: true } as Turn) : tt)));
+    markReverted(idx);
     notify(t('已撤销该回合改动'));
-  };
-  /** 标记某条改动已被用户接受(写进投影历史,让 Agent 知道改动已采纳)。 */
-  const markCommitted = (idx: number, count: number): void => {
-    setThread((th) => th.map((tt, i) => (i === idx && tt.role === 'assistant' && tt.kind === 'diff' ? ({ ...tt, committed: true, committedCount: count } as Turn) : tt)));
   };
   /** 用户提交澄清选择:锁定该卡片 + 把选择作为新一轮指令发回(thread 续接,Agent 据此继续或再追问)。 */
   const submitClarify = (idx: number, text: string): void => {
-    setThread((th) => th.map((tt, i) => (i === idx && tt.role === 'assistant' && tt.kind === 'clarify' ? ({ ...tt, answered: true, answerText: text } as Turn) : tt)));
+    markClarifyAnswered(idx, text);
     void send(text);
   };
 
@@ -1353,13 +1351,6 @@ export function App() {
       window.setTimeout(() => { void send('下一批'); }, 900);
     }
   };
-  const toggleAccept = (id: string, on: boolean): void =>
-    setAccepted((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
   const openDrop = (it: string, el: HTMLElement): void => {
     const r = el.getBoundingClientRect();
     setDrop({ key: it, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 3 });
