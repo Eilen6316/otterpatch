@@ -15,6 +15,7 @@ import { docxToHtml } from './docximport.js';
 import { akey, BATCH_RX, AUTO_BATCH_CAP } from './review-shared.js';
 import { streamPropose } from './agent-client.js';
 import { commitWriteback } from './commit-client.js';
+import { makeFileSnapshot, sameFileSnapshot, type FileSnapshot } from './file-snapshot.js';
 import { ReviewBox } from './ReviewBox.js';
 import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
@@ -46,7 +47,7 @@ export type Turn =
   | { role: 'user'; text: string }
   | { role: 'assistant'; kind: 'answer'; text: string; reasoning?: string; streaming?: boolean }
   | { role: 'assistant'; kind: 'clarify'; questions: ClarifyQuestion[]; reasoning?: string; answered?: boolean; answerText?: string }
-  | { role: 'assistant'; kind: 'diff'; format: Fmt; changeSet?: unknown; diff: AgentDiff; ops: GridOp[]; board?: BoardPatch; word?: WordEdit[]; text?: string; reasoning?: string; reverted?: boolean; committed?: boolean; committedCount?: number };
+  | { role: 'assistant'; kind: 'diff'; format: Fmt; fileSnapshot?: FileSnapshot; changeSet?: unknown; diff: AgentDiff; ops: GridOp[]; board?: BoardPatch; word?: WordEdit[]; text?: string; reasoning?: string; reverted?: boolean; committed?: boolean; committedCount?: number };
 /** The diff-review turn shape consumed by ReviewBox. */
 export type DiffTurn = Extract<Turn, { kind: 'diff' }>;
 
@@ -559,6 +560,8 @@ export function App() {
   const autoBatchRun = useRef(0); // 连续自动批次计数(手动指令即清零,上限 AUTO_BATCH_CAP)
   const [fileB64, setFileB64] = useState('');
   const [fileName, setFileName] = useState('');
+  const [fileSnapshot, setFileSnapshot] = useState<FileSnapshot | null>(null);
+  const fileLoadSeqRef = useRef(0);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [sel, setSel] = useState<Sel>({ ar: 1, ac: 2, br: 5, bc: 5 });
@@ -580,6 +583,18 @@ export function App() {
   const pickLang = (l: Lang): void => {
     setLang(l);
     lsSet('oa.lang', l);
+  };
+  const setLoadedFile = (format: Fmt, name: string, b64: string): FileSnapshot => {
+    const snap = makeFileSnapshot(format, name, b64);
+    setFileB64(b64);
+    setFileName(name);
+    setFileSnapshot(snap);
+    return snap;
+  };
+  const clearLoadedFile = (): void => {
+    setFileB64('');
+    setFileName('');
+    setFileSnapshot(null);
   };
 
   useEffect(() => {
@@ -745,6 +760,7 @@ export function App() {
           ? `\n[当前选区·用户此刻点选了一张图片(${selDesc})]:${wordSel.text}\n若指令含"这张图/这个图片/它",目标就是这张图所在的第${wordSel.para ?? '?'}段;整段操作用 para=${wordSel.para ?? '?'} 锚定。`
           : `\n[当前选区·用户此刻圈选了这段(${selDesc})]:"${wordSel.text}"\n若指令含"这段/这句/这里/选中的/选中/它",优先针对它;quote 用这段真实原文定位。`) : '\n[未圈选文字]:请基于整篇文档理解。')
       : selectionContext();
+    const proposalFile = fileSnapshot?.format === fmt ? fileSnapshot : null;
     setSendErr(null);
     const ep = normalizeLocalEndpoint(server);
     if (server.trim() && !ep) {
@@ -829,7 +845,7 @@ export function App() {
                     board = { byEdit: { ...b.byEdit, ...mut.byEdit }, objs: b.objs, muts: mut.muts };
                     if (b.nodes.length || b.edges.length) void playBoard(b.nodes, b.edges); // 兜底:逐个补图
                   }
-                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, changeSet: cs, diff, ops: [], board, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, ops: [], board, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                 } else if (fmt === 'word') {
                   // Word:从 changeSet 取每条 edit —— 文本改写(replaceText)或格式(setStyle),按 diff 顺序建审阅项
                   const wcs = cs as { edits?: Array<{ id: string; target: string; op?: { kind?: string; text?: string; style?: DocFmt; props?: { imgAction?: 'remove' | 'resize'; width?: number } } }>; anchors?: Record<string, { portable?: { quote?: { text?: string }; path?: number[] } }> } | null;
@@ -849,7 +865,7 @@ export function App() {
                   // 落地顺序:先非删段(段号锚不受影响),删段按段号【降序】——升序会让先删的段把后续段号顶前,删错段(实测会误删含图段)
                   const applyOrder = [...wordEdits.filter((w) => !w.remove), ...wordEdits.filter((w) => w.remove).sort((a, b) => (b.blockIdx ?? -1) - (a.blockIdx ?? -1))];
                   for (const w of applyOrder) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w));
-                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, changeSet: cs, diff, ops: [], word: wordEdits, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, ops: [], word: wordEdits, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                   setReviewIdx(0);
                   if (wordEdits[0]) wordRef.current?.highlight(wordEdits[0].domId); // 审阅期定位第一条
                 } else {
@@ -858,7 +874,7 @@ export function App() {
                   const api = univerRef.current; // 采集整格改前状态(值/公式/填充/字色/加粗),供 git-diff 展示 + "撤销/拒绝"精确还原
                   if (api) for (const op of ops) { op.before = api.getValue(op.a1); op.beforeState = api.getCellState(op.a1); }
                   setExcelDiff('final'); // 新提案到达,速览条回到"改后"基准
-                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, changeSet: cs, diff, ops, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, ops, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                   if (ops.length) void playOps(ops); // 边画边改
                 }
               } else if (e.kind === 'clarify' && e.questions?.length) {
@@ -1299,8 +1315,21 @@ export function App() {
     telemetry(turn.format, 'reject', itemKind(turn, it));
     if (!silent) setReviewIdx(idx + 1);
   };
+  const ensureCommitFile = (turn: Extract<Turn, { kind: 'diff' }>): boolean => {
+    if (!turn.fileSnapshot) {
+      notify('Upload the target file, then regenerate this proposal before committing.');
+      return false;
+    }
+    if (!fileSnapshot || !sameFileSnapshot(fileSnapshot, turn.fileSnapshot)) {
+      notify('The target file changed. Regenerate the proposal for the current file before committing.');
+      return false;
+    }
+    return true;
+  };
   const acceptAll = async (turn: Extract<Turn, { kind: 'diff' }>, ti: number): Promise<void> => {
     if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
+    const writebackFormat = turn.format === 'excel' || turn.format === 'word' || turn.format === 'drawio';
+    if (writebackFormat && (fileB64 || turn.fileSnapshot) && !ensureCommitFile(turn)) return;
     const pendingWord = (turn.word ?? []).filter((w) => turn.diff.items.some((it) => it.editId === w.editId && !accepted.has(akey(turn.diff.changeSetId, it.editId))));
     for (const w of [...pendingWord.filter((x) => !x.remove), ...pendingWord.filter((x) => x.remove).sort((a, b) => (b.blockIdx ?? -1) - (a.blockIdx ?? -1))]) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w)); // 删段降序,同初次落地
     for (const it of turn.diff.items) {
@@ -1331,54 +1360,56 @@ export function App() {
   /** 读入要写回的真实文件(.xlsx/.docx/.pdf/.drawio)为 base64;Word 的 .docx 同时解析渲染进工作区(hero 闭环)。 */
   const onFile = (f: File | undefined): void => {
     if (!f) return;
+    const loadFormat = fmt;
+    const loadSeq = ++fileLoadSeqRef.current;
     const reader = new FileReader();
     reader.onload = () => {
+      if (loadSeq !== fileLoadSeqRef.current) return;
       const res = String(reader.result);
       const b64 = res.slice(res.indexOf(',') + 1);
-      if (fmt === 'word' && /\.docx$/i.test(f.name)) {
+      if (loadFormat === 'word' && /\.docx$/i.test(f.name)) {
         try {
           const bin = atob(b64);
           const bytes = new Uint8Array(bin.length);
           for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
           const r = docxToHtml(bytes);
           wordRef.current?.loadHTML(r.html);
-          setFileB64(b64);
-          setFileName(f.name);
+          setLoadedFile(loadFormat, f.name, b64);
           notify(t('已载入并渲染') + ' · ' + f.name + (r.skipped.length ? `(${r.skipped.join('、')}${t('以占位显示')})` : ''));
           return;
         } catch (e) {
+          setLoadedFile(loadFormat, f.name, b64);
           notify(t('已载入(渲染失败,仍可写回)') + ':' + (e instanceof Error ? e.message : String(e)));
           return;
         }
       }
-      if (fmt === 'drawio' && /\.(drawio|xml)$/i.test(f.name)) {
+      if (loadFormat === 'drawio' && /\.(drawio|xml)$/i.test(f.name)) {
         // 标准 .drawio 导入:mxGraphModel → 画板(压撤销栈,Ctrl+Z 可回导入前);Agent 拿到完整拓扑即可改
         try {
           const xml = decodeURIComponent(escape(atob(b64))); // base64 → UTF-8 文本
           void import('./drawio-io.js').then(({ parseDrawioFile }) => {
+            if (loadSeq !== fileLoadSeqRef.current) return;
             const parsed = parseDrawioFile(xml);
             if (parsed.skipped.length) {
-              setFileB64('');
-              setFileName('');
+              clearLoadedFile();
               notify(`Drawio import blocked: ${parsed.skipped.length}/${parsed.total} page(s) could not be decoded. Exporting now would lose pages.`);
               return;
             }
             const pages = parsed.pages.filter((g) => g.nodes.length || g.edges.length);
-            if (!pages.length) { setFileB64(''); setFileName(''); notify(t('未解析出图形(不是有效的 .drawio?)')); return; }
+            if (!pages.length) { clearLoadedFile(); notify(t('未解析出图形(不是有效的 .drawio?)')); return; }
             boardRef.current?.loadPages(pages);
-            setFileB64(b64);
-            setFileName(f.name);
+            setLoadedFile(loadFormat, f.name, b64);
             const tn = pages.reduce((sum, g) => sum + g.nodes.length, 0); const te = pages.reduce((sum, g) => sum + g.edges.length, 0);
             notify(`导入 drawio: ${pages.length} 页 / ${tn} 节点 / ${te} 连线`);
           });
           return;
         } catch (e) {
+          clearLoadedFile();
           notify(t('已载入(渲染失败)') + ':' + (e instanceof Error ? e.message : String(e)));
           return;
         }
       }
-      setFileB64(b64);
-      setFileName(f.name);
+      setLoadedFile(loadFormat, f.name, b64);
       notify(t('已载入') + ' · ' + f.name);
     };
     reader.readAsDataURL(f);
@@ -1421,6 +1452,7 @@ export function App() {
       notify(t('请先上传要写回的文件'));
       return false;
     }
+    if (!ensureCommitFile(turn)) return false;
     if (!ids.length) {
       notify(t('没有要接受的改动'));
       return false;
