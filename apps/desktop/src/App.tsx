@@ -10,9 +10,24 @@ import {
 import { asLang, LANGS, makeT, TContext, useT, type Lang } from './i18n.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
-import type { RichDocHandle, DocFmt, WordSel } from './RichDoc.js';
+import type { RichDocHandle, WordSel } from './RichDoc.js';
 import { akey } from './review-shared.js';
 import { streamPropose } from './agent-client.js';
+import {
+  countAddedBoardObjects,
+  isGridStructureKind,
+  materializeAddedBoardObjects,
+  materializeGridOps,
+  materializeWordEdits,
+  wordEditOpts,
+} from './proposal-materializers.js';
+import type {
+  AgentDiff,
+  AgentDiffItem,
+  BoardPatch,
+  GridOp,
+  WordEdit,
+} from './proposal-materializers.js';
 import type { FileSnapshot } from './file-snapshot.js';
 import { useFileImport } from './use-file-import.js';
 import { useCommitWriteback } from './use-commit-writeback.js';
@@ -23,23 +38,14 @@ import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
 import { Composer } from './Composer.js';
 import { TopBar } from './TopBar.js';
-import { DrawioBoard, DrawioToolbar, DrawioPalette, parseDrawioStyle, innerForStyle, snap, cleanLabel, extractDrawioOps, makeRawBoardConv, boundingA1 } from './DrawioBoard.js';
-import { styleToKind } from './shape-engine.js';
+import { DrawioBoard, DrawioToolbar, DrawioPalette, parseDrawioStyle, snap, extractDrawioOps, makeRawBoardConv, boundingA1 } from './DrawioBoard.js';
 import type { BNode, BEdge, BoardSel, BoardHandle } from './DrawioBoard.js';
 import { ThinkingPanel, ClarifyCard } from './ThreadCards.js';
 import type { ClarifyQuestion } from './ThreadCards.js';
 import { Markdown } from './Markdown.js';
 import { chartToPngDataUrl, gridToChartSpec, buildChartGrid, specFromInline } from './chart.js';
 
-/** Agent 在网格上的一步操作(用于"边画边改"的可视化播放)。 */
-interface GridOp { a1: string; value?: unknown; bg?: string; color?: string; bold?: boolean; numFmt?: string; align?: 'left' | 'center' | 'right'; note: string; before?: unknown; beforeState?: CellState; editId?: string }
-/** 提案到达时采集的整格改前状态(值/公式/填充/字色/加粗/对齐)——拒绝/原文视图按"改了哪个维度还原哪个维度"精确回放。 */
-interface CellState { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean; align?: 'left' | 'center' | 'right' | null }
 // Shared review ids and batch guards live in ./review-shared.ts (god-file decomposition).
-
-/** 由 applyExcelStructure 直接落网格的"结构/对象操作"kind —— 这些【不能】被 diffToOps 当作写单元格值
- *  (否则会把"插入图表"等的摘要文字写进格子);它们走 applyExcelStructure,不进 playOps。 */
-const ADV_KINDS = new Set(['insertRows', 'deleteRows', 'insertCols', 'deleteCols', 'mergeCells', 'unmergeCells', 'freezePanes', 'sortRange', 'deleteRange', 'conditionalFormat', 'dataValidation', 'autoFilter', 'insertChart', 'addSheet', 'copyRange']);
 /** Excel「对照」视图的改动格着色:蓝=改动在案,红=已拒绝(与 Word 修订绿增红删同一语义系)。 */
 const MARK_BG_ON = '#dbeafe';
 const MARK_BG_OFF = '#fee2e2';
@@ -53,15 +59,6 @@ export type Turn =
 /** The diff-review turn shape consumed by ReviewBox. */
 export type DiffTurn = Extract<Turn, { kind: 'diff' }>;
 
-/** drawio 改动落到画板的句柄:editId→画板对象 id 映射 + 可重放的节点/连线(供逐条接受/拒绝)。 */
-/** muts:改/删/移动【现有对象】的前后快照——拒绝/撤销按 prior 还原(此前直接 removeObjects 会把用户自己的节点删掉),重新接受按 next 重放。 */
-interface BoardPatch { byEdit: Record<string, string>; objs: Array<{ editId: string; node?: BNode; edge?: BEdge }>; muts?: Record<string, { prior: { node?: BNode; edge?: BEdge }; next: { node?: BNode; edge?: BEdge } | null }> }
-
-/** Word 一条改动:文本改写(replacement)/格式(style)/删段(remove)。domId 为跨回合唯一的 DOM 标记(避免 editId 撞名误还原);blockIdx 为段号锚(quote 定位失败/空段落的兜底通道)。 */
-export interface WordEdit { editId: string; domId: string; quote: string; replacement?: string; style?: DocFmt; blockIdx?: number; remove?: boolean; img?: { action: 'remove' | 'resize'; width?: number } }
-/** WordEdit → applyEdit 的 opts(三处调用点共用,保证初次落地/重新接受/全部接受走同一语义)。 */
-const wordEditOpts = (w: WordEdit): { replacement?: string; fmt?: DocFmt; blockIdx?: number; removeBlock?: boolean; img?: { action: 'remove' | 'resize'; width?: number } } =>
-  w.img ? { img: w.img, blockIdx: w.blockIdx } : w.remove ? { removeBlock: true, blockIdx: w.blockIdx } : w.style ? { fmt: w.style, blockIdx: w.blockIdx } : { replacement: w.replacement ?? '', blockIdx: w.blockIdx };
 
 /**
  * 把对话流投影成模型历史(Pi 的 projection 模式:thread 是单一数据源)。
@@ -461,10 +458,6 @@ interface CellFmt {
 const FMT_BIU: Record<string, 'bold' | 'italic' | 'underline'> = { B: 'bold', I: 'italic', U: 'underline' };
 const FMT_ALIGN: Record<string, 'left' | 'center' | 'right'> = { 左对齐: 'left', 居中: 'center', 右对齐: 'right' };
 
-/** otterpatch-serve 的 /propose 返回的可审阅 diff(结构对齐 @otterpatch/runtime 的 OtterPatchDiff;此处只取 JSON 形状,不引 Node 包)。 */
-interface AgentStyle { bold?: boolean; italic?: boolean; color?: string; bgColor?: string; align?: string; numberFormat?: string }
-interface AgentDiffItem { editId: string; ref: string; kind?: string; badge: string; label: string; after?: string; style?: AgentStyle }
-interface AgentDiff { changeSetId: string; hostId: string; intent: string; items: AgentDiffItem[] }
 function localServeToken(): string {
   try {
     const w = window as unknown as { otterpatch?: { serveToken?: string } };
@@ -846,30 +839,21 @@ export function App() {
                   let board: BoardPatch;
                   // 完整性守卫:长提案的流式解析可能截断(实测 18 处只吐出 8 个)——流式画的少于提案对象数,
                   // 就清掉残画、按最终 changeSet 全量重画,别把"画了一半"当成品交付
-                  const addCount = ((cs as { edits?: Array<{ op?: { kind?: string } }> } | null)?.edits ?? []).filter((e) => e.op?.kind === 'addObject').length;
+                  const addCount = countAddedBoardObjects(cs);
                   if (streamObjsRef.current.length >= addCount && streamObjsRef.current.length > 0) {
                     board = { byEdit: { ...streamByEditRef.current, ...mut.byEdit }, objs: streamObjsRef.current, muts: mut.muts };
                   } else {
                     if (streamObjsRef.current.length) boardRef.current?.removeObjects(Object.values(streamByEditRef.current));
-                    const b = drawioCsToBoard(cs);
+                    const b = materializeAddedBoardObjects(cs, {
+                      sequence: ++applySeqRef.current,
+                      getObject: (id) => boardRef.current?.getObject(id) ?? null,
+                    });
                     board = { byEdit: { ...b.byEdit, ...mut.byEdit }, objs: b.objs, muts: mut.muts };
                     if (b.nodes.length || b.edges.length) void playBoard(b.nodes, b.edges); // 兜底:逐个补图
                   }
                   setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, ops: [], board, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                 } else if (fmt === 'word') {
-                  // Word:从 changeSet 取每条 edit —— 文本改写(replaceText)或格式(setStyle),按 diff 顺序建审阅项
-                  const wcs = cs as { edits?: Array<{ id: string; target: string; op?: { kind?: string; text?: string; style?: DocFmt; props?: { imgAction?: 'remove' | 'resize'; width?: number } } }>; anchors?: Record<string, { portable?: { quote?: { text?: string }; path?: number[] } }> } | null;
-                  const byId = new Map((wcs?.edits ?? []).map((e) => [e.id, { quote: wcs?.anchors?.[e.target]?.portable?.quote?.text ?? '', blockIdx: wcs?.anchors?.[e.target]?.portable?.path?.[0], op: e.op }]));
-                  const wordEdits: WordEdit[] = diff.items.map((it) => {
-                    const rec = byId.get(it.editId);
-                    const quote = rec?.quote ?? it.ref;
-                    const blockIdx = rec?.blockIdx; // 显式段号锚(dialect 仅在模型给了 para 时携带)
-                    const domId = `${diff.changeSetId}::${it.editId}`; // 跨回合唯一,避免 e0/e1 撞名误还原
-                    if (rec?.op?.kind === 'deleteRange') return { editId: it.editId, domId, quote, remove: true, ...(blockIdx != null ? { blockIdx } : {}) };
-                    if (rec?.op?.kind === 'setObjectProps' && rec.op.props?.imgAction) return { editId: it.editId, domId, quote, img: { action: rec.op.props.imgAction, ...(rec.op.props.width != null ? { width: rec.op.props.width } : {}) }, ...(blockIdx != null ? { blockIdx } : {}) };
-                    if (rec?.op?.kind === 'setStyle') return { editId: it.editId, domId, quote, style: rec.op.style ?? {}, ...(blockIdx != null ? { blockIdx } : {}) };
-                    return { editId: it.editId, domId, quote, replacement: rec?.op?.text ?? (it.after ?? ''), ...(blockIdx != null ? { blockIdx } : {}) };
-                  });
+                  const wordEdits = materializeWordEdits(diff, cs);
                   // 乐观落入文档(与 Excel playOps 一致);编辑器按 domId 包裹,拒绝可精确还原
                   wordRef.current?.closeUndoWindow(); // 新提案=上一轮撤销窗口关闭,旧 data-undo 剥净后再落新标记
                   // 落地顺序:先非删段(段号锚不受影响),删段按段号【降序】——升序会让先删的段把后续段号顶前,删错段(实测会误删含图段)
@@ -880,7 +864,7 @@ export function App() {
                   if (wordEdits[0]) wordRef.current?.highlight(wordEdits[0].domId); // 审阅期定位第一条
                 } else {
                   applyExcelStructure(cs); // 结构性操作(插删行列/合并/冻结/清空)先落,改变网格布局
-                  const ops = diffToOps(diff);
+                  const ops = materializeGridOps(diff);
                   const api = univerRef.current; // 采集整格改前状态(值/公式/填充/字色/加粗),供 git-diff 展示 + "撤销/拒绝"精确还原
                   if (api) for (const op of ops) { op.before = api.getValue(op.a1); op.beforeState = api.getCellState(op.a1); }
                   setExcelDiff('final'); // 新提案到达,速览条回到"改后"基准
@@ -1032,7 +1016,7 @@ export function App() {
     const colA = (n: number): string => { let s = ''; let x = n + 1; while (x > 0) { const r = (x - 1) % 26; s = String.fromCharCode(65 + r) + s; x = Math.floor((x - 1) / 26); } return s; };
     for (const e of c.edits) {
       const k = e.op?.kind ?? '';
-      if (!ADV_KINDS.has(k)) continue;
+      if (!isGridStructureKind(k)) continue;
       const full = c.anchors?.[e.target]?.portable?.a1 ?? 'A1'; // 保留表名前缀:多 sheet 结构操作按前缀落目标表
       const sheetName = /^([^!]+)!/.exec(full)?.[1];
       const a1 = full.replace(/^.*!/, '');
@@ -1095,74 +1079,6 @@ export function App() {
         }
       }
     }
-  };
-  /** 把 Agent 返回的 diff 转成可播放的网格操作:setStyle→真实底色/字色/加粗;否则写值。 */
-  const diffToOps = (d: AgentDiff): GridOp[] =>
-    d.items
-      .filter((it) => it.ref && !ADV_KINDS.has(it.kind ?? '')) // 结构/对象操作(插图表/条件格式/筛选…)走 applyExcelStructure,别当单元格值写
-      .map((it) => {
-        const a1 = it.ref; // 保留表名前缀(Sheet2!B3):多 sheet 锚定由 SheetHandle 按前缀解析目标表,不再一律落当前表
-        const s = it.style;
-        // 样式类改动(setStyle/setNumberFormat):只落样式维度、绝不写值 —— after 是给人读的摘要("对齐 left"),
-        // 写进单元格就是拿摘要文字覆盖数据。未识别的样式维度宁可丢弃也不能掉到写值兜底。
-        if (s || it.kind === 'setStyle' || it.kind === 'setNumberFormat') {
-          const align = s?.align === 'left' || s?.align === 'center' || s?.align === 'right' ? s.align : undefined;
-          return {
-            a1,
-            ...(s?.numberFormat ? { numFmt: s.numberFormat } : {}),
-            ...(s?.bgColor ? { bg: s.bgColor } : {}),
-            ...(s?.color ? { color: s.color } : {}),
-            ...(s?.bold ? { bold: true } : {}),
-            ...(align ? { align } : {}),
-            note: it.label ?? it.badge,
-            editId: it.editId,
-          };
-        }
-        return { a1, ...(it.after != null ? { value: it.after } : {}), note: it.label ?? it.badge, editId: it.editId };
-      });
-  /** drawio:把 Agent 的 ChangeSet 转成画板节点/连线(画板内唯一 id,保持 source/target 一致映射)。 */
-  const drawioCsToBoard = (cs: unknown): { nodes: BNode[]; edges: BEdge[]; byEdit: Record<string, string>; objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> } => {
-    const seq = ++applySeqRef.current;
-    const edits = (cs as { edits?: Array<{ id: string; op: { kind: string; payload?: unknown } }> } | null)?.edits ?? [];
-    const idMap = new Map<string, string>();
-    // 保留 Agent 的 cellId(多轮连贯:下一批还能引用上一批的 n1),仅撞名才改;引用已有对象原名直连
-    const bid = (orig?: string): string => {
-      const k = orig ?? ('?' + idMap.size);
-      let v = idMap.get(k);
-      if (!v) { v = orig && !boardRef.current?.getObject(orig) ? orig : `${orig ?? 'g'}_${seq}_${idMap.size + 1}`; idMap.set(k, v); }
-      return v;
-    };
-    const refId = (orig?: string): string => (orig ? idMap.get(orig) ?? orig : bid(orig));
-    const nodes: BNode[] = []; const edges: BEdge[] = []; const byEdit: Record<string, string> = {}; const objs: Array<{ editId: string; node?: BNode; edge?: BEdge }> = [];
-    let stackY = 60;
-    const byOrig = new Map<string, BNode>(); // 原始 cellId → 已建节点(parent 相对坐标换算用)
-    for (const e of edits) {
-      if (e.op?.kind !== 'addObject') continue;
-      const p = (e.op.payload ?? {}) as { id?: string; value?: string; style?: string; edge?: boolean; source?: string; target?: string; parent?: string; geometry?: { x?: number; y?: number; width?: number; height?: number } };
-      if (p.edge || (p.source && p.target)) {
-        const id = bid(p.id ?? 'e_' + e.id);
-        const edge: BEdge = { id, from: refId(p.source), to: refId(p.target), arrow: /endArrow=none/.test(p.style ?? '') ? 'none' : 'classic', style: 'ortho', ...(/dashed=1/.test(p.style ?? '') ? { dash: true } : {}), ...(/strokeColor=([^;]+)/.exec(p.style ?? '')?.[1] ? { color: /strokeColor=([^;]+)/.exec(p.style ?? '')![1]! } : {}) };
-        edges.push(edge); byEdit[e.id] = id; objs.push({ editId: e.id, edge });
-      } else {
-        const id = bid(p.id ?? 'n_' + e.id);
-        const g = p.geometry ?? {};
-        const w = g.width ?? 160; const h = g.height ?? 48;
-        let x = g.x ?? 60; let y = g.y ?? stackY;
-        // drawio 语义:带 parent 的子节点坐标【相对容器】——不换算成绝对坐标,不同容器的子节点会叠在同一处
-        if (p.parent && p.parent !== '1') {
-          const par = byOrig.get(p.parent)?.id ? byOrig.get(p.parent) : undefined;
-          const parAbs = par ?? boardRef.current?.getObject(p.parent)?.node;
-          if (parAbs) { x += parAbs.x; y += parAbs.y; }
-        }
-        stackY = Math.max(stackY, y) + h + 40;
-        const st = parseDrawioStyle(p.style);
-        const sk = styleToKind(p.style);
-        const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(p.style), label: cleanLabel(p.value), kind: st.text ? 'text' : 'agent', ...(p.style ? { style: p.style } : {}), ...(sk ? { shape: sk } : {}), ...st };
-        nodes.push(node); byEdit[e.id] = id; objs.push({ editId: e.id, node });
-        if (p.id) byOrig.set(p.id, node);
-      }
-    }
-    return { nodes, edges, byEdit, objs };
   };
   /** drawio:把【改/删/移动现有节点】op 落到画板(用上下文给 Agent 的真实节点 id 定位)。
    *  返回 byEdit(审阅高亮)+ muts(prior/next 快照:拒绝还原 prior、重接受重放 next,别删用户对象)。 */

@@ -1,5 +1,6 @@
 import type { MutableRefObject, RefObject } from 'react';
-import type { DiffTurn, WordEdit } from './App.js';
+import type { DiffTurn } from './App.js';
+import type { WordEdit } from './proposal-materializers.js';
 import type { RichDocHandle } from './RichDoc.js';
 import type { SheetHandle } from './UniverSheet.js';
 import { akey, AUTO_BATCH_CAP, BATCH_RX } from './review-shared.js';
