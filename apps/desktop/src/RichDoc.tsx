@@ -9,6 +9,19 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type Reac
 import { useT } from './i18n.js';
 import { DiffToggle } from './DiffToggle.js';
 import {
+  RICH_TEXT_BLOCK_SELECTOR as BLOCK_SEL,
+  cleanBlockText,
+  cleanClone,
+  fmtBrief,
+  getRichDocContext,
+  getRichDocSnapshot,
+  getRichDocText,
+  sanitizeHtml,
+  visibleBlockFor,
+  visibleBlocks,
+} from './richdoc-projection.js';
+import type { RichDocSnapshot } from './richdoc-projection.js';
+import {
   IconUndo, IconRedo, IconClipboard, IconScissors, IconCopy, IconFormatBrush,
   IconFontGrow, IconFontShrink, IconChangeCase, IconClearFormat, IconStrikethrough,
   IconSubscript, IconSuperscript, IconWordArt, IconTextEffect, IconHighlighter, IconFontColor, IconPhonetic, IconEncloseChar,
@@ -57,7 +70,7 @@ export interface RichDocHandle {
   /** 带格式的文档上下文(逐段样式/字体/字号/对齐 + 样式系统摘要)——让 Agent 看得见排版细节。 */
   getContext(): string;
   /** 全文快照(逐段全文+样式,清样投影)——随请求上送 serve,供 read_blocks/find_text 等工具按需取,不进 prompt。 */
-  getDocSnapshot(): { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string }> };
+  getDocSnapshot(): RichDocSnapshot;
   /** 落一条 Agent 改动(文本改写 replacement / 格式 fmt / 删段 removeBlock / 图片 img / 结构化表格 table),按 editId 包裹,可还原。
    *  blockIdx=段号锚(0-based,与 getContext/getDocSnapshot 的"第N段"同序):quote 定位失败或空段落时的兜底通道。 */
   applyEdit(editId: string, quote: string, opts: { replacement?: string; fmt?: DocFmt; blockIdx?: number; removeBlock?: boolean; img?: { action: 'remove' | 'resize'; width?: number }; table?: DocTable }): boolean;
@@ -159,8 +172,6 @@ const STORAGE_KEY = 'oa.richdoc';
 const TAB_KEY = 'oa.richdoc.tab';
 const PAGE_KEY = 'oa.richdoc.page';
 const BLOCK_TAGS = /^(P|H1|H2|H3|H4|LI|BLOCKQUOTE|DIV|TD|TH)$/;
-const BLOCK_SEL = 'p,h1,h2,h3,h4,li,blockquote';
-const DOC_BLOCK_SEL = `${BLOCK_SEL},table`;
 
 interface PageState {
   size?: string; orient?: 'portrait' | 'landscape'; margin?: string; columns?: number;
@@ -175,76 +186,12 @@ const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;',
 /** CSS 属性选择器安全转义(domId 里可能出现任意字符)。 */
 const cssq = (s: string): string => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"'));
 
-const SAFE_HTML_TAGS = new Set([
-  'A', 'B', 'BR', 'BLOCKQUOTE', 'CAPTION', 'CIRCLE', 'CODE', 'COL', 'COLGROUP', 'DD', 'DEL', 'DIV', 'DL', 'DT', 'EM', 'FIGCAPTION', 'FIGURE', 'H1', 'H2', 'H3', 'H4', 'HR', 'I', 'IMG', 'INS', 'LI', 'LINE', 'NAV', 'OL', 'P', 'PATH', 'POLYGON', 'POLYLINE', 'PRE', 'RECT', 'RT', 'RUBY', 'SECTION', 'SMALL', 'SPAN', 'STRONG', 'SUB', 'SUP', 'SVG', 'TABLE', 'TBODY', 'TD', 'TEXT', 'TFOOT', 'TH', 'THEAD', 'TR', 'U', 'UL',
-]);
-const SAFE_URI_ATTRS = new Set(['href', 'src']);
-const SAFE_HTML_ATTRS = new Set([
-  'alt', 'aria-label', 'class', 'colspan', 'contenteditable', 'cx', 'cy', 'd', 'data-cid', 'data-edit', 'data-edit-block', 'data-glyph', 'data-kind', 'data-label', 'data-undo', 'download', 'fill', 'height', 'href', 'id', 'r', 'rowspan', 'rx', 'ry', 'src', 'stroke', 'stroke-width', 'style', 'tabindex', 'target', 'title', 'viewbox', 'width', 'x', 'x1', 'x2', 'y', 'y1', 'y2',
-]);
-function safeHtmlUrl(value: string): boolean {
-  const v = value.trim().toLowerCase();
-  return v === '' || v.startsWith('#') || v.startsWith('data:image/') || v.startsWith('data:application/') || v.startsWith('blob:') || v.startsWith('http://localhost') || v.startsWith('http://127.0.0.1') || v.startsWith('https://');
-}
-function sanitizeHtml(html: string): string {
-  const template = document.createElement('template');
-  template.innerHTML = html;
-  const walk = (node: Node): void => {
-    for (const child of Array.from(node.childNodes)) {
-      if (child.nodeType === Node.COMMENT_NODE) { child.remove(); continue; }
-      if (!(child instanceof Element)) { walk(child); continue; }
-      if (!SAFE_HTML_TAGS.has(child.tagName)) {
-        child.replaceWith(...Array.from(child.childNodes));
-        continue;
-      }
-      for (const attr of Array.from(child.attributes)) {
-        const name = attr.name.toLowerCase();
-        const value = attr.value;
-        if (name.startsWith('on') || !SAFE_HTML_ATTRS.has(name)) { child.removeAttribute(attr.name); continue; }
-        if (SAFE_URI_ATTRS.has(name) && !safeHtmlUrl(value)) { child.removeAttribute(attr.name); continue; }
-        if (name === 'style' && /url\s*\(|expression\s*\(|javascript:/i.test(value)) child.removeAttribute(attr.name);
-      }
-      walk(child);
-    }
-  };
-  walk(template.content);
-  return template.innerHTML;
-}
 /** 最近块祖先(跨块命中要拒绝:deleteContents 会把两段搅成一段)。 */
 function blockOf(n: Node, root: HTMLElement): Node | null {
   let e: Node | null = n;
   while (e && e !== root) { if (e instanceof HTMLElement && BLOCK_TAGS.test(e.tagName)) return e; e = e.parentNode; }
   return null;
 }
-/** 去修订投影:克隆后删掉 del(未定的旧文不属于文档本体),其余原样(ins 即"改后")。 */
-function cleanClone(el: HTMLElement): HTMLElement {
-  const c = el.cloneNode(true) as HTMLElement;
-  c.querySelectorAll('del').forEach((d) => d.remove());
-  return c;
-}
-/** 审阅可见块列表(排除待删段):getContext/getDocSnapshot/applyEdit(blockIdx) 共用同一序,Agent 拿到的段号才不会漂移。 */
-const visibleBlocks = (root: HTMLElement): HTMLElement[] => (Array.from(root.querySelectorAll(DOC_BLOCK_SEL)) as HTMLElement[]).filter((el) => {
-  if (el.getAttribute('data-kind') === 'remove') return false;
-  // A top-level table is one Word block; paragraphs and cells inside it never consume para indexes.
-  return !el.parentElement?.closest('table');
-});
-const tableRows = (el: HTMLElement): string[][] => {
-  const clone = cleanClone(el);
-  if (!(clone instanceof HTMLTableElement)) return [];
-  return Array.from(clone.rows).map((row) => Array.from(row.cells).map((cell) => (cell.textContent ?? '').replace(/\s+/g, ' ').trim()));
-};
-const tableSummary = (el: HTMLElement, maxRows = 100, maxCols = 20, maxCell = 250): string => {
-  const rows = tableRows(el);
-  const columns = rows.reduce((count, row) => Math.max(count, row.length), 0);
-  const preview = rows.slice(0, maxRows).map((row) => row.slice(0, maxCols).map((cell) => cell.length > maxCell ? cell.slice(0, maxCell) + '…' : cell));
-  const omitted = rows.length > maxRows || columns > maxCols ? `,省略 ${Math.max(0, rows.length - maxRows)} 行/${Math.max(0, columns - maxCols)} 列` : '';
-  return `[表格 ${rows.length}×${columns},rows=${JSON.stringify(preview)}${omitted}]`;
-};
-const cleanBlockText = (el: HTMLElement): string => el.tagName === 'TABLE' ? tableSummary(el) : (cleanClone(el).textContent ?? '');
-const visibleBlockFor = (root: HTMLElement, node: Node): HTMLElement | undefined => {
-  const target = node instanceof Element ? node : node.parentElement;
-  return target ? visibleBlocks(root).find((block) => block === target || block.contains(target)) : undefined;
-};
 function makeTableElement(spec: DocTable): HTMLTableElement {
   const table = document.createElement('table');
   table.className = 'rd-tbl';
@@ -260,8 +207,6 @@ function makeTableElement(spec: DocTable): HTMLTableElement {
   });
   return table;
 }
-/** 块内图片摘要([图片 alt 宽×高]):进上下文/快照,Agent 才感知得到图片、才不会把含图段当纯空段清理。 */
-const imgBrief = (el: HTMLElement): string => Array.from(el.querySelectorAll('img')).map((im) => `[图片${im.alt ? ' ' + im.alt : ''}${im.width ? ' ' + im.width + '×' + im.height : ''}]`).join('');
 
 /** 在 root 的文本里找到 quote 的 Range(跨文本节点);from=起始字符偏移(供"查找下一个");跨块命中自动跳到下一处。 */
 function findRange(root: HTMLElement, quote: string, from = 0): Range | null {
@@ -321,40 +266,6 @@ function findRangeLoose(root: HTMLElement, quote: string): Range | null {
     idx = norm.indexOf(nq, idx + 1);
   }
   return null;
-}
-
-/** rgb(…) → #rrggbb(供喂给 Agent 的格式概览)。 */
-function rgbToHex(rgb: string): string {
-  const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(rgb);
-  if (!m) return rgb;
-  const h = (x: string): string => Number(x).toString(16).padStart(2, '0');
-  return ('#' + h(m[1]!) + h(m[2]!) + h(m[3]!)).toLowerCase();
-}
-/** 元素样式 → 简明中文格式串(段落/选区概览用)。 */
-function fmtBrief(el: HTMLElement): { font: string; size: number; color: string; bold: boolean; italic: boolean; align: string; sizeDefault: boolean } {
-  const cs = getComputedStyle(el);
-  // 字号/字体取首个文字所在元素:run 级字号在 span 上(docx 导入即如此),块级计算样式只会读到页面基线,
-  // 造成"11.3pt 幻影字号"(agent 把 CSS 默认当成谁设的怪字号去修)+ 与工具栏显示互相矛盾
-  const probeNode = document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode();
-  const probe = probeNode?.parentElement && el.contains(probeNode.parentElement) ? probeNode.parentElement : el;
-  const pcs = probe === el ? cs : getComputedStyle(probe);
-  // 显式字号检测:从文字元素向上到页面根,任一层有内联 font-size 才算"设置过";否则是页面基线的默认渲染
-  let sizeDefault = true;
-  for (let n: HTMLElement | null = probe; n; n = n.parentElement) {
-    if (n.style.fontSize) { sizeDefault = false; break; }
-    if (n.classList.contains('rd-page')) break;
-  }
-  return {
-    font: pcs.fontFamily.split(',')[0]?.replace(/["']/g, '').trim() ?? '',
-    size: Math.round(parseFloat(pcs.fontSize) * 0.75 * 10) / 10,
-    color: rgbToHex(pcs.color),
-    bold: parseInt(pcs.fontWeight, 10) >= 600,
-    italic: pcs.fontStyle === 'italic',
-    // 分散对齐(text-align-last:justify,末行/单行也被撑满)≠ 两端对齐——必须如实上报,这是最常见的排版事故
-    align: cs.textAlign === 'center' ? '居中' : cs.textAlign === 'right' ? '右对齐'
-      : (cs.textAlign === 'justify' || cs.textAlign === 'justify-all') ? (cs.textAlignLast === 'justify' ? '分散对齐' : '两端对齐') : '左对齐',
-    sizeDefault,
-  };
 }
 
 function styleSpan(span: HTMLElement, fmt: DocFmt): void {
@@ -603,48 +514,17 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   };
 
   useImperativeHandle(ref, (): RichDocHandle => ({
-    getText: () => { // 清样投影:喂给 Agent 的永远是"改后本体",del 里的旧文不进上下文(否则新旧连体会污染下一轮的 quote)
-      const root = edRef.current; if (!root) return '';
-      const blocks = visibleBlocks(root);
-      if (!blocks.length) return (cleanClone(root).textContent ?? '').trim();
-      return blocks.map((b) => cleanBlockText(b).replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+    getText: () => { // 清样投影:喂给 Agent 的永远是"改后本体",del 里的旧文不进上下文
+      const root = edRef.current;
+      return root ? getRichDocText(root) : '';
     },
     getContext: () => {
-      const root = edRef.current; if (!root) return '(空文档)';
-      const blocks = visibleBlocks(root); // 与 getDocSnapshot/applyEdit(blockIdx) 同一序,"第N段"编号三处一致
-      if (!blocks.length) return root.innerText || '(空文档)';
-      const fonts = new Set<string>(); const sizes = new Set<number>(); const colors = new Set<string>();
-      const heads: string[] = []; const bodyCombo = new Map<string, number>(); // 样式系统摘要的原料:标题树 + 正文基线组合
-      let truncated = 0;
-      const lines = blocks.map((el, i) => {
-        const b = fmtBrief(el);
-        if (b.font) fonts.add(b.font); sizes.add(b.size); if (b.color !== '#000000' && b.color !== '#1f2430') colors.add(b.color);
-        const tag = el.tagName.toLowerCase();
-        const style = tag === 'h1' ? '标题1' : tag === 'h2' ? '标题2' : tag === 'h3' ? '标题3' : tag === 'h4' ? '标题4' : tag === 'blockquote' ? '引用' : tag === 'li' ? '列表项' : tag === 'table' ? '表格' : '正文';
-        const txt = tag === 'table' ? tableSummary(el, 8, 8, 80) : cleanBlockText(el).replace(/\s+/g, ' ').trim(); // 表格保留二维边界,不能把单元格连成无分隔文本
-        const img = imgBrief(el); // 图片可感知:含图段标出 [图片 alt 宽×高],空段才真算空
-        if (/^标题/.test(style)) heads.push(`${'  '.repeat(parseInt(tag.slice(1), 10) - 1)}H${tag.slice(1)} 第${i + 1}段 ${txt.slice(0, 30)}`);
-        else if (style === '正文') bodyCombo.set(`${b.font} ${b.size}pt`, (bodyCombo.get(`${b.font} ${b.size}pt`) ?? 0) + 1);
-        const marks = [style, `${b.font} ${b.size}pt${b.sizeDefault ? '(默认)' : ''}`, b.color !== '#000000' && b.color !== '#1f2430' ? b.color : '', b.bold ? '加粗' : '', b.italic ? '斜体' : '', b.align !== '左对齐' ? b.align : ''].filter(Boolean).join(' · ');
-        const cut = txt.length > 300; if (cut) truncated++;
-        return `第${i + 1}段 [${marks}]: ${img}${cut ? txt.slice(0, 300) + '…(已截断)' : txt || (img ? '' : '(空段)')}`;
-      });
-      const baseline = [...bodyCombo].sort((a, b2) => b2[1] - a[1]);
-      const sys = `样式系统: ${heads.length ? '标题树 ' + heads.length + ' 个(' + heads.slice(0, 8).join(' / ') + (heads.length > 8 ? ' …' : '') + ')' : '无标题样式段落'};正文基线 ${baseline[0] ? baseline[0][0] + '(' + baseline[0][1] + ' 段)' : '(无)'}${baseline.length > 1 ? ',另有 ' + (baseline.length - 1) + ' 种偏离基线的正文排版 ⚠ 基线不统一' : ''}`;
-      const toolHint = truncated ? `\n(有 ${truncated} 段超长已截断:改写/引用前先用 read_blocks 取该段全文,quote 必须来自真实原文;检索用 find_text,大纲用 get_outline,排版审计用 get_style_usage。)` : '\n(可用工具:read_blocks 按段取全文、find_text 全文检索、get_outline 大纲、get_style_usage 样式分布。)';
-      return `[Word 文档 · ${blocks.length} 段] 每段已标注它的样式/字体/字号/对齐/颜色;要改格式就据此下发 setStyle。\n${sys}\n格式概览: 字体 ${[...fonts].join('、')} | 字号 ${[...sizes].sort((a, b) => a - b).join('、')}pt${colors.size ? ' | 非黑颜色 ' + [...colors].join('、') : ''}${toolHint}\n逐段:\n${lines.join('\n')}`;
+      const root = edRef.current;
+      return root ? getRichDocContext(root) : '(空文档)';
     },
-    getDocSnapshot: () => { // 全文快照(清样投影):serve 侧不进 prompt,只供 read_blocks/find_text/get_outline/get_style_usage 取数
-      const root = edRef.current; if (!root) return { blocks: [] };
-      const blocks = visibleBlocks(root);
-      return {
-        blocks: blocks.map((el) => {
-          const b = fmtBrief(el);
-          const tag = el.tagName.toLowerCase();
-          const style = tag === 'h1' ? '标题1' : tag === 'h2' ? '标题2' : tag === 'h3' ? '标题3' : tag === 'h4' ? '标题4' : tag === 'blockquote' ? '引用' : tag === 'li' ? '列表项' : tag === 'table' ? '表格' : '正文';
-          return { style, text: imgBrief(el) + cleanBlockText(el).replace(/\s+/g, ' ').trim(), font: b.font, size: b.size, align: b.align };
-        }),
-      };
+    getDocSnapshot: () => {
+      const root = edRef.current;
+      return root ? getRichDocSnapshot(root) : { blocks: [] };
     },
     applyEdit: (editId, quote, opts) => {
       const root = edRef.current;
