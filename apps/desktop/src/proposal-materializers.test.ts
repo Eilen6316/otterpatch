@@ -52,6 +52,28 @@ test('materializeWordEdits maps text, style, delete, and image operations in dif
   assert.deepEqual(wordEditOpts(result[3]!), { img: { action: 'resize', width: 320 }, blockIdx: 2 });
 });
 
+test('materializeWordEdits preserves structured Word table data and placement', () => {
+  const result = materializeWordEdits(
+    diff([{ editId: 'table', ref: 'Summary', kind: 'insertTable', badge: 'add', label: 'insert 2x2 table', after: '2x2 table' }]),
+    {
+      edits: [{ id: 'table', target: 'a1', op: { kind: 'insertTable', rows: [['Name', 'Value'], ['Alpha', '10']], headerRows: 1, at: 'after' } }],
+      anchors: { a1: { portable: { quote: { text: 'Summary' }, path: [3] } } },
+    },
+  );
+
+  assert.deepEqual(result, [{
+    editId: 'table',
+    domId: 'cs1::table',
+    quote: 'Summary',
+    blockIdx: 3,
+    table: { rows: [['Name', 'Value'], ['Alpha', '10']], headerRows: 1, at: 'after' },
+  }]);
+  assert.deepEqual(wordEditOpts(result[0]!), {
+    blockIdx: 3,
+    table: { rows: [['Name', 'Value'], ['Alpha', '10']], headerRows: 1, at: 'after' },
+  });
+});
+
 test('materializeGridOps separates cell values, styles, and structural operations', () => {
   const result = materializeGridOps(diff([
     { editId: 'value', ref: 'Sheet2!B3', badge: 'modify', label: 'set value', after: '42' },

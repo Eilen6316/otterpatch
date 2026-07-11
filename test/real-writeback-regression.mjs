@@ -66,6 +66,14 @@ function flowCs(format, quote, text, path = [0]) {
   };
 }
 
+function wordTableCs() {
+  return {
+    id: 'word-table-cs', hostId: 'h', baseRev: 0, origin: base, meta: { intent: 'insert table' },
+    anchors: { a0: { id: 'a0', hostId: 'h', kind: 'flow', ref: null, baseRev: 0, portable: { kind: 'flow', path: [], quote: { prefix: '', text: '', suffix: '' }, bias: 'left' } } },
+    edits: [{ id: 'e0', target: 'a0', op: { family: 'structure', kind: 'insertTable', rows: [['Name', 'Value'], ['Alpha', '10']], headerRows: 1, at: 'end' } }],
+  };
+}
+
 function objectCs(format, elementId, value) {
   return {
     id: `${format}-cs`, hostId: 'h', baseRev: 0, origin: base, meta: { intent: 'set value' },
@@ -84,6 +92,15 @@ async function checkDocx() {
   const res = await rt.commit({ format: 'word', bytes: docxSample(), changeSet: flowCs('word', 'hello world', 'hello safe world'), currentRev: 0 });
   assert.equal(res.ok, true);
   assert.match(dec.decode(unzipSync(res.bytes)['word/document.xml']), /w:ins/);
+}
+
+async function checkDocxTable() {
+  const res = await rt.commit({ format: 'word', bytes: docxSample(), changeSet: wordTableCs(), currentRev: 0 });
+  assert.equal(res.ok, true);
+  const documentXml = dec.decode(unzipSync(res.bytes)['word/document.xml']);
+  assert.match(documentXml, /<w:tbl>/);
+  assert.equal([...documentXml.matchAll(/<w:tr>/g)].length, 2);
+  assert.equal([...documentXml.matchAll(/<w:tc>/g)].length, 4);
 }
 
 async function checkPptx() {
@@ -106,7 +123,7 @@ async function checkPdf() {
   assert.equal(out.getForm().getTextField('name').getText(), 'Alice');
 }
 
-for (const [name, fn] of Object.entries({ xlsx: checkXlsx, docx: checkDocx, pptx: checkPptx, drawio: checkDrawio, pdf: checkPdf })) {
+for (const [name, fn] of Object.entries({ xlsx: checkXlsx, docx: checkDocx, docxTable: checkDocxTable, pptx: checkPptx, drawio: checkDrawio, pdf: checkPdf })) {
   await fn();
   console.log(`[real-writeback] ${name} ok`);
 }

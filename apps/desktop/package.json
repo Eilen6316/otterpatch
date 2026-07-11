@@ -6,7 +6,7 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
-    "test": "node --import tsx --test src/file-snapshot.test.ts src/proposal-materializers.test.ts",
+    "test": "node --import tsx --test src/docximport.test.ts src/file-snapshot.test.ts src/proposal-materializers.test.ts",
     "build": "vite build",
     "preview": "vite preview",
     "electron": "electron .",

@@ -22,6 +22,7 @@ const OP_FAMILIES: Record<string, string> = {
   insertChart: 'object',
   conditionalFormat: 'style',
   dataValidation: 'style',
+  insertTable: 'structure',
   setMark: 'style',
   setParagraphStyle: 'style',
   moveObject: 'object',
@@ -36,6 +37,7 @@ const INSERT_AT = new Set(['start', 'end']);
 const MARK_TYPES = new Set(['bold', 'italic', 'comment', 'highlight']);
 const CHART_TYPES = new Set(['bar', 'line', 'pie']);
 const VALIDATION_RULES = new Set(['list', 'numberBetween', 'numberGreaterThan', 'checkbox', 'dateBetween']);
+const TABLE_INSERT_AT = new Set(['before', 'after', 'end']);
 
 export function assertChangeSet(value: unknown): asserts value is ChangeSet {
   if (!isRecord(value)) throw new Error('invalid ChangeSet: expected object');
@@ -165,6 +167,24 @@ function assertOp(op: Record<string, unknown>): void {
     case 'dataValidation':
       if (!VALIDATION_RULES.has(String(op.rule))) throw new Error('invalid ChangeSet: dataValidation.rule invalid');
       break;
+    case 'insertTable': {
+      if (!Array.isArray(op.rows) || op.rows.length === 0 || op.rows.length > 100) {
+        throw new Error('invalid ChangeSet: insertTable.rows must contain 1-100 rows');
+      }
+      const width = Array.isArray(op.rows[0]) ? op.rows[0].length : 0;
+      if (width === 0 || width > 20) throw new Error('invalid ChangeSet: insertTable must contain 1-20 columns');
+      for (const row of op.rows) {
+        if (!Array.isArray(row) || row.length !== width) throw new Error('invalid ChangeSet: insertTable rows must have equal width');
+        if (!row.every((cell) => typeof cell === 'string' && cell.length <= 10_000)) {
+          throw new Error('invalid ChangeSet: insertTable cells must be strings up to 10000 characters');
+        }
+      }
+      if (!isSafeNonNegativeInt(op.headerRows) || Number(op.headerRows) > op.rows.length) {
+        throw new Error('invalid ChangeSet: insertTable.headerRows invalid');
+      }
+      if (!TABLE_INSERT_AT.has(String(op.at))) throw new Error('invalid ChangeSet: insertTable.at invalid');
+      break;
+    }
     case 'setMark':
       if (!isRecord(op.mark) || !MARK_TYPES.has(String(op.mark.type))) throw new Error('invalid ChangeSet: setMark.mark invalid');
       break;

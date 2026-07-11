@@ -55,3 +55,44 @@ test('Word 红线写回:replaceText → w:ins,保留 w:pPr,仅 document.xml 变'
   const b = unzipSync(res.bytes);
   assert.equal(Buffer.compare(Buffer.from(a['word/styles.xml']!), Buffer.from(b['word/styles.xml']!)), 0);
 });
+
+test('Word 红线写回:insertTable → 原生 w:tbl,仍只修改 document.xml', async () => {
+  const a0 = 'a-table' as AnchorId;
+  const anchor: LogicalAnchor = {
+    id: a0,
+    hostId: 'h' as unknown as HostId,
+    kind: 'flow',
+    ref: {},
+    portable: { kind: 'flow', path: [], quote: { prefix: '', text: '', suffix: '' }, bias: 'left' },
+    baseRev: 0 as DocRev,
+  };
+  const cs: ChangeSet = {
+    id: 'c-table',
+    hostId: 'h',
+    baseRev: 0 as DocRev,
+    anchors: { [a0]: anchor },
+    origin: { by: 'agent', sessionId: 'table-test' },
+    meta: { intent: 'insert a comparison table' },
+    edits: [{
+      id: 'e-table',
+      target: a0,
+      op: { family: 'structure', kind: 'insertTable', rows: [['Name', 'Value'], ['Alpha', '10']], headerRows: 1, at: 'end' },
+    }],
+  };
+
+  const original = makeDocx('before table');
+  const wb = new WordRedlineWriteback({ author: 'OtterPatch', date: '2026-07-12T00:00:00Z' });
+  const res = await wb.commit(cs, { hostId: 'h', bytes: original, rev: 0 as DocRev });
+
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.appliedEditIds, ['e-table']);
+  assert.deepEqual(res.touchedParts, ['word/document.xml']);
+  const before = unzipSync(original);
+  const after = unzipSync(res.bytes);
+  const docXml = dec.decode(after['word/document.xml']!);
+  assert.match(docXml, /<w:tbl>/);
+  assert.equal([...docXml.matchAll(/<w:tr>/g)].length, 2);
+  assert.equal([...docXml.matchAll(/<w:tc>/g)].length, 4);
+  assert.equal(Buffer.compare(Buffer.from(before['word/styles.xml']!), Buffer.from(after['word/styles.xml']!)), 0);
+  assert.equal(Buffer.compare(Buffer.from(before['[Content_Types].xml']!), Buffer.from(after['[Content_Types].xml']!)), 0);
+});

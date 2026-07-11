@@ -63,3 +63,30 @@ test('assertChangeSet rejects malformed op payloads', () => {
   const invalid = { ...cs, edits: [{ ...cs.edits[0], op: { family: 'text', kind: 'insertText', text: 'x', at: 'middle' } }] };
   assert.throws(() => assertChangeSet(invalid), /insertText requires text and at/);
 });
+
+test('assertChangeSet validates structured Word table payloads', () => {
+  const cs = validChangeSet();
+  const valid = {
+    ...cs,
+    edits: [{ ...cs.edits[0], op: { family: 'structure', kind: 'insertTable', rows: [['A', 'B'], ['1', '2']], headerRows: 1, at: 'end' } }],
+  };
+  assert.doesNotThrow(() => assertChangeSet(valid));
+
+  const ragged = {
+    ...cs,
+    edits: [{ ...cs.edits[0], op: { family: 'structure', kind: 'insertTable', rows: [['A', 'B'], ['1']], headerRows: 1, at: 'end' } }],
+  };
+  assert.throws(() => assertChangeSet(ragged), /equal width/);
+
+  const invalidHeader = {
+    ...cs,
+    edits: [{ ...cs.edits[0], op: { family: 'structure', kind: 'insertTable', rows: [['A']], headerRows: 2, at: 'end' } }],
+  };
+  assert.throws(() => assertChangeSet(invalidHeader), /headerRows/);
+
+  const invalidPosition = {
+    ...cs,
+    edits: [{ ...cs.edits[0], op: { family: 'structure', kind: 'insertTable', rows: [['A']], headerRows: 0, at: 'middle' } }],
+  };
+  assert.throws(() => assertChangeSet(invalidPosition), /insertTable.at/);
+});

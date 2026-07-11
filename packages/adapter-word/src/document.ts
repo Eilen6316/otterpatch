@@ -22,15 +22,54 @@ export interface FmtEdit { id?: EditId; kind: 'fmt'; quote: string; char?: CharP
 export interface DelParaEdit { id?: EditId; kind: 'delPara'; quote?: string; paraIdx?: number }
 /** Image op on the drawing inside the anchored paragraph: remove (run wrapped in <w:del>) or resize (wp:extent/a:ext rewritten in EMU, aspect kept). */
 export interface ImgEdit { id?: EditId; kind: 'img'; action: 'remove' | 'resize'; width?: number; quote?: string; paraIdx?: number }
-export type DocEdit = ParaEdit | FmtEdit | DelParaEdit | ImgEdit;
+/** Native Word table insertion. Rows are plain text only; row-level w:ins keeps the insertion reviewable in Word. */
+export interface InsertTableEdit { id?: EditId; kind: 'insertTable'; rows: string[][]; headerRows: number; at: 'before' | 'after' | 'end'; quote?: string; paraIdx?: number }
+export type DocEdit = ParaEdit | FmtEdit | DelParaEdit | ImgEdit | InsertTableEdit;
 
 const isText = (e: DocEdit): e is ParaEdit => 'old' in e;
 const isDel = (e: DocEdit): e is DelParaEdit => !isText(e) && e.kind === 'delPara';
 const isImg = (e: DocEdit): e is ImgEdit => !isText(e) && e.kind === 'img';
+const isTable = (e: DocEdit): e is InsertTableEdit => !isText(e) && e.kind === 'insertTable';
 const EMU_PER_PX = 9525; // 96dpi: 1px = 9525 EMU
 const escAttr = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 interface Ctx { id: number; author: string; authorRaw: string; date: string }
+
+function tableXml(edit: InsertTableEdit, ctx: Ctx): string {
+  const columns = edit.rows[0]?.length ?? 1;
+  const cellWidth = Math.max(720, Math.floor(9000 / columns));
+  const grid = edit.rows[0]!.map(() => `<w:gridCol w:w="${cellWidth}"/>`).join('');
+  const borders = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']
+    .map((side) => `<w:${side} w:val="single" w:sz="4" w:space="0" w:color="B8C0CC"/>`)
+    .join('');
+  const rows = edit.rows.map((row, rowIndex) => {
+    const header = rowIndex < edit.headerRows;
+    const revision = `<w:ins w:id="${ctx.id++}" w:author="${ctx.author}" w:date="${ctx.date}"/>`;
+    const cells = row.map((cell) => {
+      const tcPr = `<w:tcPr><w:tcW w:w="${cellWidth}" w:type="dxa"/>${header ? '<w:shd w:val="clear" w:color="auto" w:fill="E8EEF7"/>' : ''}</w:tcPr>`;
+      const rPr = header ? '<w:rPr><w:b/></w:rPr>' : '';
+      return `<w:tc>${tcPr}<w:p><w:r>${rPr}<w:t xml:space="preserve">${esc(cell)}</w:t></w:r></w:p></w:tc>`;
+    }).join('');
+    return `<w:tr><w:trPr>${header ? '<w:tblHeader/>' : ''}${revision}</w:trPr>${cells}</w:tr>`;
+  }).join('');
+  return `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblLayout w:type="autofit"/><w:tblBorders>${borders}</w:tblBorders></w:tblPr><w:tblGrid>${grid}</w:tblGrid>${rows}</w:tbl>`;
+}
+
+function insertTableAtDocumentEnd(documentXml: string, table: string): string | null {
+  const body = /<w:body\b[^>]*>/.exec(documentXml);
+  if (!body || body.index == null) return null;
+  const contentStart = body.index + body[0].length;
+  const bodyEnd = documentXml.indexOf('</w:body>', contentStart);
+  if (bodyEnd < 0) return null;
+  const content = documentXml.slice(contentStart, bodyEnd);
+  // Only the final body-level sectPr belongs after document content. A lastIndexOf
+  // can land on a paragraph-level section break and insert the table inside w:pPr.
+  const sectStart = content.lastIndexOf('<w:sectPr');
+  const sectTail = sectStart >= 0 ? content.slice(sectStart) : '';
+  const hasFinalSectPr = /^<w:sectPr\b[^>]*(?:\/>|>[\s\S]*?<\/w:sectPr>)\s*$/.test(sectTail);
+  const at = hasFinalSectPr ? contentStart + sectStart : bodyEnd;
+  return documentXml.slice(0, at) + table + documentXml.slice(at);
+}
 
 /** Word-level redline within the range; preserves formatting per run's rPr: equal/del segments carry their original rPr (unchanged text keeps its formatting), ins uses the rPr at the current old-text offset. */
 function spanRedline(middle: { rPr: string; text: string }[], newS: string, ctx: Ctx): string {
@@ -122,6 +161,13 @@ function imgXml(para: string, edit: ImgEdit, ctx: Ctx): string | null {
 function tryApply(para: string, edit: DocEdit, ctx: Ctx, blkIdx?: number): string | null {
   const quote = isText(edit) ? edit.old : (edit.quote ?? '');
   const idxHit = !isText(edit) && edit.paraIdx != null && edit.paraIdx === blkIdx;
+  if (isTable(edit)) {
+    if (edit.at === 'end') return null;
+    const quoteHit = !para.startsWith('<w:tbl') && !!quote && paraText(para).includes(quote);
+    if (!idxHit && !quoteHit) return null;
+    const table = tableXml(edit, ctx);
+    return edit.at === 'before' ? table + para : para + table;
+  }
   // 结构/图片操作:quote 命中该段 或 段号命中(空段只有段号)
   if (isDel(edit)) {
     if (quote ? paraText(para).includes(quote) : idxHit) return delParaXml(para, ctx);
@@ -191,12 +237,23 @@ export function redlineDocumentXml(documentXml: string, edits: DocEdit[], opts: 
   const appliedEditIds: EditId[] = [];
   const droppedEdits: Array<{ editId: EditId; reason: string }> = [];
   for (const edit of edits) {
+    if (isTable(edit) && edit.at === 'end') {
+      const next = insertTableAtDocumentEnd(xml, tableXml(edit, ctx));
+      if (next != null) {
+        xml = next;
+        changed++;
+        if (edit.id) appliedEditIds.push(edit.id);
+      } else if (edit.id) {
+        droppedEdits.push({ editId: edit.id, reason: 'document body not found for table insertion' });
+      }
+      continue;
+    }
     let applied = false;
     let blk = -1; // top-level block cursor (w:tbl = one block, its inner w:p don't count)
     // Match tables first (skipped whole), then self-closing empty paragraphs <w:p .../> and regular <w:p>...</w:p>
     xml = xml.replace(/<w:tbl\b[\s\S]*?<\/w:tbl>|<w:p\b[^>]*\/>|<w:p\b[\s\S]*?<\/w:p>/g, (el) => {
       blk++;
-      if (applied || el.startsWith('<w:tbl')) return el;
+      if (applied || (el.startsWith('<w:tbl') && !isTable(edit))) return el;
       const res = tryApply(el, edit, ctx, blk);
       if (res == null) return el;
       applied = true;

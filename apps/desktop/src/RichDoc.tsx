@@ -40,6 +40,11 @@ export interface DocFmt {
   // 页面级(Agent 以 all=true 下发,作用于整篇版面):分栏 / 页边距 / 纸张方向
   columns?: number; margin?: 'narrow' | 'normal' | 'moderate' | 'wide'; orient?: 'portrait' | 'landscape';
 }
+export interface DocTable {
+  rows: string[][];
+  headerRows: number;
+  at: 'before' | 'after' | 'end';
+}
 const INLINE_FMT = (f: DocFmt): boolean => f.bold != null || f.italic != null || f.underline != null || f.strike != null || f.font != null || f.size != null || f.color != null;
 const BLOCK_FMT = (f: DocFmt): boolean => f.align != null || f.lineSpacing != null || f.bgColor != null || f.block != null;
 const PAGE_FMT = (f: DocFmt): boolean => f.columns != null || f.margin != null || f.orient != null;
@@ -53,9 +58,9 @@ export interface RichDocHandle {
   getContext(): string;
   /** 全文快照(逐段全文+样式,清样投影)——随请求上送 serve,供 read_blocks/find_text 等工具按需取,不进 prompt。 */
   getDocSnapshot(): { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string }> };
-  /** 落一条 Agent 改动(文本改写 replacement / 格式 fmt / 删段 removeBlock / 图片 img),按 editId 包裹,可还原。
+  /** 落一条 Agent 改动(文本改写 replacement / 格式 fmt / 删段 removeBlock / 图片 img / 结构化表格 table),按 editId 包裹,可还原。
    *  blockIdx=段号锚(0-based,与 getContext/getDocSnapshot 的"第N段"同序):quote 定位失败或空段落时的兜底通道。 */
-  applyEdit(editId: string, quote: string, opts: { replacement?: string; fmt?: DocFmt; blockIdx?: number; removeBlock?: boolean; img?: { action: 'remove' | 'resize'; width?: number } }): boolean;
+  applyEdit(editId: string, quote: string, opts: { replacement?: string; fmt?: DocFmt; blockIdx?: number; removeBlock?: boolean; img?: { action: 'remove' | 'resize'; width?: number }; table?: DocTable }): boolean;
   /** 按 editId 精确还原该条改动(undoMap 缺失时按 DOM 现场兜底);false=完全找不到可还原目标。 */
   revert(editId: string): boolean;
   /** 选中/滚动到某条改动。 */
@@ -155,6 +160,7 @@ const TAB_KEY = 'oa.richdoc.tab';
 const PAGE_KEY = 'oa.richdoc.page';
 const BLOCK_TAGS = /^(P|H1|H2|H3|H4|LI|BLOCKQUOTE|DIV|TD|TH)$/;
 const BLOCK_SEL = 'p,h1,h2,h3,h4,li,blockquote';
+const DOC_BLOCK_SEL = `${BLOCK_SEL},table`;
 
 interface PageState {
   size?: string; orient?: 'portrait' | 'landscape'; margin?: string; columns?: number;
@@ -174,7 +180,7 @@ const SAFE_HTML_TAGS = new Set([
 ]);
 const SAFE_URI_ATTRS = new Set(['href', 'src']);
 const SAFE_HTML_ATTRS = new Set([
-  'alt', 'class', 'colspan', 'contenteditable', 'cx', 'cy', 'd', 'data-cid', 'data-kind', 'data-label', 'download', 'fill', 'height', 'href', 'id', 'r', 'rowspan', 'rx', 'ry', 'src', 'stroke', 'stroke-width', 'style', 'target', 'title', 'viewbox', 'width', 'x', 'x1', 'x2', 'y', 'y1', 'y2',
+  'alt', 'aria-label', 'class', 'colspan', 'contenteditable', 'cx', 'cy', 'd', 'data-cid', 'data-edit', 'data-edit-block', 'data-glyph', 'data-kind', 'data-label', 'data-undo', 'download', 'fill', 'height', 'href', 'id', 'r', 'rowspan', 'rx', 'ry', 'src', 'stroke', 'stroke-width', 'style', 'tabindex', 'target', 'title', 'viewbox', 'width', 'x', 'x1', 'x2', 'y', 'y1', 'y2',
 ]);
 function safeHtmlUrl(value: string): boolean {
   const v = value.trim().toLowerCase();
@@ -216,9 +222,44 @@ function cleanClone(el: HTMLElement): HTMLElement {
   c.querySelectorAll('del').forEach((d) => d.remove());
   return c;
 }
-const cleanBlockText = (el: HTMLElement): string => cleanClone(el).textContent ?? '';
 /** 审阅可见块列表(排除待删段):getContext/getDocSnapshot/applyEdit(blockIdx) 共用同一序,Agent 拿到的段号才不会漂移。 */
-const visibleBlocks = (root: HTMLElement): HTMLElement[] => (Array.from(root.querySelectorAll(BLOCK_SEL)) as HTMLElement[]).filter((el) => el.getAttribute('data-kind') !== 'remove');
+const visibleBlocks = (root: HTMLElement): HTMLElement[] => (Array.from(root.querySelectorAll(DOC_BLOCK_SEL)) as HTMLElement[]).filter((el) => {
+  if (el.getAttribute('data-kind') === 'remove') return false;
+  // A top-level table is one Word block; paragraphs and cells inside it never consume para indexes.
+  return !el.parentElement?.closest('table');
+});
+const tableRows = (el: HTMLElement): string[][] => {
+  const clone = cleanClone(el);
+  if (!(clone instanceof HTMLTableElement)) return [];
+  return Array.from(clone.rows).map((row) => Array.from(row.cells).map((cell) => (cell.textContent ?? '').replace(/\s+/g, ' ').trim()));
+};
+const tableSummary = (el: HTMLElement, maxRows = 100, maxCols = 20, maxCell = 250): string => {
+  const rows = tableRows(el);
+  const columns = rows.reduce((count, row) => Math.max(count, row.length), 0);
+  const preview = rows.slice(0, maxRows).map((row) => row.slice(0, maxCols).map((cell) => cell.length > maxCell ? cell.slice(0, maxCell) + '…' : cell));
+  const omitted = rows.length > maxRows || columns > maxCols ? `,省略 ${Math.max(0, rows.length - maxRows)} 行/${Math.max(0, columns - maxCols)} 列` : '';
+  return `[表格 ${rows.length}×${columns},rows=${JSON.stringify(preview)}${omitted}]`;
+};
+const cleanBlockText = (el: HTMLElement): string => el.tagName === 'TABLE' ? tableSummary(el) : (cleanClone(el).textContent ?? '');
+const visibleBlockFor = (root: HTMLElement, node: Node): HTMLElement | undefined => {
+  const target = node instanceof Element ? node : node.parentElement;
+  return target ? visibleBlocks(root).find((block) => block === target || block.contains(target)) : undefined;
+};
+function makeTableElement(spec: DocTable): HTMLTableElement {
+  const table = document.createElement('table');
+  table.className = 'rd-tbl';
+  const head = spec.headerRows > 0 ? table.createTHead() : null;
+  const body = table.createTBody();
+  spec.rows.forEach((cells, rowIndex) => {
+    const row = (rowIndex < spec.headerRows ? head : body)!.insertRow();
+    cells.forEach((value) => {
+      const cell = rowIndex < spec.headerRows ? document.createElement('th') : document.createElement('td');
+      cell.textContent = value;
+      row.appendChild(cell);
+    });
+  });
+  return table;
+}
 /** 块内图片摘要([图片 alt 宽×高]):进上下文/快照,Agent 才感知得到图片、才不会把含图段当纯空段清理。 */
 const imgBrief = (el: HTMLElement): string => Array.from(el.querySelectorAll('img')).map((im) => `[图片${im.alt ? ' ' + im.alt : ''}${im.width ? ' ' + im.width + '×' + im.height : ''}]`).join('');
 
@@ -359,7 +400,12 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   const painter = useRef<DocFmt | null>(null); // 格式刷源格式
   const cmtCursor = useRef(0); // 批注导航游标
   const lastImg = useRef<HTMLElement | null>(null); // 最近点选的图片/对象(排列命令的目标)
-  const undoMap = useRef<Map<string, { mode: 'span'; prior: DocumentFragment; el: HTMLElement } | { mode: 'root'; priorProps: Record<string, string>; nextProps?: Record<string, string>; priorPage?: PageState; nextPage?: PageState } | { mode: 'block'; prior: Element; el: HTMLElement }>>(new Map());
+  const undoMap = useRef<Map<string,
+    | { mode: 'span'; prior: DocumentFragment; el: HTMLElement }
+    | { mode: 'root'; priorProps: Record<string, string>; nextProps?: Record<string, string>; priorPage?: PageState; nextPage?: PageState }
+    | { mode: 'block'; prior: Element; el: HTMLElement }
+    | { mode: 'insertBlock'; el: HTMLElement }
+  >>(new Map());
 
   const [tab, setTab] = useState<number>(() => { const v = parseInt(localStorage.getItem(TAB_KEY) ?? '0', 10); return Number.isFinite(v) && v >= 0 && v < 6 ? v : 0; });
   const [pop, setPop] = useState<{ key: string; x: number; y: number } | null>(null);
@@ -518,7 +564,8 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     const r = g.getBoundingClientRect();
     const cut = (s: string): string => (s.length > 48 ? s.slice(0, 48) + '…' : s);
     const below = r.top < 150; // 视口顶端放不下 → 卡片翻到改动下方
-    setHoverCard({ cid, kind, oldText: cut(del?.textContent ?? ''), newText: cut(kind === 'format' ? (g.textContent ?? '') : (ins?.textContent ?? '')), glyph: g.getAttribute('data-glyph') ?? '', x: Math.round(r.left + r.width / 2), y: Math.round(below ? r.bottom : r.top), below });
+    const newText = kind === 'format' ? (g.textContent ?? '') : kind === 'insert' ? cleanBlockText(g) : (ins?.textContent ?? '');
+    setHoverCard({ cid, kind, oldText: cut(del?.textContent ?? ''), newText: cut(newText), glyph: g.getAttribute('data-glyph') ?? '', x: Math.round(r.left + r.width / 2), y: Math.round(below ? r.bottom : r.top), below });
     hoverCb.current?.(cid);
   };
   const onDocOver = (e: React.MouseEvent): void => {
@@ -528,7 +575,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     cardTimer.current = window.setTimeout(() => openCardFor(g), 120);
   };
   const onEdKey = (e: React.KeyboardEvent): void => { // 键盘可达:Tab 到改动壳(contenteditable=false 可聚焦)后 Enter/空格开卡
-    const g = (e.target as HTMLElement).closest?.('.rd-chg') as HTMLElement | null;
+    const g = (e.target as HTMLElement).closest?.('.rd-chg, [data-edit-block]') as HTMLElement | null;
     if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openCardFor(g); }
   };
   const onDocOut = (e: React.MouseEvent): void => {
@@ -573,8 +620,8 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
         const b = fmtBrief(el);
         if (b.font) fonts.add(b.font); sizes.add(b.size); if (b.color !== '#000000' && b.color !== '#1f2430') colors.add(b.color);
         const tag = el.tagName.toLowerCase();
-        const style = tag === 'h1' ? '标题1' : tag === 'h2' ? '标题2' : tag === 'h3' ? '标题3' : tag === 'h4' ? '标题4' : tag === 'blockquote' ? '引用' : tag === 'li' ? '列表项' : '正文';
-        const txt = cleanBlockText(el).replace(/\s+/g, ' ').trim(); // 同样走清样投影,别把 del 旧文标进段落概览
+        const style = tag === 'h1' ? '标题1' : tag === 'h2' ? '标题2' : tag === 'h3' ? '标题3' : tag === 'h4' ? '标题4' : tag === 'blockquote' ? '引用' : tag === 'li' ? '列表项' : tag === 'table' ? '表格' : '正文';
+        const txt = tag === 'table' ? tableSummary(el, 8, 8, 80) : cleanBlockText(el).replace(/\s+/g, ' ').trim(); // 表格保留二维边界,不能把单元格连成无分隔文本
         const img = imgBrief(el); // 图片可感知:含图段标出 [图片 alt 宽×高],空段才真算空
         if (/^标题/.test(style)) heads.push(`${'  '.repeat(parseInt(tag.slice(1), 10) - 1)}H${tag.slice(1)} 第${i + 1}段 ${txt.slice(0, 30)}`);
         else if (style === '正文') bodyCombo.set(`${b.font} ${b.size}pt`, (bodyCombo.get(`${b.font} ${b.size}pt`) ?? 0) + 1);
@@ -594,7 +641,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
         blocks: blocks.map((el) => {
           const b = fmtBrief(el);
           const tag = el.tagName.toLowerCase();
-          const style = tag === 'h1' ? '标题1' : tag === 'h2' ? '标题2' : tag === 'h3' ? '标题3' : tag === 'h4' ? '标题4' : tag === 'blockquote' ? '引用' : tag === 'li' ? '列表项' : '正文';
+          const style = tag === 'h1' ? '标题1' : tag === 'h2' ? '标题2' : tag === 'h3' ? '标题3' : tag === 'h4' ? '标题4' : tag === 'blockquote' ? '引用' : tag === 'li' ? '列表项' : tag === 'table' ? '表格' : '正文';
           return { style, text: imgBrief(el) + cleanBlockText(el).replace(/\s+/g, ' ').trim(), font: b.font, size: b.size, align: b.align };
         }),
       };
@@ -603,6 +650,35 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       const root = edRef.current;
       if (!root) return false;
       if (root.querySelector(`[data-cid="${cssq(editId)}"]`)) return true; // 幂等:同一改动只落一次(刷新后重复接受/重放不叠标记)
+      if (opts.table) {
+        const spec = opts.table;
+        const width = spec.rows[0]?.length ?? 0;
+        if (!['before', 'after', 'end'].includes(spec.at) || !spec.rows.length || spec.rows.length > 100 || !width || width > 20 || !Number.isInteger(spec.headerRows) || spec.headerRows < 0 || spec.headerRows > spec.rows.length || spec.rows.some((row) => row.length !== width || row.some((cell) => typeof cell !== 'string' || cell.length > 10_000))) return false;
+        let anchor: HTMLElement | undefined;
+        if (spec.at !== 'end') {
+          const range = quote ? findRangeLoose(root, quote) : null;
+          anchor = range ? visibleBlockFor(root, range.startContainer) : undefined;
+          if (!anchor && opts.blockIdx != null) anchor = visibleBlocks(root)[opts.blockIdx];
+          if (!anchor) return false;
+        }
+        const table = makeTableElement(spec);
+        table.classList.add('rd-chg-blkins', 'is-new');
+        table.setAttribute('data-edit-block', editId);
+        table.setAttribute('data-cid', editId);
+        table.setAttribute('data-kind', 'insert');
+        table.setAttribute('data-glyph', '+表');
+        table.setAttribute('tabindex', '0');
+        table.setAttribute('contenteditable', 'false');
+        table.setAttribute('aria-label', `插入 ${spec.rows.length}×${width} 表格`);
+        if (spec.at === 'end') root.appendChild(table);
+        else if (spec.at === 'before') anchor!.before(table);
+        else anchor!.after(table);
+        undoMap.current.set(editId, { mode: 'insertBlock', el: table });
+        window.setTimeout(() => table.classList.remove('is-new'), 1000);
+        refreshHasDiff();
+        persist();
+        return true;
+      }
       const fmt = opts.fmt;
       // 全文格式/页面级(无 quote 且无段号锚):字符级改根内联样式(继承给各段);columns/margin/orient 落页面态;记 prior/next 供四态切换与还原
       if (!quote && fmt && opts.blockIdx == null && !opts.removeBlock && !opts.img) {
@@ -746,6 +822,9 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
           s.textAlign = pp.textAlign ?? ''; s.lineHeight = pp.lineHeight ?? ''; s.backgroundColor = pp.backgroundColor ?? '';
           if (info.priorPage) setPage((p) => ({ ...p, ...info.priorPage })); // 页面级(分栏/边距/方向)一并回退
           setDocChanges(docChgsRef.current.filter((c) => c.cid !== editId));
+        } else if (info.mode === 'insertBlock') {
+          const inserted = root.contains(info.el) ? info.el : root.querySelector(`[data-cid="${cssq(editId)}"]`);
+          inserted?.remove();
         } else if (info.mode === 'block') {
           const cur = info.el && root.contains(info.el) ? info.el : root.querySelector(`[data-edit-block="${cssq(editId)}"]`);
           if (cur && cur.parentNode) cur.parentNode.replaceChild(info.prior.cloneNode(true), cur);
@@ -764,7 +843,9 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       const els = Array.from(root.querySelectorAll(`[data-cid="${cssq(editId)}"]`)) as HTMLElement[];
       if (!els.length) return false;
       for (const el of els) {
-        if (el.hasAttribute('data-edit-block')) {
+        if (el.getAttribute('data-kind') === 'insert' && el.classList.contains('rd-chg-blkins')) {
+          el.remove(); // 刷新后 undoMap 已失:插入块的原文态就是不存在,拒绝应物理移除
+        } else if (el.hasAttribute('data-edit-block')) {
           ['data-edit-block', 'data-cid', 'data-kind', 'data-glyph'].forEach((a) => el.removeAttribute(a));
           el.classList.remove('rd-chg-blkdel'); // 删段兜底还原:剥标记即让整段复现
           el.style.textAlign = ''; el.style.textAlignLast = ''; el.style.lineHeight = ''; el.style.backgroundColor = '';
@@ -829,6 +910,15 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       // 接受=物理定稿(不是加类化妆):del 删掉、ins 解包,修订标识剥净 —— 文档回归本体,上下文/字数/查找全部自然干净
       const stripRev = (el: HTMLElement): void => { ['data-edit', 'data-cid', 'data-kind', 'data-glyph', 'tabindex', 'contenteditable', 'aria-label'].forEach((a) => el.removeAttribute(a)); };
       for (const el of els) {
+        if (el.classList.contains('rd-chg-blkins')) {
+          el.removeAttribute('data-edit-block');
+          stripRev(el);
+          el.classList.remove('rd-chg-blkins', 'is-new', 'is-active', 'is-linked');
+          el.classList.add('rd-settle');
+          el.setAttribute('data-undo', cid);
+          window.setTimeout(() => el.classList.remove('rd-settle'), 400);
+          continue;
+        }
         if (el.getAttribute('data-kind') === 'remove') {
           el.remove(); continue; // 删段:接受=物理移除整段
         }

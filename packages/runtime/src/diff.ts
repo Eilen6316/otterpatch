@@ -104,6 +104,11 @@ function describe(op: EditOp): { badge: DiffBadge; label: string; after?: string
         : `数据 ${op.range ?? ''}`;
       return { badge: 'add', label: `插入${kind}图「${op.title}」(${dataDesc})`, after: `📊 ${kind}图「${op.title}」· ${dataDesc}` };
     }
+    case 'insertTable': {
+      const columns = op.rows[0]?.length ?? 0;
+      const header = op.headerRows > 0 ? ` · ${op.headerRows} 行表头` : '';
+      return { badge: 'add', label: `插入 ${op.rows.length}×${columns} 表格${header}`, after: `${op.rows.length}×${columns} 表格` };
+    }
     case 'conditionalFormat':
       return { badge: 'modify', label: `条件格式 ${op.when}${op.style.bgColor ? ' → 填充 ' + op.style.bgColor : ''}${op.style.color ? ' 字色 ' + op.style.color : ''}` };
     case 'dataValidation':
@@ -139,7 +144,8 @@ export function buildDiff(cs: ChangeSet): OtterPatchDiff {
     intent: cs.meta.intent,
     items: cs.edits.map((e) => {
       const d = describe(e.op);
-      const item: OtterPatchDiffItem = { editId: e.id, ref: refOf(cs.anchors[e.target], e.target), kind: e.op.kind, badge: d.badge, label: d.label };
+      const ref = e.op.kind === 'insertTable' && e.op.at === 'end' ? '文档末尾' : refOf(cs.anchors[e.target], e.target);
+      const item: OtterPatchDiffItem = { editId: e.id, ref, kind: e.op.kind, badge: d.badge, label: d.label };
       if (d.after !== undefined) item.after = d.after;
       if (d.style) item.style = d.style;
       return item;

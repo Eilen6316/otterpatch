@@ -104,3 +104,31 @@ test('fmt + 段号锚:空段落也能套段落格式(quote 为空)', () => {
   assert.match(xml, /<w:jc w:val="right"\/>/);
   assert.match(xml, /<w:pPrChange/); // 段落格式修订可审
 });
+
+test('insertTable: 在末级 sectPr 前插入原生表格,表头和每行均保留修订语义', () => {
+  const doc =
+    '<w:document><w:body>' +
+    '<w:p><w:pPr><w:sectPr><w:cols w:num="2"/></w:sectPr></w:pPr><w:r><w:t>正文</w:t></w:r></w:p>' +
+    '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>' +
+    '</w:body></w:document>';
+  const { xml, changed, appliedEditIds } = redlineDocumentXml(doc, [{
+    id: 'table-1',
+    kind: 'insertTable',
+    rows: [['A & B', '<列>'], ['1', '2']],
+    headerRows: 1,
+    at: 'end',
+  }], { author: 'Table Author', date: '2026-07-12T00:00:00Z' });
+
+  assert.equal(changed, 1);
+  assert.deepEqual(appliedEditIds, ['table-1']);
+  assert.ok(xml.indexOf('<w:tbl>') > xml.indexOf('</w:p>'));
+  assert.ok(xml.indexOf('<w:tbl>') < xml.lastIndexOf('<w:sectPr>'));
+  assert.equal([...xml.matchAll(/<w:tr>/g)].length, 2);
+  assert.equal([...xml.matchAll(/<w:tc>/g)].length, 4);
+  assert.equal([...xml.matchAll(/<w:trPr>[\s\S]*?<w:ins\b/g)].length, 2);
+  assert.match(xml, /<w:tblHeader\/>/);
+  assert.match(xml, /<w:shd\b[^>]*w:fill="E8EEF7"/);
+  assert.match(xml, /<w:rPr><w:b\/><\/w:rPr>/);
+  assert.match(xml, /<w:t xml:space="preserve">A &amp; B<\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve">&lt;列&gt;<\/w:t>/);
+});

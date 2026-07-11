@@ -23,6 +23,7 @@ function cs(ops: EditOp[]): ChangeSet {
 test('riskOf: 按 kind 分级', () => {
   assert.equal(riskOf({ family: 'value', kind: 'setValue', value: 1 }), 'safe');
   assert.equal(riskOf({ family: 'object', kind: 'addObject', payload: {} }), 'caution');
+  assert.equal(riskOf({ family: 'structure', kind: 'insertTable', rows: [['A']], headerRows: 1, at: 'end' }), 'caution');
   assert.equal(riskOf({ family: 'structure', kind: 'deleteRows' }), 'destructive');
   assert.equal(riskOf({ family: 'object', kind: 'deleteObject' }), 'destructive');
   assert.equal(riskOf({ family: 'raw', kind: 'rawHost', hostId: 'h', payload: {} }), 'destructive');

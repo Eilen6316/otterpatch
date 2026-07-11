@@ -11,6 +11,7 @@ const DOC_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:p><w:pPr><w:pStyle w:val="Heading1"/><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:sz w:val="36"/></w:rPr><w:t>吉林省财政收入分析报告</w:t></w:r></w:p>
 <w:p><w:r><w:t xml:space="preserve">本报告基于 2005-2024 年数据,</w:t></w:r><w:r><w:rPr><w:b/><w:color w:val="C00000"/></w:rPr><w:t>核心结论已加粗标红</w:t></w:r><w:r><w:t>,供审阅。</w:t></w:r></w:p>
 <w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>变量说明</w:t></w:r></w:p>
+<w:tbl><w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc><w:p><w:r><w:t>变量</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>含义</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>GDP</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>地区生产总值</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
 <w:p><w:pPr><w:jc w:val="both"/><w:spacing w:line="360" w:lineRule="auto"/></w:pPr><w:r><w:rPr><w:i/><w:u w:val="single"/></w:rPr><w:t>斜体下划线样段</w:t></w:r></w:p>
 <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr>
 </w:body></w:document>`;
@@ -35,6 +36,8 @@ try {
   ok('标题渲染为 h1 且居中', await page.evaluate(() => { const h = document.querySelector('.rd-page h1'); return !!h && /财政收入分析报告/.test(h.textContent) && getComputedStyle(h).textAlign === 'center'; }));
   ok('run 级加粗+标红保留', await page.evaluate(() => { const b = [...document.querySelectorAll('.rd-page b')].find((e) => /核心结论已加粗标红/.test(e.textContent)); if (!b) return false; const sp = b.closest('span'); return !!sp && /c00000/i.test(sp.getAttribute('style') || ''); }));
   ok('Heading2 渲染为 h2', await page.evaluate(() => { const h = document.querySelector('.rd-page h2'); return !!h && /变量说明/.test(h.textContent); }));
+  ok('docx 顶层表格渲染为真实二维 table', await page.evaluate(() => { const table = document.querySelector('.rd-page table.rd-tbl'); return !!table && table.querySelectorAll('th').length === 2 && table.querySelectorAll('tr').length === 2 && /地区生产总值/.test(table.textContent); }));
+  ok('docx 表格不再降级为占位段落', await page.evaluate(() => !/表格:v1|暂以占位显示/.test(document.querySelector('.rd-page').textContent || '')));
   ok('两端对齐 + 1.5 倍行距落到段落', await page.evaluate(() => { const p = [...document.querySelectorAll('.rd-page p')].find((e) => /斜体下划线样段/.test(e.textContent)); if (!p) return false; const cs = getComputedStyle(p); return cs.textAlign === 'justify' && !!p.querySelector('i') && !!p.querySelector('u'); }));
   ok('字号 18pt(sz=36 半磅)生效', await page.evaluate(() => { const sp = [...document.querySelectorAll('.rd-page h1 span')].find((e) => /18pt/.test(e.getAttribute('style') || '')); return !!sp; }));
   ok('载入提示出现(已载入并渲染)', await page.evaluate(() => /已载入并渲染/.test(document.querySelector('.toast')?.textContent ?? document.body.textContent)));

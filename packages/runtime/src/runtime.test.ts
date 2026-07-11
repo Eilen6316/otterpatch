@@ -4,14 +4,28 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync } from 'fflate';
-import type { DocRev } from '@otterpatch/core';
+import type { AnchorId, ChangeSet, DocRev, HostId } from '@otterpatch/core';
 import { MockModelClient, type ModelClient, type ProposeRequest, type RespondOptions, type AgentResponse } from '@otterpatch/agent';
 import { comparePartsIntegrity, readOoxmlParts } from '@otterpatch/writeback-surgical';
 import { OtterPatchRuntime } from './runtime.js';
+import { buildDiff } from './diff.js';
 import type { OtterPatchEvent } from './events.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 const dec = new TextDecoder();
+
+test('runtime diff summarizes structured Word tables without flattening cells', () => {
+  const anchorId = 'a0' as AnchorId;
+  const cs: ChangeSet = {
+    id: 'table-cs', hostId: 'h', baseRev: 0 as DocRev, origin: { by: 'human' }, meta: { intent: 'insert table' },
+    anchors: { [anchorId]: { id: anchorId, hostId: 'h' as HostId, kind: 'flow', ref: null, baseRev: 0 as DocRev, portable: { kind: 'flow', path: [], quote: { prefix: '', text: '', suffix: '' }, bias: 'left' } } },
+    edits: [{ id: 'e0', target: anchorId, op: { family: 'structure', kind: 'insertTable', rows: [['Name', 'Value'], ['Alpha', '10']], headerRows: 1, at: 'end' } }],
+  };
+
+  assert.deepEqual(buildDiff(cs).items[0], {
+    editId: 'e0', ref: '文档末尾', kind: 'insertTable', badge: 'add', label: '插入 2×2 表格 · 1 行表头', after: '2×2 表格',
+  });
+});
 
 function makeXlsx(): Uint8Array {
   return zipSync({

@@ -1,6 +1,6 @@
 import { cleanLabel, innerForStyle, parseDrawioStyle, snap } from './DrawioBoard.js';
 import type { BEdge, BNode } from './DrawioBoard.js';
-import type { DocFmt } from './RichDoc.js';
+import type { DocFmt, DocTable } from './RichDoc.js';
 import { styleToKind } from './shape-engine.js';
 
 export interface CellState {
@@ -72,6 +72,7 @@ export interface WordEdit {
   blockIdx?: number;
   remove?: boolean;
   img?: { action: 'remove' | 'resize'; width?: number };
+  table?: DocTable;
 }
 
 export interface AddedBoardObjects {
@@ -107,7 +108,10 @@ export const wordEditOpts = (edit: WordEdit): {
   blockIdx?: number;
   removeBlock?: boolean;
   img?: { action: 'remove' | 'resize'; width?: number };
-} => edit.img
+  table?: DocTable;
+} => edit.table
+  ? { table: edit.table, blockIdx: edit.blockIdx }
+  : edit.img
   ? { img: edit.img, blockIdx: edit.blockIdx }
   : edit.remove
     ? { removeBlock: true, blockIdx: edit.blockIdx }
@@ -125,6 +129,9 @@ export function materializeWordEdits(diff: AgentDiff, changeSet: unknown): WordE
         text?: string;
         style?: DocFmt;
         props?: { imgAction?: 'remove' | 'resize'; width?: number };
+        rows?: string[][];
+        headerRows?: number;
+        at?: 'before' | 'after' | 'end';
       };
     }>;
     anchors?: Record<string, { portable?: { quote?: { text?: string }; path?: number[] } }>;
@@ -148,6 +155,16 @@ export function materializeWordEdits(diff: AgentDiff, changeSet: unknown): WordE
       quote,
       ...(blockIdx != null ? { blockIdx } : {}),
     };
+    if (record?.op?.kind === 'insertTable' && record.op.rows?.length) {
+      return {
+        ...base,
+        table: {
+          rows: record.op.rows,
+          headerRows: record.op.headerRows ?? 0,
+          at: record.op.at ?? 'end',
+        },
+      };
+    }
     if (record?.op?.kind === 'deleteRange') return { ...base, remove: true };
     if (record?.op?.kind === 'setObjectProps' && record.op.props?.imgAction) {
       return {

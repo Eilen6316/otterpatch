@@ -37,6 +37,7 @@ const RISK_BY_KIND: Record<EditOpKind, RiskLevel> = {
   conditionalFormat: 'safe',
   dataValidation: 'safe',
   insertChart: 'caution',
+  insertTable: 'caution',
   addObject: 'caution',
   // Destructive: deletes data / cascades / opaque raw host ops
   deleteRange: 'destructive',

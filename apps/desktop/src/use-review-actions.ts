@@ -13,6 +13,7 @@ type ExcelDiffView = 'orig' | 'mark' | 'final';
 export const reviewItemKind = (turn: DiffTurn, item: DiffTurn['diff']['items'][number]): string => {
   if (turn.format === 'word') {
     const wordEdit = turn.word?.find((edit) => edit.editId === item.editId);
+    if (wordEdit?.table) return 'structure';
     return wordEdit?.style || item.style ? 'style' : 'text';
   }
   if (turn.format === 'excel') {
@@ -89,7 +90,8 @@ export function useReviewActions({
       turn.diff.items.some((item) => item.editId === edit.editId && !accepted.has(akey(turn.diff.changeSetId, item.editId))),
     );
     const wordApplyOrder = [
-      ...pendingWord.filter((edit) => !edit.remove),
+      ...pendingWord.filter((edit) => !edit.remove && !edit.table),
+      ...pendingWord.filter((edit) => edit.table),
       ...pendingWord.filter((edit) => edit.remove).sort((a, b) => (b.blockIdx ?? -1) - (a.blockIdx ?? -1)),
     ];
     for (const edit of wordApplyOrder) applyWordEdit(edit);

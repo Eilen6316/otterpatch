@@ -39,6 +39,33 @@ test('Agent drawio: 意图 + Mock → object ChangeSet(按 mxCell id)', async ()
   assert.equal(anchor.portable.kind === 'object' && anchor.portable.elementId, '2');
 });
 
+test('Agent word: 二维 table 提案 → insertTable ChangeSet', async () => {
+  const mock = new MockModelClient(() => ({
+    plan: '插入对照表',
+    edits: [{ quote: '', table: [['字段', '说明'], ['目标', '真实表格']], tableHeaderRows: 1, tableAt: 'end' }],
+  }));
+  const cs = await new Agent(mock).propose({
+    hostId: 'h1',
+    format: 'word',
+    intent: '把内容整理成真实表格',
+    baseRev: 0 as DocRev,
+    anchors: [],
+    context: '第1段:字段与说明',
+  });
+
+  assert.equal(cs.edits.length, 1);
+  assert.deepEqual(cs.edits[0]!.op, {
+    family: 'structure',
+    kind: 'insertTable',
+    rows: [['字段', '说明'], ['目标', '真实表格']],
+    headerRows: 1,
+    at: 'end',
+  });
+  const anchor = cs.anchors[cs.edits[0]!.target]!;
+  assert.equal(anchor.portable.kind, 'flow');
+  assert.deepEqual(anchor.portable.kind === 'flow' ? anchor.portable.path : null, []);
+});
+
 test('Agent: 未知格式抛错', async () => {
   const mock = new MockModelClient(() => ({ plan: '', edits: [] }));
   await assert.rejects(

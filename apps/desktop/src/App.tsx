@@ -758,7 +758,7 @@ export function App() {
     const docSnap = fmt === 'word' ? (wordRef.current?.getDocSnapshot() ?? null) : null;
     const selDesc = wordSel ? `${wordSel.block}${wordSel.para ? ' · 第' + wordSel.para + '段' : ''}${wordSel.font ? ' · ' + wordSel.font : ''}${wordSel.size ? ' ' + wordSel.size + 'pt' : ''}${wordSel.bold ? ' 加粗' : ''}${wordSel.italic ? ' 斜体' : ''}${wordSel.align && wordSel.align !== '左对齐' ? ' ' + wordSel.align : ''}` : '';
     const ctx = isExcel ? (sheetSnap?.text ?? '(表格为空)') : fmt === 'drawio' && boardSel ? boardSel.context : fmt === 'word'
-      ? `${wordRef.current?.getContext() ?? '(空文档)'}\n(改写正文:给 quote=文档中真实存在的原文片段 + replacement;改格式:给 quote + setStyle 字段,别给 replacement;空段落/整段结构操作用 para=段号。)`
+      ? `${wordRef.current?.getContext() ?? '(空文档)'}\n(改写正文:给 quote=文档中真实存在的原文片段 + replacement;改格式:给 quote + setStyle 字段,别给 replacement;空段落/整段结构操作用 para=段号;对照表/矩阵必须用 table 二维数组生成真实表格,禁止竖线或制表符伪造。)`
         + (wordSel ? (wordSel.block === '图片'
           ? `\n[当前选区·用户此刻点选了一张图片(${selDesc})]:${wordSel.text}\n若指令含"这张图/这个图片/它",目标就是这张图所在的第${wordSel.para ?? '?'}段;整段操作用 para=${wordSel.para ?? '?'} 锚定。`
           : `\n[当前选区·用户此刻圈选了这段(${selDesc})]:"${wordSel.text}"\n若指令含"这段/这句/这里/选中的/选中/它",优先针对它;quote 用这段真实原文定位。`) : '\n[未圈选文字]:请基于整篇文档理解。')
@@ -857,7 +857,11 @@ export function App() {
                   // 乐观落入文档(与 Excel playOps 一致);编辑器按 domId 包裹,拒绝可精确还原
                   wordRef.current?.closeUndoWindow(); // 新提案=上一轮撤销窗口关闭,旧 data-undo 剥净后再落新标记
                   // 落地顺序:先非删段(段号锚不受影响),删段按段号【降序】——升序会让先删的段把后续段号顶前,删错段(实测会误删含图段)
-                  const applyOrder = [...wordEdits.filter((w) => !w.remove), ...wordEdits.filter((w) => w.remove).sort((a, b) => (b.blockIdx ?? -1) - (a.blockIdx ?? -1))];
+                  const applyOrder = [
+                    ...wordEdits.filter((w) => !w.remove && !w.table),
+                    ...wordEdits.filter((w) => w.table), // 结构插入最后落,避免挪动同一 ChangeSet 的基础段号锚
+                    ...wordEdits.filter((w) => w.remove).sort((a, b) => (b.blockIdx ?? -1) - (a.blockIdx ?? -1)),
+                  ];
                   for (const w of applyOrder) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w));
                   setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, ops: [], word: wordEdits, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
                   setReviewIdx(0);

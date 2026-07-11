@@ -323,6 +323,10 @@ export interface WordProposal {
     /** Image op on the image inside the anchored paragraph: remove it, or resize to imgWidth px */
     img?: 'remove' | 'resize';
     imgWidth?: number;
+    /** Real Word table. Every row must have the same number of string cells. */
+    table?: string[][];
+    tableHeaderRows?: number;
+    tableAt?: 'before' | 'after' | 'end';
     replacement?: string; // text rewrite: if given, replaces the original text
     // Formatting (any present = format edit, replacement not needed); all=true means whole document, quote may be omitted
     all?: boolean;
@@ -359,8 +363,16 @@ function buildWordChangeSet(req: ProposeRequest, p: WordProposal): ChangeSet {
       // path 携带显式段号(0-based;仅当模型给了 para)——前端 quote 定位失败/空段落时按段号落锚
       portable: { kind: 'flow', path: e.para != null && e.para >= 1 ? [e.para - 1] : [], quote: { prefix: '', text: quoteText, suffix: '' }, bias: 'left' },
     };
-    const isFormat = !e.deletePara && !e.img && e.replacement == null && (e.bold != null || e.italic != null || e.underline != null || e.font != null || e.size != null || e.color != null || e.align != null || e.lineSpacing != null || e.bgColor != null || e.block != null || e.columns != null || e.margin != null || e.orient != null);
-    const op: EditOp = e.deletePara
+    const isFormat = !e.deletePara && !e.img && !e.table && e.replacement == null && (e.bold != null || e.italic != null || e.underline != null || e.font != null || e.size != null || e.color != null || e.align != null || e.lineSpacing != null || e.bgColor != null || e.block != null || e.columns != null || e.margin != null || e.orient != null);
+    const op: EditOp = e.table
+      ? {
+          family: 'structure',
+          kind: 'insertTable',
+          rows: e.table,
+          headerRows: e.tableHeaderRows ?? 1,
+          at: e.tableAt ?? (quoteText || e.para != null ? 'after' : 'end'),
+        }
+      : e.deletePara
       ? { family: 'value', kind: 'deleteRange' }
       : e.img
       ? { family: 'object', kind: 'setObjectProps', props: { imgAction: e.img, ...(e.imgWidth != null ? { width: e.imgWidth } : {}) } }
@@ -409,6 +421,15 @@ export const wordDialect: HostDialect = {
             deletePara: { type: 'boolean', description: '结构操作:true=删除 para(或 quote)所在的整段(清理空段落/删除冗余段落)。不要同时给 replacement 或格式字段' },
             img: { type: 'string', enum: ['remove', 'resize'], description: '图片操作:对锚定段落里的图片(上下文标注为 [图片 …] 的段)remove=删除该图 / resize=调宽(配 imgWidth)。锚定用 para 段号或该段 quote' },
             imgWidth: { type: 'number', description: '配合 img=resize:图片目标宽度(像素),高度等比' },
+            table: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 100,
+              description: '插入真实 Word 表格的二维字符串数组。每个内层数组是一行,列数必须一致;不要用竖线文本伪造表格',
+              items: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', maxLength: 10_000 } },
+            },
+            tableHeaderRows: { type: 'integer', minimum: 0, maximum: 100, description: '表头行数,默认 1;无表头给 0' },
+            tableAt: { type: 'string', enum: ['before', 'after', 'end'], description: '表格插入位置:end=文档末尾(quote 给空串);before/after=锚定段前/后(须 quote 或 para)' },
             replacement: { type: 'string', description: '文本改写:改后的文字(给了它即为"替换原文"。要改格式就别给它)' },
             all: { type: 'boolean', description: '格式改动作用于【全文】(如"全文宋体五号");true 时可不给 quote' },
             bold: { type: 'boolean', description: '加粗:true 设为加粗、false 取消加粗' },

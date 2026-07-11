@@ -25,6 +25,9 @@ export function buildDocVerifier(docText: string): (cs: ChangeSet) => VerifyRepo
       const quote = a?.portable.kind === 'flow' ? a.portable.quote.text : '';
       const paraIdx = a?.portable.kind === 'flow' ? a.portable.path[0] : undefined;
       const isStyle = e.op.kind === 'setStyle';
+      const isEndTable = e.op.kind === 'insertTable' && e.op.at === 'end';
+      // Appending a table to the document body has no source anchor by design.
+      if (isEndTable) continue;
       // 段号锚定(para):不依赖 quote。getText 清样投影会滤掉空段,段数只是下限,越界只提醒不拦截
       if (paraIdx != null) {
         if (paraIdx < 0) errors.push('para 段号必须 ≥ 1');

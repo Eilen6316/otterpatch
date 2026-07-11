@@ -266,6 +266,7 @@ svg { display: block; }
 .rd-page hr { border: 0; border-top: 1px solid #c9ced6; margin: 18px 0; }
 .rd-page .rd-tbl { border-collapse: collapse; width: 100%; margin: 12px 0; }
 .rd-page .rd-tbl td, .rd-page .rd-tbl th { border: 1px solid #c9ced6; padding: 6px 9px; min-width: 40px; vertical-align: top; }
+.rd-page .rd-tbl th { background: #eef3f8; font-weight: 600; }
 .rd-page.rd-painting { cursor: cell; }
 .rd-flash { animation: rdflash 1.2s ease; }
 @keyframes rdflash { 0%, 100% { background: rgba(37,99,235,0.06); } 30% { background: #fde68a; } }
@@ -368,6 +369,11 @@ svg { display: block; }
 .rd-page .rd-chg-blkdel { background: var(--chg-del-bg); text-decoration: line-through; text-decoration-color: rgba(185,28,28,.6); opacity: .78; border-radius: 3px; }
 .rd-page.rd-diff-final .rd-chg-blkdel, .rd-page.rd-diff-clean .rd-chg-blkdel { display: none; }
 .rd-page.rd-diff-orig .rd-chg-blkdel { background: transparent; text-decoration: none; opacity: 1; }
+/* 插入表格是一个原子结构修订:原文态不存在,修订态整表标绿,接受后恢复普通可编辑表格。 */
+.rd-page .rd-chg-blkins { background: var(--chg-ins-bg); box-shadow: 0 0 0 2px var(--chg-ins-line); cursor: default; }
+.rd-page .rd-chg-blkins:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.rd-page.rd-diff-orig .rd-chg-blkins { display: none; }
+.rd-page.rd-diff-clean .rd-chg-blkins, .rd-page.rd-diff-final .rd-chg-blkins { background: transparent; box-shadow: none; }
 /* 改动块左侧改动条(:has) —— 最省的"这里有改动"提示 */
 .rd-page :is(p,h1,h2,h3,h4,li,blockquote):has(.rd-chg), .rd-page [data-edit-block] { position: relative; }
 .rd-page :is(p,h1,h2,h3,h4,li,blockquote):has(.rd-chg)::before, .rd-page [data-edit-block]::before { content: ""; position: absolute; left: -20px; top: .15em; bottom: .15em; width: 2px; border-radius: 2px; background: var(--line-2); transition: background var(--dur-micro), width var(--dur-micro), box-shadow var(--dur-micro); }
@@ -434,6 +440,7 @@ svg { display: block; }
   .rd-page ins.rd-ins { color: inherit !important; text-decoration: none !important; background: transparent !important; box-shadow: none !important; }
   .rd-page .rd-fmt { text-decoration: none !important; }
   .rd-page .rd-fmt::after { display: none !important; }
+  .rd-page .rd-chg-blkins { display: table !important; background: transparent !important; box-shadow: none !important; }
   .rd-page :is(p,h1,h2,h3,h4,li,blockquote)::before { display: none !important; }
 }
 /* 网格 / 行号 */
@@ -808,6 +815,13 @@ svg { display: block; }
 .gd-line.fmt { background: #eef3ff; color: var(--accent); }
 .gd-sign { flex-shrink: 0; width: 10px; font-weight: 700; opacity: 0.65; }
 .gd-ctx { color: var(--muted); }
+.gd-table-preview { padding: 5px 11px 8px; background: var(--add-bg); }
+.gd-table-meta { margin-bottom: 4px; color: var(--add); font: 11px/1.4 var(--mono); }
+.gd-table-scroll { max-width: 100%; overflow-x: auto; }
+.gd-table-preview table { width: 100%; min-width: 220px; border-collapse: collapse; table-layout: fixed; background: var(--surface); font-size: 11px; }
+.gd-table-preview th, .gd-table-preview td { border: 1px solid var(--line-2); padding: 3px 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.gd-table-preview th { background: #eef3f8; color: var(--text-soft); font-weight: 600; }
+.gd-table-more { color: var(--muted); font: 11px/1 var(--mono); text-align: center; padding-top: 3px; }
 .rv-acts { display: flex; align-items: center; gap: 7px; margin-top: 11px; }
 .rv-acts .btn { white-space: nowrap; flex-shrink: 0; }
 .rv-acts.done { margin-top: 0; }

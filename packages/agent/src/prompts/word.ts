@@ -14,6 +14,8 @@ export const WORD_SYSTEM =
   '页面级(须 all=true,作用于整篇版面):columns(分栏:2=双栏,IEEE/论文版式的关键)、margin(页边距 narrow/normal/moderate/wide)、orient(纸张方向 portrait/landscape)——"改成双栏""IEEE 版式""页边距调窄""横向纸张"这类版式要求【可以直接做】,别说工具不支持。' +
   '(三)结构级:deletePara=true 删除锚定的【整段】——清理空段落、删除冗余/重复段落用它(别用 replacement 空串,那只清文字不删段)。' +
   '(四)图片:上下文里标注 [图片 alt 宽×高] 的段落,可对段内图片操作——img="remove" 删除该图(段内文字保留)、img="resize"+imgWidth=像素宽 调整大小(高度等比);锚定该段(para 段号或该段 quote)。"这张图删掉/图太大了缩小点"直接做,别再说不支持。\n' +
+  '(五)真实表格:table 给二维字符串数组(每个内层数组一行、列数一致),tableHeaderRows 给表头行数(默认1),tableAt=end 插在文档末尾、before/after 插在锚定段前/后。用户要对照表/矩阵/结构化清单时直接用 table,绝对不要输出 "| 列 |"、制表符或空格拼成的伪表格。\n' +
+  '【表格锚点例外】tableAt=end 时 quote 必须给空字符串,这是唯一无需源锚点的结构操作;tableAt=before/after 仍须给真实 quote 或 para。后文关于 quote 必须真实唯一的规则不适用于 tableAt=end。\n' +
   '【锚定方式,两条通道】① quote:文档中真实存在且唯一的原文片段(首选);② para:段号(1-based,即上下文/read_blocks 里的"第N段")——【空段落】(上下文显示"(空段)")、重复短语无法唯一引用、或整段操作(deletePara/段落级格式)时用 para 锚定,此时 quote 给空串。两者都给时先按 quote 定位、失败落到 para。段号以【当前快照】为准,同一批 edits 内段号不会漂移。\n' +
   '作用范围:给 quote 则只对这段文字/该段;全文统一(如"全文宋体五号""所有字改成宋体""统一 1.5 倍行距")给 all=true(可省 quote)——统一字体字号/对齐行距这类规范化最适合 all=true 一次落定。\n' +
   // 段6 关键规则(原 ①②③ 原样保留,增补 ④⑤)
@@ -39,4 +41,4 @@ export const WORD_TOOL_DESC =
   '像资深文档专家一样【先诊断再给最优方案】提出对 Word 文档的修改建议(不直接落盘,逐条审阅):诊断文字(啰嗦/含糊/口语/病句)、结构(标题层级/样式一致/信息层次)、排版(中英文空格/全半角标点/字体字号对齐行距),给整句重构或规范化的最优方案(非同义词替换,不改原意/事实/数字/立场),plan 里讲清病因与依据、可点明顺带修掉的硬伤。' +
   '改文字(含润色重写、补半角空格、全↔半角标点/破折号省略号引号规范化——只改标点空格、不动字词):给 quote(锚点原文,须真实且唯一,重复则带上下文)+ replacement(改后文字,空串=删除,追加=原文+新增),一处一条;' +
   '改格式:给 quote(或 all=true 作用于全文)+ 字符级 bold/italic/underline/font/size/color 或 段落级 align/lineSpacing/bgColor/block(h1-h3 标题 / p 正文 / blockquote 引用,标题优先用 block 套真样式而非手动放大加粗冒充)—— 别给 replacement;' +
-  '结构:deletePara=true 删除整段(清空段落/删冗余段);空段落或 quote 无法唯一定位时用 para=段号(1-based,上下文"第N段")锚定、quote 给空串。改文字与改格式别混在同一条 edit;改动以 Word 修订形式逐条审阅落盘。';
+  '结构:deletePara=true 删除整段(清空段落/删冗余段);table=二维字符串数组插入真实表格、tableHeaderRows=表头行数、tableAt=end|before|after 定位,禁止用竖线/制表符伪造表格;空段落或 quote 无法唯一定位时用 para=段号(1-based,上下文"第N段")锚定、quote 给空串。改文字与改格式别混在同一条 edit;改动以 Word 修订形式逐条审阅落盘。';

@@ -3,11 +3,19 @@
  * 上传 → 工作区渲染 → 圈选/提案/行内审阅 → 外科写回 → 下载。
  * 解析口径与 adapter-word 一致(正则走 OOXML 文本),只求"常见文档看得对":
  * 段落(pStyle 标题/对齐/行距)+ run(加粗/斜体/下划线/删除线/字号/字体/颜色/高亮)。
- * 表格/图片/脚注等复杂构件 v1 先降级为占位说明,不静默丢内容。
+ * 顶层表格保留二维结构并渲染为真实 HTML table;图片/脚注等复杂构件仍显式报告降级。
  */
 import { unzipSync, strFromU8 } from 'fflate';
 
 const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] ?? c));
+const xmlCodePoint = (raw: string, radix: number): string => {
+  const value = Number.parseInt(raw, radix);
+  return Number.isSafeInteger(value) && value >= 0 && value <= 0x10ffff && !(value >= 0xd800 && value <= 0xdfff) ? String.fromCodePoint(value) : '\ufffd';
+};
+const unescapeXml = (s: string): string => s
+  .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => xmlCodePoint(hex, 16))
+  .replace(/&#(\d+);/g, (_match, dec: string) => xmlCodePoint(dec, 10))
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;|&#39;/g, "'").replace(/&amp;/g, '&');
 
 /** 取 <w:xxx w:val="…"/> 的 val。 */
 const val = (xml: string, tag: string): string | null => {
@@ -28,7 +36,7 @@ function runHtml(rXml: string): string {
   const re = /<w:(t|br|tab)\b[^>]*(?:\/>|>([\s\S]*?)<\/w:\1>)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(rXml))) {
-    if (m[1] === 't') texts.push(esc(m[2] ?? ''));
+    if (m[1] === 't') texts.push(esc(unescapeXml(m[2] ?? '')));
     else if (m[1] === 'br') texts.push('<br/>');
     else texts.push('&emsp;');
   }
@@ -75,6 +83,33 @@ function paraHtml(pXml: string): string {
   return `<${tag}${attr}>${inner}</${tag}>`;
 }
 
+/** 顶层 Word 表格 → HTML table。每个 tc 内保留段落/run 样式,表头由 tblHeader 标记识别。 */
+function tableHtml(tblXml: string): string {
+  const rows: string[] = [];
+  const rowRe = /<w:tr\b[^>]*>[\s\S]*?<\/w:tr>/g;
+  let rowMatch: RegExpExecArray | null;
+  while ((rowMatch = rowRe.exec(tblXml))) {
+    const rowXml = rowMatch[0];
+    const header = /<w:tblHeader\b/.test(rowXml);
+    const cells: string[] = [];
+    const cellRe = /<w:tc\b[^>]*>[\s\S]*?<\/w:tc>/g;
+    let cellMatch: RegExpExecArray | null;
+    while ((cellMatch = cellRe.exec(rowXml))) {
+      const cellXml = cellMatch[0];
+      const paras: string[] = [];
+      const paraRe = /<w:p\b[^>]*(?:\/>|>[\s\S]*?<\/w:p>)/g;
+      let paraMatch: RegExpExecArray | null;
+      while ((paraMatch = paraRe.exec(cellXml))) paras.push(/<w:p\b[^>]*\/>/.test(paraMatch[0]) ? '<p><br/></p>' : paraHtml(paraMatch[0]));
+      const span = /<w:gridSpan\b[^>]*w:val="(\d+)"/.exec(cellXml)?.[1];
+      const colspan = span && Number(span) > 1 ? ` colspan="${Number(span)}"` : '';
+      const tag = header ? 'th' : 'td';
+      cells.push(`<${tag}${colspan}>${paras.join('') || '<br/>'}</${tag}>`);
+    }
+    rows.push(`<tr>${cells.join('')}</tr>`);
+  }
+  return `<table class="rd-tbl"><tbody>${rows.join('')}</tbody></table>`;
+}
+
 export interface DocxImport { html: string; skipped: string[] }
 
 /** .docx 字节 → { html, skipped }。抛错=不是合法 docx。 */
@@ -85,14 +120,15 @@ export function docxToHtml(bytes: Uint8Array): DocxImport {
   const xml = strFromU8(doc);
   const body = /<w:body>([\s\S]*?)<\/w:body>/.exec(xml)?.[1] ?? xml;
   const skipped: string[] = [];
-  if (/<w:tbl\b/.test(body)) skipped.push('表格');
   if (/<w:drawing\b|<w:pict\b/.test(body)) skipped.push('图片/绘图');
   const parts: string[] = [];
-  // 只取 body 顶层段落(表格内的 w:p 一并跳过:先按 tbl 区块剔除)
-  const noTbl = body.replace(/<w:tbl\b[\s\S]*?<\/w:tbl>/g, '<w:p><w:r><w:t>[表格:v1 暂以占位显示,写回不受影响]</w:t></w:r></w:p>');
-  const pp = /<w:p\b[^>]*(?:\/>|>([\s\S]*?)<\/w:p>)/g;
+  // 按 body 顶层块顺序解析。一个 w:tbl 只生成一个工作区块,与 adapter 的 paraIdx 计数一致。
+  const blockRe = /<w:tbl\b[\s\S]*?<\/w:tbl>|<w:p\b[^>]*(?:\/>|>[\s\S]*?<\/w:p>)/g;
   let m: RegExpExecArray | null;
-  while ((m = pp.exec(noTbl))) parts.push(m[1] != null ? paraHtml(m[0]) : '<p><br/></p>');
+  while ((m = blockRe.exec(body))) {
+    if (m[0].startsWith('<w:tbl')) parts.push(tableHtml(m[0]));
+    else parts.push(/<w:p\b[^>]*\/>/.test(m[0]) ? '<p><br/></p>' : paraHtml(m[0]));
+  }
   const html = parts.join('\n');
   if (!html.trim()) throw new Error('文档没有可渲染的正文段落');
   return { html, skipped };

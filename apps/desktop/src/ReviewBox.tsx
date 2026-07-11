@@ -53,10 +53,11 @@ export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBat
             {d.items.map((it, k) => {
               const o = turn.ops.find((x) => x.editId === it.editId);
               const w = turn.word?.find((x) => x.editId === it.editId);
+              const table = w?.table;
               const isFmt = !!(it.style || w?.style);
-              const refShort = it.ref.replace(/^.*!/, '');
-              const oldV = w ? (w.quote || '') : (!it.style && o?.before != null && String(o.before) !== '' ? String(o.before) : '');
-              const newV = w ? (w.replacement ?? '') : (it.after ?? '');
+              const refShort = it.ref.replace(/^.*!/, '') || (table ? t('表格') : '');
+              const oldV = table ? '' : w ? (w.quote || '') : (!it.style && o?.before != null && String(o.before) !== '' ? String(o.before) : '');
+              const newV = table ? '' : w ? (w.replacement ?? '') : (it.after ?? '');
               const fmtDesc = it.after || (w?.style ? Object.keys(w.style).join('/') : '') || t('改格式');
               const curHunk = active && k === ridx;
               const acc = accepted.has(akey(d.changeSetId, it.editId));
@@ -81,7 +82,25 @@ export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBat
                       </span>
                     ) : null}
                   </div>
-                  {isFmt ? (
+                  {table ? (
+                    <div className="gd-table-preview">
+                      <div className="gd-table-meta">{table.rows.length} × {table.rows[0]?.length ?? 0}{table.headerRows > 0 ? ` · H${table.headerRows}` : ''}</div>
+                      <div className="gd-table-scroll">
+                        <table>
+                          <tbody>
+                            {table.rows.slice(0, 4).map((row, rowIndex) => (
+                              <tr key={rowIndex}>
+                                {row.slice(0, 5).map((cell, cellIndex) => rowIndex < table.headerRows
+                                  ? <th key={cellIndex}>{cell.length > 160 ? cell.slice(0, 160) + '…' : cell}</th>
+                                  : <td key={cellIndex}>{cell.length > 160 ? cell.slice(0, 160) + '…' : cell}</td>)}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {(table.rows.length > 4 || (table.rows[0]?.length ?? 0) > 5) ? <div className="gd-table-more">…</div> : null}
+                    </div>
+                  ) : isFmt ? (
                     <div className="gd-line fmt"><span className="gd-sign">~</span>{fmtDesc}{oldV ? <span className="gd-ctx">　「{oldV.length > 42 ? oldV.slice(0, 42) + '…' : oldV}」</span> : null}</div>
                   ) : (<>
                     {oldV ? <div className="gd-line del"><span className="gd-sign">-</span>{oldV}</div> : null}

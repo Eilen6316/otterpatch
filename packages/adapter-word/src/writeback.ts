@@ -27,7 +27,7 @@ const enc = new TextEncoder();
 // replaceText → word-level redlines; setStyle → character (rPr/rPrChange) + paragraph (pPr/pPrChange) format revisions;
 // deleteRange → whole-paragraph deletion revision (runs in <w:del> + paragraph-mark <w:del/>);
 // setObjectProps(imgAction) → image remove (drawing run in <w:del>) / resize (wp:extent in EMU)
-const SUPPORTED: ReadonlySet<EditOpKind> = new Set<EditOpKind>(['replaceText', 'setStyle', 'deleteRange', 'setObjectProps']);
+const SUPPORTED: ReadonlySet<EditOpKind> = new Set<EditOpKind>(['replaceText', 'setStyle', 'deleteRange', 'setObjectProps', 'insertTable']);
 const DOC_PART = 'word/document.xml';
 
 export interface WordRedlineOptions {
@@ -43,7 +43,7 @@ export class WordRedlineWriteback implements WritebackBackend {
 
   canHandle(cs: ChangeSet): { ok: boolean; reason?: string } {
     const bad = cs.edits.find((e) => !SUPPORTED.has(e.op.kind));
-    if (bad) return { ok: false, reason: `word-redline supports replaceText / setStyle / deleteRange / setObjectProps (got ${bad.op.kind})` };
+    if (bad) return { ok: false, reason: `word-redline supports replaceText / setStyle / deleteRange / setObjectProps / insertTable (got ${bad.op.kind})` };
     return { ok: true };
   }
 
@@ -76,6 +76,20 @@ export class WordRedlineWriteback implements WritebackBackend {
         if (p.imgAction !== 'remove' && p.imgAction !== 'resize') { dropped.push({ editId: e.id, reason: `setObjectProps 仅支持图片操作(imgAction),得到 ${JSON.stringify(e.op.props).slice(0, 60)}` }); continue; }
         if (!quote && paraIdx == null) { dropped.push({ editId: e.id, reason: '图片操作缺少 quote/para 锚点,无法定位' }); continue; }
         edits.push({ id: e.id, kind: 'img', action: p.imgAction, ...(p.width != null ? { width: p.width } : {}), ...(quote ? { quote } : {}), ...(paraIdx != null ? { paraIdx } : {}) });
+      } else if (e.op.kind === 'insertTable') {
+        if (e.op.at !== 'end' && !quote && paraIdx == null) {
+          dropped.push({ editId: e.id, reason: '表格段前/段后插入缺少 quote/para 锚点,无法定位' });
+          continue;
+        }
+        edits.push({
+          id: e.id,
+          kind: 'insertTable',
+          rows: e.op.rows,
+          headerRows: e.op.headerRows,
+          at: e.op.at,
+          ...(quote ? { quote } : {}),
+          ...(paraIdx != null ? { paraIdx } : {}),
+        });
       } else if (e.op.kind === 'setStyle') {
         const st0 = e.op.style;
         // Page-level (columns/margins/orientation): inherently document-wide, handled via surgical sectPr patch

@@ -29,6 +29,24 @@ test('Word 自检:全文格式改动(all=true,无 quote)→ 跳过定位、通�
   assert.equal(v.ok, true);
 });
 
+test('Word 表格:文档末尾插入结构化表格无需源锚点', () => {
+  const changeSet = cs([{
+    quote: '',
+    table: [['工作条线', '关键任务'], ['开发迭代', 'Agent 能力']],
+    tableHeaderRows: 1,
+    tableAt: 'end',
+  }]);
+  const edit = changeSet.edits[0]!;
+  assert.deepEqual(edit.op, {
+    family: 'structure',
+    kind: 'insertTable',
+    rows: [['工作条线', '关键任务'], ['开发迭代', 'Agent 能力']],
+    headerRows: 1,
+    at: 'end',
+  });
+  assert.equal(buildDocVerifier(DOC)(changeSet).ok, true);
+});
+
 test('Word 自检:quote 多次出现 → 通过但给唯一性告警', () => {
   const v = buildDocVerifier(DOC)(cs([{ quote: '财政收入', replacement: '一般公共预算收入' }]));
   assert.equal(v.ok, true); // warning does not block
