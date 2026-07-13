@@ -9,6 +9,20 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type Reac
 import { useT } from './i18n.js';
 import { DiffToggle } from './DiffToggle.js';
 import {
+  RICH_DOC_BLOCK_TAGS as BLOCK_TAGS,
+  applyRichDocEdit,
+  escapeCssAttribute as cssq,
+  findRange,
+  styleSpan,
+} from './richdoc-editing.js';
+import type {
+  DocFmt,
+  DocTable,
+  RichDocEditOptions,
+  RichDocRevisionPageState,
+  RichDocUndoEntry,
+} from './richdoc-editing.js';
+import {
   RICH_TEXT_BLOCK_SELECTOR as BLOCK_SEL,
   cleanBlockText,
   cleanClone,
@@ -17,7 +31,6 @@ import {
   getRichDocSnapshot,
   getRichDocText,
   sanitizeHtml,
-  visibleBlockFor,
   visibleBlocks,
 } from './richdoc-projection.js';
 import type { RichDocSnapshot } from './richdoc-projection.js';
@@ -45,24 +58,7 @@ import {
   IconNavPaneRb, IconZoomRb, IconZoom100Rb, IconSinglePageRb, IconMultiPageRb, IconWidthRb, IconCheck,
 } from './icons.js';
 
-export interface DocFmt {
-  bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; font?: string; size?: number; color?: string;
-  // 段落级(Agent 可下发,作用于 quote 所在整段)
-  align?: 'left' | 'center' | 'right' | 'justify'; lineSpacing?: number; bgColor?: string;
-  block?: 'h1' | 'h2' | 'h3' | 'p' | 'blockquote';
-  // 页面级(Agent 以 all=true 下发,作用于整篇版面):分栏 / 页边距 / 纸张方向
-  columns?: number; margin?: 'narrow' | 'normal' | 'moderate' | 'wide'; orient?: 'portrait' | 'landscape';
-}
-export interface DocTable {
-  rows: string[][];
-  headerRows: number;
-  at: 'before' | 'after' | 'end';
-}
-const INLINE_FMT = (f: DocFmt): boolean => f.bold != null || f.italic != null || f.underline != null || f.strike != null || f.font != null || f.size != null || f.color != null;
-const BLOCK_FMT = (f: DocFmt): boolean => f.align != null || f.lineSpacing != null || f.bgColor != null || f.block != null;
-const PAGE_FMT = (f: DocFmt): boolean => f.columns != null || f.margin != null || f.orient != null;
-/** Agent 页边距预设 → 布局选项卡使用的 MARGINS 键(普通/窄/适中/宽)。 */
-const MARGIN_KEY: Record<string, string> = { normal: '普通', narrow: '窄', moderate: '适中', wide: '宽' };
+export type { DocFmt, DocTable } from './richdoc-editing.js';
 
 export interface RichDocHandle {
   /** 全文纯文本(供 Agent 定位)。 */
@@ -73,7 +69,7 @@ export interface RichDocHandle {
   getDocSnapshot(): RichDocSnapshot;
   /** 落一条 Agent 改动(文本改写 replacement / 格式 fmt / 删段 removeBlock / 图片 img / 结构化表格 table),按 editId 包裹,可还原。
    *  blockIdx=段号锚(0-based,与 getContext/getDocSnapshot 的"第N段"同序):quote 定位失败或空段落时的兜底通道。 */
-  applyEdit(editId: string, quote: string, opts: { replacement?: string; fmt?: DocFmt; blockIdx?: number; removeBlock?: boolean; img?: { action: 'remove' | 'resize'; width?: number }; table?: DocTable }): boolean;
+  applyEdit(editId: string, quote: string, opts: RichDocEditOptions): boolean;
   /** 按 editId 精确还原该条改动(undoMap 缺失时按 DOM 现场兜底);false=完全找不到可还原目标。 */
   revert(editId: string): boolean;
   /** 选中/滚动到某条改动。 */
@@ -171,10 +167,9 @@ const DEMO_HTML = `
 const STORAGE_KEY = 'oa.richdoc';
 const TAB_KEY = 'oa.richdoc.tab';
 const PAGE_KEY = 'oa.richdoc.page';
-const BLOCK_TAGS = /^(P|H1|H2|H3|H4|LI|BLOCKQUOTE|DIV|TD|TH)$/;
 
-interface PageState {
-  size?: string; orient?: 'portrait' | 'landscape'; margin?: string; columns?: number;
+interface PageState extends RichDocRevisionPageState {
+  size?: string;
   writing?: 'v'; hyphens?: boolean; lineNums?: boolean; grid?: boolean; ruler?: boolean;
   nav?: boolean; zoom?: number; view?: 'read' | 'web' | 'outline'; spell?: boolean;
   hideComments?: boolean; track?: boolean; lang?: string;
@@ -183,110 +178,6 @@ interface CmdState { bold: boolean; italic: boolean; underline: boolean; strike:
 
 /** HTML 转义(用户输入拼进 innerHTML 前必转,避免破坏 DOM/注入)。 */
 const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] ?? c));
-/** CSS 属性选择器安全转义(domId 里可能出现任意字符)。 */
-const cssq = (s: string): string => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"'));
-
-/** 最近块祖先(跨块命中要拒绝:deleteContents 会把两段搅成一段)。 */
-function blockOf(n: Node, root: HTMLElement): Node | null {
-  let e: Node | null = n;
-  while (e && e !== root) { if (e instanceof HTMLElement && BLOCK_TAGS.test(e.tagName)) return e; e = e.parentNode; }
-  return null;
-}
-function makeTableElement(spec: DocTable): HTMLTableElement {
-  const table = document.createElement('table');
-  table.className = 'rd-tbl';
-  const head = spec.headerRows > 0 ? table.createTHead() : null;
-  const body = table.createTBody();
-  spec.rows.forEach((cells, rowIndex) => {
-    const row = (rowIndex < spec.headerRows ? head : body)!.insertRow();
-    cells.forEach((value) => {
-      const cell = rowIndex < spec.headerRows ? document.createElement('th') : document.createElement('td');
-      cell.textContent = value;
-      row.appendChild(cell);
-    });
-  });
-  return table;
-}
-
-/** 在 root 的文本里找到 quote 的 Range(跨文本节点);from=起始字符偏移(供"查找下一个");跨块命中自动跳到下一处。 */
-function findRange(root: HTMLElement, quote: string, from = 0): Range | null {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  const nodes: { node: Text; start: number }[] = [];
-  let acc = '';
-  let n: Node | null;
-  while ((n = walker.nextNode())) { nodes.push({ node: n as Text, start: acc.length }); acc += (n as Text).data; }
-  let idx = acc.indexOf(quote, from);
-  while (idx >= 0) {
-    const end = idx + quote.length;
-    let sNode: Text | undefined, sOff = 0, eNode: Text | undefined, eOff = 0;
-    for (const { node, start } of nodes) {
-      const len = node.data.length;
-      if (sNode === undefined && idx >= start && idx < start + len) { sNode = node; sOff = idx - start; }
-      if (end > start && end <= start + len) { eNode = node; eOff = end - start; }
-    }
-    if (sNode && eNode && blockOf(sNode, root) === blockOf(eNode, root)) { // 同块才算命中:文本节点拼接没有段界,"上段尾+下段头"会假匹配
-      const r = document.createRange();
-      r.setStart(sNode, sOff);
-      r.setEnd(eNode, eOff);
-      return r;
-    }
-    idx = acc.indexOf(quote, idx + 1);
-  }
-  return null;
-}
-
-/** 宽松定位:先精确;失败则按"空白折叠"匹配(容忍换行/多空格差异),把归一化命中映射回原始 Range。 */
-function findRangeLoose(root: HTMLElement, quote: string): Range | null {
-  const exact = findRange(root, quote);
-  if (exact) return exact;
-  const nq = quote.replace(/\s+/g, ' ').trim();
-  if (!nq) return null;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  const cells: { node: Text; off: number; ch: string }[] = [];
-  let n: Node | null;
-  while ((n = walker.nextNode())) { const d = (n as Text).data; for (let i = 0; i < d.length; i++) cells.push({ node: n as Text, off: i, ch: d[i]! }); }
-  let norm = '';
-  const map: number[] = []; // 归一化下标 → cells 下标
-  let prevWs = false;
-  for (let i = 0; i < cells.length; i++) {
-    const ch = cells[i]!.ch;
-    if (/\s/.test(ch)) { if (!prevWs) { norm += ' '; map.push(i); } prevWs = true; }
-    else { norm += ch; map.push(i); prevWs = false; }
-  }
-  let idx = norm.indexOf(nq);
-  while (idx >= 0) {
-    const startCell = cells[map[idx]!]!;
-    const endCell = cells[map[idx + nq.length - 1]!]!;
-    if (blockOf(startCell.node, root) === blockOf(endCell.node, root)) { // 同块守卫(与 findRange 一致)
-      const r = document.createRange();
-      r.setStart(startCell.node, startCell.off);
-      r.setEnd(endCell.node, endCell.off + 1);
-      return r;
-    }
-    idx = norm.indexOf(nq, idx + 1);
-  }
-  return null;
-}
-
-function styleSpan(span: HTMLElement, fmt: DocFmt): void {
-  if (fmt.bold) span.style.fontWeight = 'bold';
-  if (fmt.italic) span.style.fontStyle = 'italic';
-  if (fmt.underline) span.style.textDecoration = (span.style.textDecoration ? span.style.textDecoration + ' ' : '') + 'underline';
-  if (fmt.strike) span.style.textDecoration = (span.style.textDecoration ? span.style.textDecoration + ' ' : '') + 'line-through';
-  if (fmt.font) span.style.fontFamily = fmt.font;
-  if (fmt.size) span.style.fontSize = fmt.size + 'pt';
-  if (fmt.color) span.style.color = fmt.color;
-}
-
-/** 段落级样式(对齐/行距/底纹)落到块元素上;block(标题/正文/引用)换标签由调用方处理。
- *  Word semantics: "justify" never stretches the last line (that's 分散对齐/distribute) —
- *  setting textAlignLast:justify here stretched headings and every paragraph's last line
- *  across the full width (caught by live screenshot eval). Always pin last-line to auto. */
-function styleBlockEl(el: HTMLElement, fmt: DocFmt): void {
-  if (fmt.align) { el.style.textAlign = fmt.align; el.style.textAlignLast = 'auto'; }
-  if (fmt.lineSpacing) el.style.lineHeight = String(fmt.lineSpacing);
-  if (fmt.bgColor) el.style.backgroundColor = fmt.bgColor;
-}
 
 const transformCase = (txt: string, mode: string): string => {
   switch (mode) {
@@ -311,12 +202,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   const painter = useRef<DocFmt | null>(null); // 格式刷源格式
   const cmtCursor = useRef(0); // 批注导航游标
   const lastImg = useRef<HTMLElement | null>(null); // 最近点选的图片/对象(排列命令的目标)
-  const undoMap = useRef<Map<string,
-    | { mode: 'span'; prior: DocumentFragment; el: HTMLElement }
-    | { mode: 'root'; priorProps: Record<string, string>; nextProps?: Record<string, string>; priorPage?: PageState; nextPage?: PageState }
-    | { mode: 'block'; prior: Element; el: HTMLElement }
-    | { mode: 'insertBlock'; el: HTMLElement }
-  >>(new Map());
+  const undoMap = useRef<Map<string, RichDocUndoEntry>>(new Map());
 
   const [tab, setTab] = useState<number>(() => { const v = parseInt(localStorage.getItem(TAB_KEY) ?? '0', 10); return Number.isFinite(v) && v >= 0 && v < 6 ? v : 0; });
   const [pop, setPop] = useState<{ key: string; x: number; y: number } | null>(null);
@@ -529,166 +415,15 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     applyEdit: (editId, quote, opts) => {
       const root = edRef.current;
       if (!root) return false;
-      if (root.querySelector(`[data-cid="${cssq(editId)}"]`)) return true; // 幂等:同一改动只落一次(刷新后重复接受/重放不叠标记)
-      if (opts.table) {
-        const spec = opts.table;
-        const width = spec.rows[0]?.length ?? 0;
-        if (!['before', 'after', 'end'].includes(spec.at) || !spec.rows.length || spec.rows.length > 100 || !width || width > 20 || !Number.isInteger(spec.headerRows) || spec.headerRows < 0 || spec.headerRows > spec.rows.length || spec.rows.some((row) => row.length !== width || row.some((cell) => typeof cell !== 'string' || cell.length > 10_000))) return false;
-        let anchor: HTMLElement | undefined;
-        if (spec.at !== 'end') {
-          const range = quote ? findRangeLoose(root, quote) : null;
-          anchor = range ? visibleBlockFor(root, range.startContainer) : undefined;
-          if (!anchor && opts.blockIdx != null) anchor = visibleBlocks(root)[opts.blockIdx];
-          if (!anchor) return false;
-        }
-        const table = makeTableElement(spec);
-        table.classList.add('rd-chg-blkins', 'is-new');
-        table.setAttribute('data-edit-block', editId);
-        table.setAttribute('data-cid', editId);
-        table.setAttribute('data-kind', 'insert');
-        table.setAttribute('data-glyph', '+表');
-        table.setAttribute('tabindex', '0');
-        table.setAttribute('contenteditable', 'false');
-        table.setAttribute('aria-label', `插入 ${spec.rows.length}×${width} 表格`);
-        if (spec.at === 'end') root.appendChild(table);
-        else if (spec.at === 'before') anchor!.before(table);
-        else anchor!.after(table);
-        undoMap.current.set(editId, { mode: 'insertBlock', el: table });
-        window.setTimeout(() => table.classList.remove('is-new'), 1000);
-        refreshHasDiff();
-        persist();
-        return true;
-      }
-      const fmt = opts.fmt;
-      // 全文格式/页面级(无 quote 且无段号锚):字符级改根内联样式(继承给各段);columns/margin/orient 落页面态;记 prior/next 供四态切换与还原
-      if (!quote && fmt && opts.blockIdx == null && !opts.removeBlock && !opts.img) {
-        if (undoMap.current.has(editId) || docChgsRef.current.some((c) => c.cid === editId)) return true; // 幂等(root 改动没有 data-cid 可查)
-        const s = root.style;
-        const snap = (): Record<string, string> => ({
-          fontWeight: s.fontWeight, fontStyle: s.fontStyle, textDecoration: s.textDecoration, fontFamily: s.fontFamily, fontSize: s.fontSize, color: s.color,
-          textAlign: s.textAlign, lineHeight: s.lineHeight, backgroundColor: s.backgroundColor,
-        });
-        const priorProps = snap();
-        styleSpan(root, fmt);
-        styleBlockEl(root, fmt);
-        const nextProps = snap();
-        const cur = pageRef.current;
-        const priorPage: PageState = { columns: cur.columns, margin: cur.margin, orient: cur.orient };
-        let nextPage: PageState | undefined;
-        if (PAGE_FMT(fmt)) {
-          nextPage = {
-            columns: fmt.columns != null ? fmt.columns : cur.columns,
-            margin: fmt.margin ? MARGIN_KEY[fmt.margin] : cur.margin,
-            orient: fmt.orient ?? cur.orient,
-          };
-          setPage((p) => ({ ...p, ...nextPage }));
-        }
-        undoMap.current.set(editId, { mode: 'root', priorProps, nextProps, priorPage, ...(nextPage ? { nextPage } : {}) });
-        const label = [
-          fmt.font, fmt.size ? fmt.size + 'pt' : '', fmt.bold != null ? (fmt.bold ? '加粗' : '取消加粗') : '', fmt.color ?? '',
-          fmt.align === 'justify' ? '两端对齐' : fmt.align === 'center' ? '居中' : '', fmt.lineSpacing ? '行距 ' + fmt.lineSpacing : '',
-          fmt.columns != null ? (fmt.columns <= 1 ? '单栏' : fmt.columns + ' 栏') : '', fmt.margin ? (MARGIN_KEY[fmt.margin] ?? fmt.margin) + '边距' : '',
-          fmt.orient ? (fmt.orient === 'landscape' ? '横向纸张' : '纵向纸张') : '',
-        ].filter(Boolean).join(' · ');
-        setDocChanges([...docChgsRef.current, { cid: editId, label: label || '全文格式' }]);
-        refreshHasDiff();
-        persist();
-        return true;
-      }
-      // 双通道锚定:先按 quote 宽松定位(容忍模型 quote 的空白/换行差异);失败或空 quote 落到段号锚(空段落也能锚住)
-      let range = quote ? findRangeLoose(root, quote) : null;
-      if (!range && opts.blockIdx != null) {
-        const blk = visibleBlocks(root)[opts.blockIdx];
-        if (blk) { range = document.createRange(); range.selectNodeContents(blk); }
-      }
-      if (!range) return false;
-      // 拒绝落进未定修订内部:嵌套标记会毁掉 flatten/revert 的对称性(服务端锚点校验负责修复此类 quote)
-      const inRev = (nd: Node): boolean => { let e: Node | null = nd; while (e && e !== root) { if (e instanceof HTMLElement && (e.classList.contains('rd-chg') || e.tagName === 'DEL' || e.tagName === 'INS')) return true; e = e.parentNode; } return false; };
-      if (inRev(range.startContainer) || inRev(range.endContainer)) return false;
-      // 图片操作:对锚定段内的图片删除/调宽 —— 整段快照进 undoMap,拒绝可整段还原(图片复现)
-      if (opts.img) {
-        let blk: Node | null = range.startContainer;
-        while (blk && blk !== root) { if (blk instanceof HTMLElement && BLOCK_TAGS.test(blk.tagName)) break; blk = blk.parentNode; }
-        if (!(blk instanceof HTMLElement) || blk === root) return false;
-        const im = blk.querySelector('img');
-        if (!im) return false;
-        const prior = blk.cloneNode(true) as Element;
-        if (opts.img.action === 'remove') im.remove();
-        else if (opts.img.width) { im.style.width = opts.img.width + 'px'; im.style.height = 'auto'; im.removeAttribute('width'); im.removeAttribute('height'); }
-        blk.setAttribute('data-edit-block', editId); blk.setAttribute('data-cid', editId); blk.setAttribute('data-kind', 'format'); blk.setAttribute('data-glyph', opts.img.action === 'remove' ? '✕图' : '图±');
-        undoMap.current.set(editId, { mode: 'block', prior, el: blk });
-        refreshHasDiff();
-        persist();
-        return true;
-      }
-      // 删段(结构操作):整段打 remove 修订标记 —— mark 视图红删除线、clean/final 视图整段隐藏;接受才物理移除
-      if (opts.removeBlock) {
-        let blk: Node | null = range.startContainer;
-        while (blk && blk !== root) { if (blk instanceof HTMLElement && BLOCK_TAGS.test(blk.tagName)) break; blk = blk.parentNode; }
-        if (!(blk instanceof HTMLElement) || blk === root) return false;
-        const prior = blk.cloneNode(true) as Element;
-        blk.classList.add('rd-chg-blkdel');
-        blk.setAttribute('data-edit-block', editId); blk.setAttribute('data-cid', editId); blk.setAttribute('data-kind', 'remove'); blk.setAttribute('data-glyph', '✕段');
-        undoMap.current.set(editId, { mode: 'block', prior, el: blk });
-        refreshHasDiff();
-        persist();
-        return true;
-      }
-      // 段落级格式(且非文本改写):快照整段以便还原,套用后打 data-edit-block 标记
-      if (opts.replacement == null && fmt && BLOCK_FMT(fmt)) {
-        let blk: Node | null = range.startContainer;
-        while (blk && blk !== root) { if (blk instanceof HTMLElement && BLOCK_TAGS.test(blk.tagName)) break; blk = blk.parentNode; }
-        if (blk instanceof HTMLElement && blk !== root) {
-          const prior = blk.cloneNode(true) as Element;
-          if (INLINE_FMT(fmt)) { // 字符级部分:把 quote 包进内联 span
-            const sp = document.createElement('span'); styleSpan(sp, fmt);
-            try { range.surroundContents(sp); } catch { sp.appendChild(range.extractContents()); range.insertNode(sp); }
-          }
-          let target: HTMLElement = blk; // 换段落标签(标题/正文/引用)
-          if (fmt.block && blk.tagName.toLowerCase() !== fmt.block) {
-            target = document.createElement(fmt.block);
-            while (blk.firstChild) target.appendChild(blk.firstChild);
-            blk.replaceWith(target);
-          }
-          styleBlockEl(target, fmt);
-          target.setAttribute('data-edit-block', editId); target.setAttribute('data-cid', editId); target.setAttribute('data-kind', 'format'); target.setAttribute('data-glyph', '¶');
-          undoMap.current.set(editId, { mode: 'block', prior, el: target }); // 存 el:同段多次改 或 跨回合 editId 撞名时仍能精确还原
-          persist();
-          return true;
-        }
-        // 找不到块 → 落回内联 span 处理
-      }
-      // 文本改写 → 一个 .rd-chg 组(data-edit/data-cid 只打在组上,revert 才干净)含 del(旧)+ ins(新);纯字符级格式 → .rd-chg.rd-fmt 第三通道
-      const prior = range.cloneContents();
-      const oldText = range.toString();
-      const cutA = (s: string): string => (s.length > 60 ? s.slice(0, 60) + '…' : s);
-      if (opts.replacement != null) {
-        const kind = oldText && opts.replacement ? 'replace' : opts.replacement ? 'insert' : 'delete';
-        const grp = document.createElement('span');
-        grp.className = 'rd-chg is-new'; grp.setAttribute('data-edit', editId); grp.setAttribute('data-cid', editId); grp.setAttribute('data-kind', kind); grp.setAttribute('tabindex', '0');
-        grp.setAttribute('contenteditable', 'false'); // 原子化:光标进不去,打字/Ctrl+Z 不会撕开修订对
-        grp.setAttribute('aria-label', `${kind === 'replace' ? '替换' : kind === 'insert' ? '插入' : '删除'}:${cutA(oldText)}${oldText && opts.replacement ? ' → ' : ''}${cutA(opts.replacement)}`);
-        if (oldText) { const del = document.createElement('del'); del.className = 'rd-del'; del.textContent = oldText; grp.appendChild(del); }
-        if (opts.replacement) { const ins = document.createElement('ins'); ins.className = 'rd-ins'; if (fmt) styleSpan(ins, fmt); ins.textContent = opts.replacement; grp.appendChild(ins); }
-        range.deleteContents();
-        range.insertNode(grp);
-        undoMap.current.set(editId, { mode: 'span', prior, el: grp });
-        window.setTimeout(() => grp.classList.remove('is-new'), 1000);
-      } else {
-        const glyph = fmt?.bold ? 'B' : fmt?.italic ? 'I' : fmt?.underline ? 'U' : fmt?.strike ? 'S' : (fmt?.color || fmt?.bgColor) ? '◆' : fmt?.size ? 'A±' : fmt?.font ? 'A' : '~';
-        const span = document.createElement('span');
-        span.className = 'rd-chg rd-fmt is-new'; span.setAttribute('data-edit', editId); span.setAttribute('data-cid', editId); span.setAttribute('data-kind', 'format'); span.setAttribute('data-glyph', glyph); span.setAttribute('tabindex', '0');
-        span.setAttribute('contenteditable', 'false');
-        span.setAttribute('aria-label', `改格式(${glyph}):${cutA(oldText || quote)}`);
-        if (fmt) styleSpan(span, fmt);
-        span.appendChild(range.extractContents()); // 搬移而非重建文本:quote 里的链接/加粗/脚注等内联结构原样保留
-        range.insertNode(span);
-        undoMap.current.set(editId, { mode: 'span', prior, el: span });
-        window.setTimeout(() => span.classList.remove('is-new'), 1000);
-      }
-      refreshHasDiff();
-      persist();
-      return true;
+      return applyRichDocEdit({
+        root,
+        undoMap: undoMap.current,
+        page: pageRef.current,
+        documentChanges: docChgsRef.current,
+        setPage: (patch) => setPage((current) => ({ ...current, ...patch })),
+        setDocumentChanges: setDocChanges,
+        onMutation: () => { refreshHasDiff(); persist(); },
+      }, editId, quote, opts);
     },
     revert: (editId) => {
       const root = edRef.current;

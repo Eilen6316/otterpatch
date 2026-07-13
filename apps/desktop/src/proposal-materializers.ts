@@ -1,6 +1,6 @@
 import { cleanLabel, innerForStyle, parseDrawioStyle, snap } from './DrawioBoard.js';
 import type { BEdge, BNode } from './DrawioBoard.js';
-import type { DocFmt, DocTable } from './RichDoc.js';
+import type { DocFmt, DocTable } from './richdoc-editing.js';
 import { styleToKind } from './shape-engine.js';
 
 export interface CellState {
