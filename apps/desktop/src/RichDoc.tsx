@@ -23,6 +23,12 @@ import type {
   RichDocUndoEntry,
 } from './richdoc-editing.js';
 import {
+  closeRichDocUndoWindow,
+  resolveRichDocRevision,
+  revertRichDocRevision,
+} from './richdoc-revisions.js';
+import type { RichDocRevisionContext } from './richdoc-revisions.js';
+import {
   RICH_TEXT_BLOCK_SELECTOR as BLOCK_SEL,
   cleanBlockText,
   cleanClone,
@@ -398,6 +404,14 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     el.scrollIntoView({ behavior: smoothBehavior(), block: 'center' });
     el.classList.add('rd-flash'); setTimeout(() => el.classList.remove('rd-flash'), 1200);
   };
+  const revisionContextFor = (root: HTMLElement): RichDocRevisionContext => ({
+    root,
+    undoMap: undoMap.current,
+    documentChanges: docChgsRef.current,
+    setPage: (patch) => setPage((current) => ({ ...current, ...patch })),
+    setDocumentChanges: setDocChanges,
+    onMutation: () => { refreshHasDiff(); persist(); },
+  });
 
   useImperativeHandle(ref, (): RichDocHandle => ({
     getText: () => { // 清样投影:喂给 Agent 的永远是"改后本体",del 里的旧文不进上下文
@@ -416,64 +430,14 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       const root = edRef.current;
       if (!root) return false;
       return applyRichDocEdit({
-        root,
-        undoMap: undoMap.current,
+        ...revisionContextFor(root),
         page: pageRef.current,
-        documentChanges: docChgsRef.current,
-        setPage: (patch) => setPage((current) => ({ ...current, ...patch })),
-        setDocumentChanges: setDocChanges,
-        onMutation: () => { refreshHasDiff(); persist(); },
       }, editId, quote, opts);
     },
     revert: (editId) => {
       const root = edRef.current;
       if (!root) return false;
-      const info = undoMap.current.get(editId);
-      if (info) {
-        if (info.mode === 'root') {
-          const s = root.style; const pp = info.priorProps;
-          s.fontWeight = pp.fontWeight ?? ''; s.fontStyle = pp.fontStyle ?? ''; s.textDecoration = pp.textDecoration ?? '';
-          s.fontFamily = pp.fontFamily ?? ''; s.fontSize = pp.fontSize ?? ''; s.color = pp.color ?? '';
-          s.textAlign = pp.textAlign ?? ''; s.lineHeight = pp.lineHeight ?? ''; s.backgroundColor = pp.backgroundColor ?? '';
-          if (info.priorPage) setPage((p) => ({ ...p, ...info.priorPage })); // 页面级(分栏/边距/方向)一并回退
-          setDocChanges(docChgsRef.current.filter((c) => c.cid !== editId));
-        } else if (info.mode === 'insertBlock') {
-          const inserted = root.contains(info.el) ? info.el : root.querySelector(`[data-cid="${cssq(editId)}"]`);
-          inserted?.remove();
-        } else if (info.mode === 'block') {
-          const cur = info.el && root.contains(info.el) ? info.el : root.querySelector(`[data-edit-block="${cssq(editId)}"]`);
-          if (cur && cur.parentNode) cur.parentNode.replaceChild(info.prior.cloneNode(true), cur);
-        } else {
-          // 文本改动可能是一对 del+ins(同一 data-edit),整体用原片段替回;定稿后(data-undo)el 引用仍指向同一节点
-          const els = Array.from(root.querySelectorAll(`[data-edit="${cssq(editId)}"], [data-undo="${cssq(editId)}"]`)) as HTMLElement[];
-          if (els.length && els[0]!.parentNode) { els[0]!.parentNode.insertBefore(info.prior.cloneNode(true), els[0]!); els.forEach((e) => e.remove()); }
-          else if (info.el && info.el.parentNode) { info.el.parentNode.insertBefore(info.prior.cloneNode(true), info.el); info.el.remove(); }
-        }
-        undoMap.current.delete(editId);
-        refreshHasDiff();
-        persist();
-        return true;
-      }
-      // 兜底(刷新后 undoMap 已失):按 DOM 现场退回——文本=回 del 旧文;格式=解包放弃;块级=剥标记清样式(尽力而为)
-      const els = Array.from(root.querySelectorAll(`[data-cid="${cssq(editId)}"]`)) as HTMLElement[];
-      if (!els.length) return false;
-      for (const el of els) {
-        if (el.getAttribute('data-kind') === 'insert' && el.classList.contains('rd-chg-blkins')) {
-          el.remove(); // 刷新后 undoMap 已失:插入块的原文态就是不存在,拒绝应物理移除
-        } else if (el.hasAttribute('data-edit-block')) {
-          ['data-edit-block', 'data-cid', 'data-kind', 'data-glyph'].forEach((a) => el.removeAttribute(a));
-          el.classList.remove('rd-chg-blkdel'); // 删段兜底还原:剥标记即让整段复现
-          el.style.textAlign = ''; el.style.textAlignLast = ''; el.style.lineHeight = ''; el.style.backgroundColor = '';
-        } else if (el.classList.contains('rd-fmt')) {
-          el.replaceWith(...Array.from(el.childNodes));
-        } else {
-          const del = el.querySelector('del');
-          if (del) el.replaceWith(...Array.from(del.childNodes)); else el.remove();
-        }
-      }
-      refreshHasDiff();
-      persist();
-      return true;
+      return revertRichDocRevision(revisionContextFor(root), editId);
     },
     highlight: (editId) => {
       const root = edRef.current; if (!root) return;
@@ -503,71 +467,11 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     },
     markResolved: (cid, state) => {
       const root = edRef.current; if (!root) return;
-      // 全文/页面级改动:接受=chip 收起、确保停在"改后"状态(可能正停在原文视图);undoMap 保留供整轮撤销
-      if (docChgsRef.current.some((c) => c.cid === cid)) {
-        if (state !== 'accepted') return;
-        const info = undoMap.current.get(cid);
-        if (info && info.mode === 'root' && info.nextProps) {
-          const s = root.style; const np = info.nextProps;
-          s.fontWeight = np.fontWeight ?? ''; s.fontStyle = np.fontStyle ?? ''; s.textDecoration = np.textDecoration ?? '';
-          s.fontFamily = np.fontFamily ?? ''; s.fontSize = np.fontSize ?? ''; s.color = np.color ?? '';
-          s.textAlign = np.textAlign ?? ''; s.lineHeight = np.lineHeight ?? ''; s.backgroundColor = np.backgroundColor ?? '';
-          if (info.nextPage) setPage((p) => ({ ...p, ...info.nextPage }));
-        }
-        setDocChanges(docChgsRef.current.filter((c) => c.cid !== cid));
-        refreshHasDiff();
-        persist();
-        return;
-      }
-      const els = Array.from(root.querySelectorAll(`[data-cid="${cssq(cid)}"]`)) as HTMLElement[];
-      if (!els.length) return;
-      if (state !== 'accepted') { els.forEach((e) => e.classList.remove('is-accepted', 'is-rejected')); return; }
-      // 接受=物理定稿(不是加类化妆):del 删掉、ins 解包,修订标识剥净 —— 文档回归本体,上下文/字数/查找全部自然干净
-      const stripRev = (el: HTMLElement): void => { ['data-edit', 'data-cid', 'data-kind', 'data-glyph', 'tabindex', 'contenteditable', 'aria-label'].forEach((a) => el.removeAttribute(a)); };
-      for (const el of els) {
-        if (el.classList.contains('rd-chg-blkins')) {
-          el.removeAttribute('data-edit-block');
-          stripRev(el);
-          el.classList.remove('rd-chg-blkins', 'is-new', 'is-active', 'is-linked');
-          el.classList.add('rd-settle');
-          el.setAttribute('data-undo', cid);
-          window.setTimeout(() => el.classList.remove('rd-settle'), 400);
-          continue;
-        }
-        if (el.getAttribute('data-kind') === 'remove') {
-          el.remove(); continue; // 删段:接受=物理移除整段
-        }
-        if (el.hasAttribute('data-edit-block')) {
-          el.removeAttribute('data-edit-block'); stripRev(el); // 段落样式已在块上,剥标记即定稿
-        } else if (el.classList.contains('rd-fmt')) {
-          stripRev(el); // 格式:退化成普通样式 span;data-undo 保住"整轮撤销"窗口
-          el.className = 'rd-settle'; el.setAttribute('data-undo', cid);
-          window.setTimeout(() => el.classList.remove('rd-settle'), 400);
-        } else {
-          el.querySelectorAll('del').forEach((d) => d.remove());
-          el.querySelectorAll('ins').forEach((i) => {
-            const st = i.getAttribute('style'); // 带样式的 ins 降级成样式 span,不带的直接解包
-            if (st) { const sp = document.createElement('span'); sp.setAttribute('style', st); while (i.firstChild) sp.appendChild(i.firstChild); i.replaceWith(sp); }
-            else i.replaceWith(...Array.from(i.childNodes));
-          });
-          stripRev(el);
-          el.className = 'rd-settle'; el.setAttribute('data-undo', cid);
-          window.setTimeout(() => el.classList.remove('rd-settle'), 400);
-        }
-      }
-      refreshHasDiff();
-      persist();
+      resolveRichDocRevision(revisionContextFor(root), cid, state);
     },
-    closeUndoWindow: () => { // 新提案到达=上一轮撤销窗口关闭:剥 data-undo,裸 span 顺手解包;残留的全文级 chip 视为默认定稿
+    closeUndoWindow: () => {
       const root = edRef.current; if (!root) return;
-      root.querySelectorAll('[data-kind="remove"]').forEach((el) => el.remove()); // 上一轮未决的删段默认定稿(物理移除)——否则新一轮的段号会和 Agent 快照错位
-      root.querySelectorAll('[data-undo]').forEach((el) => {
-        el.removeAttribute('data-undo');
-        if (el.tagName === 'SPAN' && !el.attributes.length) el.replaceWith(...Array.from(el.childNodes));
-      });
-      undoMap.current.clear();
-      if (docChgsRef.current.length) { setDocChanges([]); refreshHasDiff(); }
-      persist();
+      closeRichDocUndoWindow(revisionContextFor(root));
     },
     loadHTML: (html) => { // 真实 docx 导入:整篇替换,修订/撤销状态清零
       const root = edRef.current; if (!root) return;

@@ -46,7 +46,7 @@ export interface RichDocDocumentChange {
 export type RichDocUndoEntry =
   | { mode: 'span'; prior: DocumentFragment; el: HTMLElement }
   | { mode: 'root'; priorProps: Record<string, string>; nextProps?: Record<string, string>; priorPage?: RichDocRevisionPageState; nextPage?: RichDocRevisionPageState }
-  | { mode: 'block'; prior: Element; el: HTMLElement }
+  | { mode: 'block'; prior: Element; el: HTMLElement; acceptedAnchor?: Comment }
   | { mode: 'insertBlock'; el: HTMLElement };
 
 export interface RichDocEditContext {
