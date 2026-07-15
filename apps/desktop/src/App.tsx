@@ -45,6 +45,17 @@ import type { ClarifyQuestion } from './ThreadCards.js';
 import { Markdown } from './Markdown.js';
 import { chartToPngDataUrl, gridToChartSpec, buildChartGrid, specFromInline } from './chart.js';
 import { buildHistory as buildAppHistory, sanitizeThread as sanitizeAppThread } from './app-history.js';
+import {
+  appendAnswerDelta,
+  appendReasoningDelta,
+  appendStreamingAnswerTurn,
+  appendToolReasoning,
+  appendUserTurn,
+  finalizeLastAnswer,
+  interruptLastStreamingAnswer,
+  replaceLastWithClarify,
+  updateLastAssistantTurn,
+} from './app-proposal-flow.js';
 
 // Shared review ids and batch guards live in ./review-shared.ts (god-file decomposition).
 /** Excel「对照」视图的改动格着色:蓝=改动在案,红=已拒绝(与 Word 修订绿增红删同一语义系)。 */
@@ -742,10 +753,10 @@ export function App() {
       sendingRef.current = true;
       setBusy(true);
       setSendErr(null);
-      setThread((th) => [...th, { role: 'user', text: theIntent }]); // 用户气泡立刻进流
+      setThread((th) => appendUserTurn(th, theIntent)); // 用户气泡立刻进流
       setIntent('');
       try {
-        const upd = (fn: (t: Extract<Turn, { role: 'assistant' }>) => Turn): void => setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? fn(tt) : tt)));
+        const upd = (fn: (t: Extract<Turn, { role: 'assistant' }>) => Turn): void => setThread((th) => updateLastAssistantTurn(th, fn));
         // Reset the draw-while-streaming state before the stream opens.
         draftBufRef.current = '';
         drawnOpsRef.current = 0;
@@ -761,13 +772,13 @@ export function App() {
             if (theIntent.trim()) setRecent((rr) => [{ t: theIntent.trim(), time: t('刚刚') }, ...rr.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
             setSent(true);
             // Optimistic streaming bubble (reasoning + body render live).
-            setThread((th) => [...th, { role: 'assistant', kind: 'answer', text: '', reasoning: '', streaming: true }]);
+            setThread((th) => appendStreamingAnswerTurn(th));
           },
           (e) => {
-            if (e.type === 'reasoning') upd((tt) => (tt.kind === 'answer' ? { ...tt, reasoning: (tt.reasoning ?? '') + (e.delta ?? '') } : tt));
-            else if (e.type === 'answer') upd((tt) => (tt.kind === 'answer' ? { ...tt, text: (tt.text ?? '') + (e.delta ?? '') } : tt));
+            if (e.type === 'reasoning') setThread((th) => appendReasoningDelta(th, e.delta));
+            else if (e.type === 'answer') setThread((th) => appendAnswerDelta(th, e.delta));
             else if (e.type === 'tool') {
-              upd((tt) => (tt.kind === 'answer' ? { ...tt, reasoning: (tt.reasoning ?? '') + `\n〔查表 ${e.name}〕\n` } : tt));
+              setThread((th) => appendToolReasoning(th, e.name));
               // 提案后又有动作(verify/截断重提):标记流式画作可能作废——若随后真有新 draft 到达,先清旧画再画新的
               if (fmt === 'drawio' && streamObjsRef.current.length) staleStreamRef.current = true;
             }
@@ -845,9 +856,9 @@ export function App() {
               } else if (e.kind === 'clarify' && e.questions?.length) {
                 const qs = e.questions;
                 // 把流式占位气泡替换成"引导选择"卡片(保留刚才的思考过程)
-                setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'clarify', questions: qs, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                setThread((th) => replaceLastWithClarify(th, qs));
               } else {
-                upd((tt) => (tt.kind === 'answer' ? { ...tt, text: e.text ?? tt.text, streaming: false } : tt));
+                setThread((th) => finalizeLastAnswer(th, e.text));
               }
             }
           },
@@ -858,13 +869,7 @@ export function App() {
         const refused = /failed to fetch|refused|ECONNREFUSED|networkerror|load failed/i.test(m);
         // 出错不回滚对话:此前把 user 气泡也删掉,用户看到"对话断开/消失"——改为把占位气泡定格成错误说明,
         // 对话完整保留(user/assistant 交替不破坏),指令放回输入框方便重试
-        setThread((th) => {
-          const last = th[th.length - 1];
-          if (last?.role === 'assistant' && last.kind === 'answer' && last.streaming) {
-            return th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' && tt.kind === 'answer' ? { ...tt, streaming: false, text: (tt.text?.trim() ? tt.text + '\n\n' : '') + `⚠ 本轮请求中断(${refused ? '连不上本机 Agent 服务' : m}),对话已保留,可直接重发。` } : tt));
-          }
-          return th;
-        });
+        setThread((th) => interruptLastStreamingAnswer(th, `⚠ 本轮请求中断(${refused ? '连不上本机 Agent 服务' : m}),对话已保留,可直接重发。`));
         setIntent(theIntent); // 把指令放回输入框,方便重试
         setSendErr(
           refused
