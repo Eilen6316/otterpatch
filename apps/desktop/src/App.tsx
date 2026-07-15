@@ -56,6 +56,11 @@ import {
   replaceLastWithClarify,
   updateLastAssistantTurn,
 } from './app-proposal-flow.js';
+import {
+  captureGridOpBeforeState,
+  orderWordEditsForApply,
+  replaceLastWithWorkspaceDiff,
+} from './app-workspace-proposals.js';
 
 // Shared review ids and batch guards live in ./review-shared.ts (god-file decomposition).
 /** Excel「对照」视图的改动格着色:蓝=改动在案,红=已拒绝(与 Word 修订绿增红删同一语义系)。 */
@@ -829,28 +834,22 @@ export function App() {
                     board = { byEdit: { ...b.byEdit, ...mut.byEdit }, objs: b.objs, muts: mut.muts };
                     if (b.nodes.length || b.edges.length) void playBoard(b.nodes, b.edges); // 兜底:逐个补图
                   }
-                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, ops: [], board, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                  setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, board }));
                 } else if (fmt === 'word') {
                   const wordEdits = materializeWordEdits(diff, cs);
                   // 乐观落入文档(与 Excel playOps 一致);编辑器按 domId 包裹,拒绝可精确还原
                   wordRef.current?.closeUndoWindow(); // 新提案=上一轮撤销窗口关闭,旧 data-undo 剥净后再落新标记
                   // 落地顺序:先非删段(段号锚不受影响),删段按段号【降序】——升序会让先删的段把后续段号顶前,删错段(实测会误删含图段)
-                  const applyOrder = [
-                    ...wordEdits.filter((w) => !w.remove && !w.table),
-                    ...wordEdits.filter((w) => w.table), // 结构插入最后落,避免挪动同一 ChangeSet 的基础段号锚
-                    ...wordEdits.filter((w) => w.remove).sort((a, b) => (b.blockIdx ?? -1) - (a.blockIdx ?? -1)),
-                  ];
-                  for (const w of applyOrder) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w));
-                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, ops: [], word: wordEdits, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                  for (const w of orderWordEditsForApply(wordEdits)) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w));
+                  setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, word: wordEdits }));
                   setReviewIdx(0);
                   if (wordEdits[0]) wordRef.current?.highlight(wordEdits[0].domId); // 审阅期定位第一条
                 } else {
                   applyExcelStructure(cs); // 结构性操作(插删行列/合并/冻结/清空)先落,改变网格布局
-                  const ops = materializeGridOps(diff);
-                  const api = univerRef.current; // 采集整格改前状态(值/公式/填充/字色/加粗),供 git-diff 展示 + "撤销/拒绝"精确还原
-                  if (api) for (const op of ops) { op.before = api.getValue(op.a1); op.beforeState = api.getCellState(op.a1); }
+                  // 采集整格改前状态(值/公式/填充/字色/加粗),供 git-diff 展示 + "撤销/拒绝"精确还原
+                  const ops = captureGridOpBeforeState(materializeGridOps(diff), univerRef.current);
                   setExcelDiff('final'); // 新提案到达,速览条回到"改后"基准
-                  setThread((th) => th.map((tt, i) => (i === th.length - 1 && tt.role === 'assistant' ? { role: 'assistant', kind: 'diff', format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, ops, text: tt.kind === 'answer' ? tt.text : undefined, reasoning: tt.kind === 'answer' ? tt.reasoning : undefined } : tt)));
+                  setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, ops }));
                   if (ops.length) void playOps(ops); // 边画边改
                 }
               } else if (e.kind === 'clarify' && e.questions?.length) {

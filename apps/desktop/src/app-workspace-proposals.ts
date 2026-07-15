@@ -1,0 +1,88 @@
+import type { AgentDiff, BoardPatch, CellState, GridOp, WordEdit } from './proposal-materializers.js';
+
+export interface GridStateReader {
+  getValue(a1: string): unknown;
+  getCellState(a1: string): CellState;
+}
+
+export type WorkspaceFormat = 'excel' | 'word' | 'ppt' | 'drawio';
+
+type AssistantTurn = {
+  role: 'assistant';
+  kind: string;
+  text?: string;
+  reasoning?: string;
+};
+
+type ThreadTurn = AssistantTurn | { role: string };
+
+export interface WorkspaceDiffTurnInput<FileSnapshot> {
+  format: WorkspaceFormat;
+  fileSnapshot?: FileSnapshot;
+  changeSet: unknown;
+  diff: AgentDiff;
+  ops?: GridOp[];
+  board?: BoardPatch;
+  word?: WordEdit[];
+}
+
+/** Word paragraph deletions must apply after other edits, in descending block order. */
+export function orderWordEditsForApply(edits: readonly WordEdit[]): WordEdit[] {
+  return [
+    ...edits.filter((edit) => !edit.remove && !edit.table),
+    ...edits.filter((edit) => edit.table),
+    ...edits.filter((edit) => edit.remove).sort((a, b) => (b.blockIdx ?? -1) - (a.blockIdx ?? -1)),
+  ];
+}
+
+/** Capture pre-change grid state used by review diff, reject, and undo. */
+export function captureGridOpBeforeState(ops: readonly GridOp[], api: GridStateReader | null | undefined): GridOp[] {
+  if (!api) return ops.map((op) => ({ ...op }));
+  return ops.map((op) => ({
+    ...op,
+    before: api.getValue(op.a1),
+    beforeState: api.getCellState(op.a1),
+  }));
+}
+
+export function makeWorkspaceDiffTurn<FileSnapshot>(
+  previous: AssistantTurn,
+  input: WorkspaceDiffTurnInput<FileSnapshot>,
+): {
+  role: 'assistant';
+  kind: 'diff';
+  format: WorkspaceFormat;
+  fileSnapshot?: FileSnapshot;
+  changeSet: unknown;
+  diff: AgentDiff;
+  ops: GridOp[];
+  board?: BoardPatch;
+  word?: WordEdit[];
+  text?: string;
+  reasoning?: string;
+} {
+  return {
+    role: 'assistant',
+    kind: 'diff',
+    format: input.format,
+    fileSnapshot: input.fileSnapshot,
+    changeSet: input.changeSet,
+    diff: input.diff,
+    ops: input.ops ?? [],
+    ...(input.board ? { board: input.board } : {}),
+    ...(input.word ? { word: input.word } : {}),
+    text: previous.kind === 'answer' ? previous.text : undefined,
+    reasoning: previous.kind === 'answer' ? previous.reasoning : undefined,
+  };
+}
+
+export function replaceLastWithWorkspaceDiff<Turn extends ThreadTurn, FileSnapshot>(
+  thread: readonly Turn[],
+  input: WorkspaceDiffTurnInput<FileSnapshot>,
+): Turn[] {
+  return thread.map((turn, index) =>
+    index === thread.length - 1 && turn.role === 'assistant'
+      ? (makeWorkspaceDiffTurn(turn as AssistantTurn, input) as Turn)
+      : turn,
+  );
+}
