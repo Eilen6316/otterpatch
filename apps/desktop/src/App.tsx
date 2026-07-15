@@ -44,6 +44,7 @@ import { ThinkingPanel, ClarifyCard } from './ThreadCards.js';
 import type { ClarifyQuestion } from './ThreadCards.js';
 import { Markdown } from './Markdown.js';
 import { chartToPngDataUrl, gridToChartSpec, buildChartGrid, specFromInline } from './chart.js';
+import { buildHistory as buildAppHistory, sanitizeThread as sanitizeAppThread } from './app-history.js';
 
 // Shared review ids and batch guards live in ./review-shared.ts (god-file decomposition).
 /** Excel「对照」视图的改动格着色:蓝=改动在案,红=已拒绝(与 Word 修订绿增红删同一语义系)。 */
@@ -59,40 +60,6 @@ export type Turn =
 /** The diff-review turn shape consumed by ReviewBox. */
 export type DiffTurn = Extract<Turn, { kind: 'diff' }>;
 
-
-/**
- * 把对话流投影成模型历史(Pi 的 projection 模式:thread 是单一数据源)。
- * - diff 回合只发紧凑摘要 + 处置结果(接受/拒绝/撤销),不发整段 diff;
- * - 超长时保留最近 KEEP 条,更早要点并入最旧一条保留消息(不破坏 user/assistant 交替,不在 proposal/outcome 间切断)。
- */
-function buildHistory(thread: Turn[]): Array<{ role: 'user' | 'assistant'; content: string }> {
-  const proj = thread.map((turn): { role: 'user' | 'assistant'; content: string } => {
-    if (turn.role === 'user') return { role: 'user', content: turn.text };
-    if (turn.kind === 'answer') return { role: 'assistant', content: turn.text };
-    if (turn.kind === 'clarify') return { role: 'assistant', content: '我向你澄清提问: ' + turn.questions.map((q) => q.question + '(候选: ' + q.options.map((o) => o.label).join('/') + ')').join(' | ') + (turn.answered ? '' : '(等待你的回答)') };
-    const summary = '提出改动: ' + turn.diff.items.map((it) => `${it.ref} ${it.label}`).join('; ');
-    const outcome = turn.reverted ? '(用户已撤销这些改动,文档未保留它们)' : turn.committed ? `(用户已接受并写入${turn.committedCount ?? turn.diff.items.length}处)` : '(已提出,待用户审阅,尚未确定写入)';
-    return { role: 'assistant', content: summary + outcome };
-  });
-  const KEEP = 12;
-  if (proj.length <= KEEP) return proj;
-  const dropped = proj.slice(0, proj.length - KEEP);
-  const kept = proj.slice(-KEEP);
-  const userPts = dropped.filter((m) => m.role === 'user').map((m) => m.content).slice(-6);
-  // 关键:被裁掉回合里"已接受/已撤销"的净状态不能丢,否则模型会重复提已写入的改动或在已撤销的状态上续推
-  const outcomes = dropped.filter((m) => m.role === 'assistant' && /已接受并写入|已撤销/.test(m.content)).map((m) => m.content).slice(-6);
-  const gist = '[此前对话要点] ' + [...userPts, ...outcomes].join(' / ');
-  const first = kept[0];
-  if (first) kept[0] = { ...first, content: gist + '\n' + first.content };
-  return kept;
-}
-
-/** 载入持久化对话时净化:清掉流式残留(刷新后卡在"正在思考"),丢弃空占位回合。 */
-function sanitizeThread(th: Turn[]): Turn[] {
-  return th
-    .map((t) => (t.role === 'assistant' && t.kind === 'answer' && t.streaming ? { ...t, streaming: false } : t))
-    .filter((t) => !(t.role === 'assistant' && t.kind === 'answer' && !t.text?.trim() && !t.reasoning?.trim()));
-}
 
 // ThinkingPanel / ClarifyCard moved to ./ThreadCards.tsx (decomposition phase 5).
 
@@ -552,7 +519,7 @@ export function App() {
   const [answer, setAnswer] = useState<string | null>(null);
   const lsJson = <T,>(k: string, fb: T): T => { try { const v = JSON.parse(localStorage.getItem(k) ?? 'null'); return v == null ? fb : (v as T); } catch { return fb; } };
   // Cursor 式连续对话流 + 模型历史,持久化到当前工作区(localStorage)
-  const [thread, setThread] = useState<Turn[]>(() => sanitizeThread(lsJson<Turn[]>('oa.thread', [])));
+  const [thread, setThread] = useState<Turn[]>(() => sanitizeAppThread(lsJson<Turn[]>('oa.thread', [])));
   const [recent, setRecent] = useState<{ t: string; time: string }[]>([]);
   const [realDiff, setRealDiff] = useState<AgentDiff | null>(null);
   const [realCs, setRealCs] = useState<unknown>(null);
@@ -789,7 +756,7 @@ export function App() {
         type StreamEvt = { type: string; delta?: string; name?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; questions?: ClarifyQuestion[]; message?: string };
         await streamPropose<StreamEvt>(
           ep,
-          { format: fmt, intent: theIntent, context: ctx, baseRev: 0, provider, model, apiKey, ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildHistory(thread) } : {}) },
+          { format: fmt, intent: theIntent, context: ctx, baseRev: 0, provider, model, apiKey, ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildAppHistory(thread) } : {}) },
           () => {
             if (theIntent.trim()) setRecent((rr) => [{ t: theIntent.trim(), time: t('刚刚') }, ...rr.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
             setSent(true);
