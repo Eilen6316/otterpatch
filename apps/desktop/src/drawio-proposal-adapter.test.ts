@@ -8,14 +8,18 @@ const node = (id: string, overrides: Partial<NonNullable<BoardObject['node']>> =
 });
 
 test('applyDrawioMutations applies supported operations and captures review snapshots', () => {
+  const connectedEdge = { id: 'connected-edge', from: 'move-node', to: 'delete-node', arrow: 'classic' as const, style: 'ortho' as const };
+  const streamedEdge = { id: 'streamed-edge', from: 'props-node', to: 'delete-node', arrow: 'classic' as const, style: 'ortho' as const };
+  const unrelatedEdge = { id: 'unrelated-edge', from: 'a', to: 'b', arrow: 'classic' as const, style: 'ortho' as const };
   const objects = new Map<string, BoardObject>([
     ['props-node', node('props-node')],
     ['move-node', node('move-node', { x: 0, y: 0 })],
-    ['delete-edge', { edge: { id: 'delete-edge', from: 'a', to: 'b', arrow: 'classic', style: 'ortho' } }],
+    ['delete-node', node('delete-node')],
   ]);
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const board: DrawioMutationBoard = {
     getObject: (id) => objects.get(id) ?? null,
+    getBoard: () => ({ edges: [connectedEdge, streamedEdge, unrelatedEdge] }),
     updateObject: (...args) => { calls.push({ method: 'updateObject', args }); },
     removeObjects: (...args) => { calls.push({ method: 'removeObjects', args }); },
     moveObject: (...args) => { calls.push({ method: 'moveObject', args }); },
@@ -24,7 +28,7 @@ test('applyDrawioMutations applies supported operations and captures review snap
     anchors: {
       props: { portable: { elementId: 'props-node' } },
       move: { portable: { elementId: 'move-node' } },
-      remove: { portable: { elementId: 'delete-edge' } },
+      remove: { portable: { elementId: 'delete-node' } },
       missing: { portable: {} },
     },
     edits: [
@@ -36,17 +40,19 @@ test('applyDrawioMutations applies supported operations and captures review snap
     ],
   };
 
-  const result = applyDrawioMutations(changeSet, board);
+  const result = applyDrawioMutations(changeSet, board, {
+    excludedObjectIds: new Set(['streamed-edge']),
+  });
 
   assert.deepEqual(calls, [
     { method: 'updateObject', args: ['props-node', { value: 'New', style: 'fillColor=#fff;strokeColor=#111;fontStyle=1;' }] },
     { method: 'moveObject', args: ['move-node', { x: 13, y: 27, w: 120, h: 55 }] },
-    { method: 'removeObjects', args: [['delete-edge']] },
+    { method: 'removeObjects', args: [['delete-node']] },
   ]);
   assert.deepEqual(result.byEdit, {
     'props-edit': 'props-node',
     'move-edit': 'move-node',
-    'delete-edit': 'delete-edge',
+    'delete-edit': 'delete-node',
   });
   assert.deepEqual(result.muts['props-edit']?.prior, objects.get('props-node'));
   assert.deepEqual(result.muts['props-edit']?.next?.node, {
@@ -64,7 +70,8 @@ test('applyDrawioMutations applies supported operations and captures review snap
     h: 55,
   });
   assert.deepEqual(result.muts['delete-edit'], {
-    prior: objects.get('delete-edge'),
+    prior: objects.get('delete-node'),
+    priorRelated: [{ edge: connectedEdge }],
     next: null,
   });
 });

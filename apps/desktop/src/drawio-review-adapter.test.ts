@@ -93,8 +93,8 @@ test('applyBoardPatchView combines view and acceptance state for every diff item
   });
 
   assert.deepEqual(calls, [
-    { method: 'restore', object: addedObject },
     { method: 'restore', object: oldNode },
+    { method: 'restore', object: addedObject },
     { method: 'remove', ids: ['deleted'] },
   ]);
 });
@@ -109,5 +109,68 @@ test('revertBoardPatch removes all additions before restoring mutation snapshots
     { method: 'remove', ids: ['added'] },
     { method: 'restore', object: oldNode },
     { method: 'restore', object: deletedEdge },
+  ]);
+});
+
+test('deletion snapshots restore connected edges after their endpoint nodes', () => {
+  const leftNode: BoardObject = {
+    node: { id: 'left', x: 0, y: 0, w: 80, h: 40, inner: '<rect/>', label: 'Left' },
+  };
+  const rightNode: BoardObject = {
+    node: { id: 'right', x: 120, y: 0, w: 80, h: 40, inner: '<rect/>', label: 'Right' },
+  };
+  const sharedEdge: BoardObject = {
+    edge: { id: 'shared', from: 'left', to: 'right', arrow: 'classic', style: 'ortho' },
+  };
+  const deletionPatch: BoardPatch = {
+    byEdit: { 'delete-left': 'left', 'delete-right': 'right' },
+    objs: [],
+    muts: {
+      'delete-left': { prior: leftNode, priorRelated: [sharedEdge], next: null },
+      'delete-right': { prior: rightNode, priorRelated: [sharedEdge], next: null },
+    },
+  };
+  const { board, calls } = fakeBoard();
+
+  revertBoardPatch(deletionPatch, board);
+
+  assert.deepEqual(calls, [
+    { method: 'restore', object: leftNode },
+    { method: 'restore', object: rightNode },
+    { method: 'restore', object: sharedEdge },
+  ]);
+});
+
+test('final view restores rejected deletions before cascading accepted deletions', () => {
+  const leftNode: BoardObject = {
+    node: { id: 'left', x: 0, y: 0, w: 80, h: 40, inner: '<rect/>', label: 'Left' },
+  };
+  const rightNode: BoardObject = {
+    node: { id: 'right', x: 120, y: 0, w: 80, h: 40, inner: '<rect/>', label: 'Right' },
+  };
+  const sharedEdge: BoardObject = {
+    edge: { id: 'shared', from: 'left', to: 'right', arrow: 'classic', style: 'ortho' },
+  };
+  const deletionPatch: BoardPatch = {
+    byEdit: { 'delete-left': 'left', 'delete-right': 'right' },
+    objs: [],
+    muts: {
+      'delete-left': { prior: leftNode, priorRelated: [sharedEdge], next: null },
+      'delete-right': { prior: rightNode, priorRelated: [sharedEdge], next: null },
+    },
+  };
+  const { board, calls } = fakeBoard();
+
+  applyBoardPatchView(deletionPatch, {
+    editIds: ['delete-right', 'delete-left'],
+    view: 'final',
+    isAccepted: (editId) => editId === 'delete-right',
+    board,
+  });
+
+  assert.deepEqual(calls, [
+    { method: 'restore', object: leftNode },
+    { method: 'restore', object: sharedEdge },
+    { method: 'remove', ids: ['right'] },
   ]);
 });

@@ -820,7 +820,9 @@ export function App() {
                 if (fmt === 'drawio') {
                   // drawio:先把【改/删/移动现有节点】落到画板;新增节点则复用流式已画的、或一次性补画
                   setBoardDiff('final'); // 新提案到达,视图回到"改后"基准
-                  const mut = applyDrawioMutations(cs, boardRef.current);
+                  const mut = applyDrawioMutations(cs, boardRef.current, {
+                    excludedObjectIds: new Set(Object.values(streamByEditRef.current)),
+                  });
                   let board: BoardPatch;
                   // 完整性守卫:长提案的流式解析可能截断(实测 18 处只吐出 8 个)——流式画的少于提案对象数,
                   // 就清掉残画、按最终 changeSet 全量重画,别把"画了一半"当成品交付

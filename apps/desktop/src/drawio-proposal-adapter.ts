@@ -1,8 +1,10 @@
 import { parseDrawioStyle, snap } from './DrawioBoard.js';
+import type { BEdge } from './DrawioBoard.js';
 import type { BoardObject, BoardPatch } from './proposal-materializers.js';
 
 export interface DrawioMutationBoard {
   getObject(id: string): BoardObject | null;
+  getBoard(): { edges: BEdge[] };
   updateObject(id: string, patch: { value?: string; style?: string }): void;
   removeObjects(ids: string[]): void;
   moveObject(id: string, box: { x?: number; y?: number; w?: number; h?: number }): void;
@@ -30,6 +32,7 @@ export interface AppliedDrawioMutations {
 export function applyDrawioMutations(
   changeSet: unknown,
   board: DrawioMutationBoard | null | undefined,
+  options: { excludedObjectIds?: ReadonlySet<string> } = {},
 ): AppliedDrawioMutations {
   const cs = changeSet as DrawioMutationChangeSet;
   const byEdit: Record<string, string> = {};
@@ -66,8 +69,22 @@ export function applyDrawioMutations(
     }
 
     if (kind === 'deleteObject') {
+      const priorRelated = prior?.node
+        ? board?.getBoard().edges
+          .filter((edge) =>
+            (edge.from === id || edge.to === id)
+            && !options.excludedObjectIds?.has(edge.id),
+          )
+          .map((edge) => ({ edge })) ?? []
+        : [];
       board?.removeObjects([id]);
-      if (prior) muts[edit.id] = { prior, next: null };
+      if (prior) {
+        muts[edit.id] = {
+          prior,
+          ...(priorRelated.length ? { priorRelated } : {}),
+          next: null,
+        };
+      }
       continue;
     }
 

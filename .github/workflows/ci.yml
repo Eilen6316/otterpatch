@@ -33,7 +33,7 @@ jobs:
       - name: Headless e2e (mocked model, no key) — the behavior contract
         run: |
           set -e
-          for t in ui-smoke richdoc-toolbar richdoc-projection-e2e richdoc-editing-e2e richdoc-revisions-e2e word-agent-mock word-review-e2e word-table-e2e word-docfmt-e2e word-autobatch-e2e word-docx-import-e2e excel-agent-mock; do
+          for t in ui-smoke drawio-review-e2e richdoc-toolbar richdoc-projection-e2e richdoc-editing-e2e richdoc-revisions-e2e word-agent-mock word-review-e2e word-table-e2e word-docfmt-e2e word-autobatch-e2e word-docx-import-e2e excel-agent-mock; do
             echo "── $t ──"
             node "test/$t.mjs"
           done

@@ -57,10 +57,16 @@ export interface BoardObject {
   edge?: BEdge;
 }
 
+export interface BoardMutationSnapshot {
+  prior: BoardObject;
+  priorRelated?: BoardObject[];
+  next: BoardObject | null;
+}
+
 export interface BoardPatch {
   byEdit: Record<string, string>;
   objs: Array<BoardObject & { editId: string }>;
-  muts?: Record<string, { prior: BoardObject; next: BoardObject | null }>;
+  muts?: Record<string, BoardMutationSnapshot>;
 }
 
 export interface WordEdit {
