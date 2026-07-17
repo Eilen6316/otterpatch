@@ -3,11 +3,11 @@ import type { DiffTurn } from './App.js';
 import type { WordEdit } from './proposal-materializers.js';
 import type { RichDocHandle } from './RichDoc.js';
 import type { SheetHandle } from './UniverSheet.js';
+import { setBoardEditState, type DrawioReviewBoard } from './drawio-review-adapter.js';
 import { akey, AUTO_BATCH_CAP, BATCH_RX } from './review-shared.js';
 
 type Format = DiffTurn['format'];
 type GridOp = DiffTurn['ops'][number];
-type BoardObject = NonNullable<DiffTurn['board']>['objs'][number];
 type ExcelDiffView = 'orig' | 'mark' | 'final';
 
 export const reviewItemKind = (turn: DiffTurn, item: DiffTurn['diff']['items'][number]): string => {
@@ -34,6 +34,7 @@ export interface UseReviewActionsOptions {
   fileBase64: string;
   wordRef: RefObject<RichDocHandle | null>;
   univerRef: RefObject<SheetHandle | null>;
+  boardRef: RefObject<DrawioReviewBoard | null>;
   notify: (message: string) => void;
   t: (key: string) => string;
   acceptMany: (ids: string[]) => void;
@@ -44,7 +45,6 @@ export interface UseReviewActionsOptions {
   markCommitted: (index: number, count: number) => void;
   applyGridOp: (op: GridOp) => void;
   applyWordEdit: (edit: WordEdit) => void;
-  reapplyBoardObj: (object: BoardObject) => void;
   realBg: (op: GridOp, accepted: boolean) => string | null;
   telemetry: (format: Format, verb: 'accept' | 'reject', kind: string) => void;
   send: (text: string) => void | Promise<void>;
@@ -63,6 +63,7 @@ export function useReviewActions({
   fileBase64,
   wordRef,
   univerRef,
+  boardRef,
   notify,
   t,
   acceptMany,
@@ -73,7 +74,6 @@ export function useReviewActions({
   markCommitted,
   applyGridOp,
   applyWordEdit,
-  reapplyBoardObj,
   realBg,
   telemetry,
   send,
@@ -102,8 +102,7 @@ export function useReviewActions({
         const op = turn.ops.find((candidate) => candidate.editId === item.editId);
         if (op) applyGridOp(op);
       } else if (turn.format === 'drawio') {
-        const object = turn.board?.objs.find((candidate) => candidate.editId === item.editId);
-        if (object) reapplyBoardObj(object);
+        if (turn.board) setBoardEditState(turn.board, item.editId, 'next', boardRef.current);
       }
     }
 

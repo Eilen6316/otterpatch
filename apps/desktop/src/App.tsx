@@ -22,6 +22,7 @@ import {
   wordEditOpts,
 } from './proposal-materializers.js';
 import { applyDrawioMutations } from './drawio-proposal-adapter.js';
+import { applyBoardPatchView, revertBoardPatch, setBoardEditState } from './drawio-review-adapter.js';
 import type {
   AgentDiff,
   AgentDiffItem,
@@ -909,11 +910,7 @@ export function App() {
     const turn = thread[idx];
     if (!turn || turn.role !== 'assistant' || turn.kind !== 'diff') return;
     if (turn.board) {
-      // drawio:新增对象移除;改/删/移动现有对象按改前快照还原(直接 removeObjects 会把用户的节点一并删掉)
-      const muts = turn.board.muts ?? {};
-      const addIds = Object.entries(turn.board.byEdit).filter(([eid]) => !muts[eid]).map(([, id]) => id);
-      if (addIds.length) boardRef.current?.removeObjects(addIds);
-      for (const m of Object.values(muts)) boardRef.current?.restoreObject(m.prior);
+      revertBoardPatch(turn.board, boardRef.current);
     } else if (turn.word) {
       let missed = 0;
       for (const w of turn.word) if (accepted.has(akey(turn.diff.changeSetId, w.editId))) { if (!wordRef.current?.revert(w.domId)) missed++; } // 按 domId 精确还原每条(undoMap 缺失走 DOM 兜底)
@@ -1081,20 +1078,12 @@ export function App() {
     for (let i = thread.length - 1; i >= 0; i--) { const tt = thread[i]; if (tt && tt.role === 'assistant' && tt.kind === 'diff' && tt.board && tt.diff.items.length) { turn = tt; break; } }
     const b = turn?.board;
     if (!turn || !b) return;
-    const muts = b.muts ?? {};
-    for (const it of turn.diff.items) {
-      const on = view === 'final' && accepted.has(akey(turn.diff.changeSetId, it.editId));
-      const m = muts[it.editId];
-      const id = b.byEdit[it.editId];
-      if (m) {
-        if (on) { if (m.next) boardRef.current?.restoreObject(m.next); else if (id) boardRef.current?.removeObjects([id]); }
-        else boardRef.current?.restoreObject(m.prior);
-      } else {
-        const o = b.objs.find((x) => x.editId === it.editId);
-        if (on) { if (o) reapplyBoardObj(o); }
-        else if (id) boardRef.current?.removeObjects([id]);
-      }
-    }
+    applyBoardPatchView(b, {
+      editIds: turn.diff.items.map((item) => item.editId),
+      view,
+      isAccepted: (editId) => accepted.has(akey(turn.diff.changeSetId, editId)),
+      board: boardRef.current,
+    });
     setBoardDiff(view);
   };
   /** 一条 op 的"真实底色"(op 自己改了底色用 op 的,否则回改前采集值)——离开对照视图时恢复用。 */
@@ -1117,8 +1106,6 @@ export function App() {
     }
     setExcelDiff(view);
   };
-  const reapplyBoardObj = (o: { node?: BNode; edge?: BEdge }): void =>
-    boardRef.current?.addObjects(o.node ? [o.node] : [], o.edge ? [o.edge] : []);
   /** 高亮当前审阅的改动:Excel 聚焦该格、drawio 高亮该对象。 */
   const highlightItem = (turn: Extract<Turn, { kind: 'diff' }>, item: AgentDiffItem | undefined): void => {
     if (!item) return;
@@ -1146,7 +1133,7 @@ export function App() {
     const k = akey(turn.diff.changeSetId, it.editId);
     if (!accepted.has(k)) { // 之前被拒 → 重新落回工作区(applyEdit 幂等,重复接受不叠标记)
       if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
-      else if (turn.format === 'drawio') { const m = turn.board?.muts?.[it.editId]; if (m) { if (m.next) boardRef.current?.restoreObject(m.next); else { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); } } else { const o = turn.board?.objs.find((x) => x.editId === it.editId); if (o) reapplyBoardObj(o); } }
+      else if (turn.format === 'drawio' && turn.board) setBoardEditState(turn.board, it.editId, 'next', boardRef.current);
       else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) applyWordEdit(w); }
       toggleAccept(k, true);
     }
@@ -1174,7 +1161,7 @@ export function App() {
     const it = turn.diff.items[idx]; if (!it) return;
     const k = akey(turn.diff.changeSetId, it.editId);
     if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) { revertGridOp(op); if (excelDiff === 'mark') univerRef.current?.setBackground(op.a1, realBg(op, false)); } }
-    else if (turn.format === 'drawio') { const m = turn.board?.muts?.[it.editId]; if (m) boardRef.current?.restoreObject(m.prior); else { const id = turn.board?.byEdit[it.editId]; if (id) boardRef.current?.removeObjects([id]); } } // 改/删/移动现有对象 → 按改前快照还原,不是删对象
+    else if (turn.format === 'drawio' && turn.board) setBoardEditState(turn.board, it.editId, 'prior', boardRef.current);
     else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w && !wordRef.current?.revert(w.domId) && accepted.has(k)) notify(t('该改动已定稿,未找到可还原的位置')); } // undoMap 缺失时 revert 自带 DOM 兜底
     toggleAccept(k, false);
     telemetry(turn.format, 'reject', reviewItemKind(turn, it));
@@ -1199,7 +1186,7 @@ export function App() {
     markCommitted,
     applyGridOp,
     applyWordEdit,
-    reapplyBoardObj,
+    boardRef,
     realBg,
     telemetry,
     send,
