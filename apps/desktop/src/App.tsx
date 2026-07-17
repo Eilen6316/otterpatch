@@ -21,6 +21,7 @@ import {
   materializeWordEdits,
   wordEditOpts,
 } from './proposal-materializers.js';
+import { applyDrawioMutations } from './drawio-proposal-adapter.js';
 import type {
   AgentDiff,
   AgentDiffItem,
@@ -38,7 +39,7 @@ import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
 import { Composer } from './Composer.js';
 import { TopBar } from './TopBar.js';
-import { DrawioBoard, DrawioToolbar, DrawioPalette, parseDrawioStyle, snap, extractDrawioOps, makeRawBoardConv, boundingA1 } from './DrawioBoard.js';
+import { DrawioBoard, DrawioToolbar, DrawioPalette, extractDrawioOps, makeRawBoardConv, boundingA1 } from './DrawioBoard.js';
 import type { BNode, BEdge, BoardSel, BoardHandle } from './DrawioBoard.js';
 import { ThinkingPanel, ClarifyCard } from './ThreadCards.js';
 import type { ClarifyQuestion } from './ThreadCards.js';
@@ -818,7 +819,7 @@ export function App() {
                 if (fmt === 'drawio') {
                   // drawio:先把【改/删/移动现有节点】落到画板;新增节点则复用流式已画的、或一次性补画
                   setBoardDiff('final'); // 新提案到达,视图回到"改后"基准
-                  const mut = applyDrawioMutations(cs);
+                  const mut = applyDrawioMutations(cs, boardRef.current);
                   let board: BoardPatch;
                   // 完整性守卫:长提案的流式解析可能截断(实测 18 处只吐出 8 个)——流式画的少于提案对象数,
                   // 就清掉残画、按最终 changeSet 全量重画,别把"画了一半"当成品交付
@@ -1054,35 +1055,6 @@ export function App() {
         }
       }
     }
-  };
-  /** drawio:把【改/删/移动现有节点】op 落到画板(用上下文给 Agent 的真实节点 id 定位)。
-   *  返回 byEdit(审阅高亮)+ muts(prior/next 快照:拒绝还原 prior、重接受重放 next,别删用户对象)。 */
-  const applyDrawioMutations = (cs: unknown): { byEdit: Record<string, string>; muts: NonNullable<BoardPatch['muts']> } => {
-    const c = cs as { edits?: Array<{ id: string; target: string; op: { kind?: string; props?: { value?: unknown; style?: unknown }; box?: { left?: number; top?: number; width?: number; height?: number } } }>; anchors?: Record<string, { portable?: { elementId?: string } }> } | null;
-    const byEdit: Record<string, string> = {};
-    const muts: NonNullable<BoardPatch['muts']> = {};
-    if (!c?.edits) return { byEdit, muts };
-    for (const e of c.edits) {
-      const k = e.op?.kind;
-      if (k !== 'setObjectProps' && k !== 'deleteObject' && k !== 'moveObject') continue;
-      const id = c.anchors?.[e.target]?.portable?.elementId;
-      if (!id) continue;
-      byEdit[e.id] = id;
-      const prior = boardRef.current?.getObject(id);
-      if (k === 'setObjectProps') {
-        const value = e.op.props?.value as string | undefined; const style = e.op.props?.style as string | undefined;
-        boardRef.current?.updateObject(id, { value, style });
-        if (prior?.node) muts[e.id] = { prior, next: { node: { ...prior.node, ...(value != null ? { label: String(value) } : {}), ...(style ? parseDrawioStyle(style) : {}) } } };
-      } else if (k === 'deleteObject') {
-        boardRef.current?.removeObjects([id]);
-        if (prior) muts[e.id] = { prior, next: null };
-      } else if (k === 'moveObject') {
-        const b = e.op.box ?? {};
-        boardRef.current?.moveObject(id, { x: b.left, y: b.top, w: b.width, h: b.height });
-        if (prior?.node) muts[e.id] = { prior, next: { node: { ...prior.node, ...(b.left != null ? { x: snap(b.left) } : {}), ...(b.top != null ? { y: snap(b.top) } : {}), ...(b.width != null ? { w: b.width } : {}), ...(b.height != null ? { h: b.height } : {}) } } };
-      }
-    }
-    return { byEdit, muts };
   };
   // ── 逐条审阅:把单条改动应用/还原到左侧工作区(Excel 网格 / drawio 画板)+ 高亮当前条 ──
   const applyGridOp = (op: GridOp): void => {
