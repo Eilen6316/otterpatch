@@ -6,7 +6,7 @@
 import type { ReactNode, RefObject } from 'react';
 import { useT } from './i18n.js';
 import { IconSelect, IconCheck, IconChevron, IconX, IconUndo } from './icons.js';
-import type { DiffTurn } from './App.js';
+import type { DiffTurn } from './app-thread-types.js';
 import type { RichDocHandle } from './RichDoc.js';
 import { akey, BATCH_RX } from './review-shared.js';
 

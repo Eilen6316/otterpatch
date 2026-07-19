@@ -5,11 +5,11 @@
  */
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import type { ClarifyQuestion } from './app-thread-types.js';
 import { useT } from './i18n.js';
 import { IconSelect } from './icons.js';
 
-export interface ClarifyOption { label: string; description?: string }
-export interface ClarifyQuestion { header?: string; question: string; options: ClarifyOption[]; multi?: boolean }
+export type { ClarifyOption, ClarifyQuestion } from './app-thread-types.js';
 
 /** DeepSeek-style collapsible "thinking" panel: expanded while streaming, collapsible after. */
 export function ThinkingPanel({ reasoning, streaming }: { reasoning: string; streaming?: boolean }): ReactNode {

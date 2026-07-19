@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { DiffTurn } from './App.js';
+import type { DiffTurn } from './app-thread-types.js';
 import type { DrawioReviewBoard } from './drawio-review-adapter.js';
 import type { BoardObject } from './proposal-materializers.js';
 import { useReviewActions } from './use-review-actions.js';

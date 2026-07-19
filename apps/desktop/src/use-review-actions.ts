@@ -1,5 +1,5 @@
 import type { MutableRefObject, RefObject } from 'react';
-import type { DiffTurn } from './App.js';
+import type { DiffTurn } from './app-thread-types.js';
 import type { WordEdit } from './proposal-materializers.js';
 import type { RichDocHandle } from './RichDoc.js';
 import type { SheetHandle } from './UniverSheet.js';

@@ -30,7 +30,13 @@ import type {
   GridOp,
   WordEdit,
 } from './proposal-materializers.js';
-import type { FileSnapshot } from './file-snapshot.js';
+import type {
+  AssistantTurn,
+  ClarifyQuestion,
+  DiffTurn,
+  Turn,
+  WorkspaceFormat as Fmt,
+} from './app-thread-types.js';
 import { useFileImport } from './use-file-import.js';
 import { useCommitWriteback } from './use-commit-writeback.js';
 import { useReviewState } from './use-review-state.js';
@@ -43,7 +49,6 @@ import { TopBar } from './TopBar.js';
 import { DrawioBoard, DrawioToolbar, DrawioPalette, extractDrawioOps, makeRawBoardConv, boundingA1 } from './DrawioBoard.js';
 import type { BNode, BEdge, BoardSel, BoardHandle } from './DrawioBoard.js';
 import { ThinkingPanel, ClarifyCard } from './ThreadCards.js';
-import type { ClarifyQuestion } from './ThreadCards.js';
 import { Markdown } from './Markdown.js';
 import { chartToPngDataUrl, gridToChartSpec, buildChartGrid, specFromInline } from './chart.js';
 import { buildHistory as buildAppHistory, sanitizeThread as sanitizeAppThread } from './app-history.js';
@@ -69,16 +74,6 @@ import {
 const MARK_BG_ON = '#dbeafe';
 const MARK_BG_OFF = '#fee2e2';
 
-/** 对话流里的一条消息(Cursor 式连续 thread)。Exported for the extracted review components. */
-export type Turn =
-  | { role: 'user'; text: string }
-  | { role: 'assistant'; kind: 'answer'; text: string; reasoning?: string; streaming?: boolean }
-  | { role: 'assistant'; kind: 'clarify'; questions: ClarifyQuestion[]; reasoning?: string; answered?: boolean; answerText?: string }
-  | { role: 'assistant'; kind: 'diff'; format: Fmt; fileSnapshot?: FileSnapshot; changeSet?: unknown; diff: AgentDiff; ops: GridOp[]; board?: BoardPatch; word?: WordEdit[]; text?: string; reasoning?: string; reverted?: boolean; committed?: boolean; committedCount?: number };
-/** The diff-review turn shape consumed by ReviewBox. */
-export type DiffTurn = Extract<Turn, { kind: 'diff' }>;
-
-
 // ThinkingPanel / ClarifyCard moved to ./ThreadCards.tsx (decomposition phase 5).
 
 /** 真 Univer 表格(体积大 → 懒加载,仅 Excel 用)。 */
@@ -94,8 +89,7 @@ const FORMATS = [
   { id: 'word', label: 'Word', file: '实训报告.docx' },
   { id: 'ppt', label: 'PPT', file: '季度汇报.pptx' },
   { id: 'drawio', label: '流程图', file: '系统架构.drawio' },
-] as const;
-type Fmt = (typeof FORMATS)[number]['id'];
+] as const satisfies ReadonlyArray<{ id: Fmt; label: string; file: string }>;
 
 /** 仿 Office 功能区:选项卡 → 分组(模块)→ 功能。 */
 interface RibGroup { name: string; items: string[] }
@@ -466,7 +460,7 @@ function normalizeLocalEndpoint(raw: string): string | null {
   }
 }
 /** Agent 反向澄清:像 Claude Code 那样给引导选择表(2-4 项)+ 允许自填。 */
-// ClarifyOption / ClarifyQuestion moved to ./ThreadCards.tsx.
+// ClarifyOption / ClarifyQuestion live in ./app-thread-types.ts.
 
 function Section({ label, children, defaultOpen = true }: { label: string; children: ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -763,7 +757,7 @@ export function App() {
       setThread((th) => appendUserTurn(th, theIntent)); // 用户气泡立刻进流
       setIntent('');
       try {
-        const upd = (fn: (t: Extract<Turn, { role: 'assistant' }>) => Turn): void => setThread((th) => updateLastAssistantTurn(th, fn));
+        const upd = (fn: (t: AssistantTurn) => Turn): void => setThread((th) => updateLastAssistantTurn(th, fn));
         // Reset the draw-while-streaming state before the stream opens.
         draftBufRef.current = '';
         drawnOpsRef.current = 0;
@@ -1076,7 +1070,7 @@ export function App() {
   };
   /** drawio 改动视图:原文=隐掉本轮提案(新增移除、改动还原改前快照);改后=按当前处置呈现。 */
   const applyBoardDiffView = (view: 'orig' | 'final'): void => {
-    let turn: Extract<Turn, { kind: 'diff' }> | undefined;
+    let turn: DiffTurn | undefined;
     for (let i = thread.length - 1; i >= 0; i--) { const tt = thread[i]; if (tt && tt.role === 'assistant' && tt.kind === 'diff' && tt.board && tt.diff.items.length) { turn = tt; break; } }
     const b = turn?.board;
     if (!turn || !b) return;
@@ -1093,7 +1087,7 @@ export function App() {
   /** Excel 改动视图:原文=全部回改前;对照=改后 + 改动格着色(蓝=在案,红=已拒);改后=按当前处置回放。
    *  着色只是视图层,切走时按处置恢复真实底色,不落进数据。 */
   const applyExcelDiffView = (view: 'orig' | 'mark' | 'final'): void => {
-    let turn: Extract<Turn, { kind: 'diff' }> | undefined;
+    let turn: DiffTurn | undefined;
     for (let i = thread.length - 1; i >= 0; i--) { const tt = thread[i]; if (tt && tt.role === 'assistant' && tt.kind === 'diff' && tt.ops.length) { turn = tt; break; } }
     if (!turn) return;
     const api = univerRef.current;
@@ -1109,7 +1103,7 @@ export function App() {
     setExcelDiff(view);
   };
   /** 高亮当前审阅的改动:Excel 聚焦该格、drawio 高亮该对象。 */
-  const highlightItem = (turn: Extract<Turn, { kind: 'diff' }>, item: AgentDiffItem | undefined): void => {
+  const highlightItem = (turn: DiffTurn, item: AgentDiffItem | undefined): void => {
     if (!item) return;
     if (turn.format === 'excel') univerRef.current?.focus(item.ref.replace(/^.*!/, ''));
     else if (turn.format === 'drawio') { const id = turn.board?.byEdit[item.editId]; if (id) boardRef.current?.highlight(id); }
@@ -1129,7 +1123,7 @@ export function App() {
   const applyWordEdit = (w: WordEdit): void => {
     wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w));
   };
-  const acceptItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number, silent = false): void => {
+  const acceptItem = (turn: DiffTurn, idx: number, silent = false): void => {
     if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
     const it = turn.diff.items[idx]; if (!it) return;
     const k = akey(turn.diff.changeSetId, it.editId);
@@ -1158,7 +1152,7 @@ export function App() {
       return;
     }
   };
-  const rejectItem = (turn: Extract<Turn, { kind: 'diff' }>, idx: number, silent = false): void => {
+  const rejectItem = (turn: DiffTurn, idx: number, silent = false): void => {
     if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
     const it = turn.diff.items[idx]; if (!it) return;
     const k = akey(turn.diff.changeSetId, it.editId);

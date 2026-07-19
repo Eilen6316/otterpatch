@@ -1,11 +1,12 @@
+import type { WorkspaceFormat } from './app-thread-types.js';
 import type { AgentDiff, BoardPatch, CellState, GridOp, WordEdit } from './proposal-materializers.js';
+
+export type { WorkspaceFormat };
 
 export interface GridStateReader {
   getValue(a1: string): unknown;
   getCellState(a1: string): CellState;
 }
-
-export type WorkspaceFormat = 'excel' | 'word' | 'ppt' | 'drawio';
 
 type AssistantTurn = {
   role: 'assistant';
