@@ -1,7 +1,8 @@
 import { commitWriteback } from './commit-client.js';
 import { sameFileSnapshot, type FileSnapshot } from './file-snapshot.js';
+import type { WorkspaceFormat } from './workspace-format.js';
 
-export type WritebackFormat = 'excel' | 'word' | 'ppt' | 'drawio';
+export type WritebackFormat = WorkspaceFormat;
 
 export interface CommitTurn {
   format: WritebackFormat;

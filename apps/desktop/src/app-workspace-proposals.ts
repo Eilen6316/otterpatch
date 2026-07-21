@@ -1,5 +1,5 @@
-import type { WorkspaceFormat } from './app-thread-types.js';
 import type { AgentDiff, BoardPatch, CellState, GridOp, WordEdit } from './proposal-materializers.js';
+import type { WorkspaceFormat } from './workspace-format.js';
 
 export type { WorkspaceFormat };
 

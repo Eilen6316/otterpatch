@@ -1,3 +1,5 @@
+import type { WorkspaceFormat } from './workspace-format.js';
+
 export interface CommitWritebackResult {
   ok?: boolean;
   fileBase64?: string;
@@ -11,7 +13,7 @@ export interface CommitWritebackResult {
 export async function commitWriteback(input: {
   endpoint: string;
   token?: string;
-  format: string;
+  format: WorkspaceFormat;
   fileBase64: string;
   changeSet: unknown;
   acceptedEditIds: string[];

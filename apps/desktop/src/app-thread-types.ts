@@ -1,7 +1,8 @@
 import type { FileSnapshot } from './file-snapshot.js';
 import type { AgentDiff, BoardPatch, GridOp, WordEdit } from './proposal-materializers.js';
+import type { WorkspaceFormat } from './workspace-format.js';
 
-export type WorkspaceFormat = 'excel' | 'word' | 'ppt' | 'drawio';
+export type { WorkspaceFormat };
 
 export interface ClarifyOption {
   label: string;

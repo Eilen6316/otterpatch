@@ -1,11 +1,13 @@
+import type { WorkspaceFormat } from './workspace-format.js';
+
 export interface FileSnapshot {
-  format: string;
+  format: WorkspaceFormat;
   name: string;
   byteLength: number;
   hash: string;
 }
 
-export function makeFileSnapshot(format: string, name: string, fileBase64: string): FileSnapshot {
+export function makeFileSnapshot(format: WorkspaceFormat, name: string, fileBase64: string): FileSnapshot {
   return {
     format,
     name,

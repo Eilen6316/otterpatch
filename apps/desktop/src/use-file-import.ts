@@ -3,8 +3,9 @@ import type { BoardHandle } from './DrawioBoard.js';
 import type { RichDocHandle } from './RichDoc.js';
 import { docxToHtml } from './docximport.js';
 import { makeFileSnapshot, type FileSnapshot } from './file-snapshot.js';
+import type { WorkspaceFormat } from './workspace-format.js';
 
-export type ImportFormat = 'excel' | 'word' | 'ppt' | 'drawio';
+export type ImportFormat = WorkspaceFormat;
 
 export interface UseFileImportOptions {
   format: ImportFormat;
