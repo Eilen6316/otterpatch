@@ -55,9 +55,7 @@ test('acceptAll reapplies a previously rejected Drawio mutation', async () => {
     ensureCommitFile: () => true,
     doCommit: async () => { assert.fail('commit should not run without an imported file'); },
     markCommitted: (index, count) => { committed.push({ index, count }); },
-    applyGridOp: () => {},
     applyWordEdit: () => {},
-    realBg: () => null,
     telemetry: () => {},
     send: () => {},
   });

@@ -26,7 +26,6 @@ import type {
   AgentDiff,
   AgentDiffItem,
   BoardPatch,
-  GridOp,
   WordEdit,
 } from './proposal-materializers.js';
 import type {
@@ -45,12 +44,21 @@ import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
 import { Composer } from './Composer.js';
 import { TopBar } from './TopBar.js';
-import { DrawioBoard, DrawioToolbar, DrawioPalette, extractDrawioOps, makeRawBoardConv, boundingA1 } from './DrawioBoard.js';
+import { DrawioBoard, DrawioToolbar, DrawioPalette, extractDrawioOps, makeRawBoardConv } from './DrawioBoard.js';
 import type { BNode, BEdge, BoardSel, BoardHandle } from './DrawioBoard.js';
 import { ThinkingPanel, ClarifyCard } from './ThreadCards.js';
 import { Markdown } from './Markdown.js';
 import { chartToPngDataUrl } from './chart.js';
 import { applyExcelStructure, type ChartPlacement } from './excel-structure-adapter.js';
+import {
+  applyGridOp,
+  findLatestExcelDiffTurn,
+  gridOpBackground,
+  playGridOps,
+  renderExcelDiffView,
+  revertGridOp,
+  type ExcelDiffView,
+} from './excel-review-adapter.js';
 import { buildHistory as buildAppHistory, sanitizeThread as sanitizeAppThread } from './app-history.js';
 import {
   appendAnswerDelta,
@@ -70,10 +78,6 @@ import {
 } from './app-workspace-proposals.js';
 
 // Shared review ids and batch guards live in ./review-shared.ts (god-file decomposition).
-/** Excel「对照」视图的改动格着色:蓝=改动在案,红=已拒绝(与 Word 修订绿增红删同一语义系)。 */
-const MARK_BG_ON = '#dbeafe';
-const MARK_BG_OFF = '#fee2e2';
-
 // ThinkingPanel / ClarifyCard moved to ./ThreadCards.tsx (decomposition phase 5).
 
 /** 真 Univer 表格(体积大 → 懒加载,仅 Excel 用)。 */
@@ -497,7 +501,7 @@ export function App() {
   const [server, setServer] = useState(() => lsGet('oa.server', 'http://localhost:4319'));
   useEffect(() => { try { localStorage.removeItem('oa.apiKey'); } catch { /* ignore */ } }, []);
   const [uniSel, setUniSel] = useState<UniSel | null>(null);
-  const [excelDiff, setExcelDiff] = useState<'orig' | 'mark' | 'final'>('final'); // Excel 改动视图:原文/对照(改动格着色)/改后
+  const [excelDiff, setExcelDiff] = useState<ExcelDiffView>('final'); // Excel 改动视图:原文/对照(改动格着色)/改后
   const [boardDiff, setBoardDiff] = useState<'orig' | 'final'>('final'); // drawio 改动视图:原文(隐提案)/改后
   const [wordSel, setWordSel] = useState<WordSel | null>(null);
   const [hoverCid, setHoverCid] = useState<string | null>(null); // 文档里/rail 悬停联动的改动 domId
@@ -524,9 +528,6 @@ export function App() {
   const [reviewIdx, setReviewIdx] = useState(0);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false); // 同步重入锁:异步 busy state 拦不住同一帧内的连发
-  const [playList, setPlayList] = useState<GridOp[]>([]);
-  const [playIdx, setPlayIdx] = useState(-1);
-  const [playing, setPlaying] = useState(false);
   const [sendErr, setSendErr] = useState<string | null>(null);
   const [answer, setAnswer] = useState<string | null>(null);
   const lsJson = <T,>(k: string, fb: T): T => { try { const v = JSON.parse(localStorage.getItem(k) ?? 'null'); return v == null ? fb : (v as T); } catch { return fb; } };
@@ -835,7 +836,7 @@ export function App() {
                   setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, board }));
                 } else if (fmt === 'word') {
                   const wordEdits = materializeWordEdits(diff, cs);
-                  // 乐观落入文档(与 Excel playOps 一致);编辑器按 domId 包裹,拒绝可精确还原
+                  // 乐观落入文档(与 Excel 播放一致);编辑器按 domId 包裹,拒绝可精确还原
                   wordRef.current?.closeUndoWindow(); // 新提案=上一轮撤销窗口关闭,旧 data-undo 剥净后再落新标记
                   // 落地顺序:先非删段(段号锚不受影响),删段按段号【降序】——升序会让先删的段把后续段号顶前,删错段(实测会误删含图段)
                   for (const w of orderWordEditsForApply(wordEdits)) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w));
@@ -848,11 +849,11 @@ export function App() {
                     chartPlacements: chartRects.current,
                     renderChart: chartToPngDataUrl,
                   }); // 结构性操作先落,改变网格布局
-                  // 采集整格改前状态(值/公式/填充/字色/加粗),供 git-diff 展示 + "撤销/拒绝"精确还原
+                  // 采集整格改前状态(值/公式/填充/字色/加粗/数字格式/对齐),供 git-diff 展示 + "撤销/拒绝"精确还原
                   const ops = captureGridOpBeforeState(materializeGridOps(diff), univerRef.current);
                   setExcelDiff('final'); // 新提案到达,速览条回到"改后"基准
                   setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, ops }));
-                  if (ops.length) void playOps(ops); // 边画边改
+                  if (ops.length) void playGridOps(univerRef.current, ops, { onStart: () => setSent(true) }); // 边画边改
                 }
               } else if (e.kind === 'clarify' && e.questions?.length) {
                 const qs = e.questions;
@@ -893,8 +894,6 @@ export function App() {
     setRealDiff(null);
     setRealCs(null);
     clearAccepted();
-    setPlayList([]);
-    setPlayIdx(-1);
     setAnswer(null);
   };
   /** 开启新对话:清空多轮历史 + 当前视图。 */
@@ -916,7 +915,7 @@ export function App() {
       for (const w of turn.word) if (accepted.has(akey(turn.diff.changeSetId, w.editId))) { if (!wordRef.current?.revert(w.domId)) missed++; } // 按 domId 精确还原每条(undoMap 缺失走 DOM 兜底)
       if (missed) notify(t('部分改动已定稿,无法自动回退') + ` · ${missed}`);
     } else {
-      for (const op of turn.ops) revertGridOp(op); // 走维度级精确回放(公式/填充/加粗不丢)
+      for (const op of turn.ops) revertGridOp(univerRef.current, op); // 走维度级精确回放(公式/填充/加粗/数字格式不丢)
     }
     markReverted(idx);
     notify(t('已撤销该回合改动'));
@@ -927,72 +926,11 @@ export function App() {
     void send(text);
   };
 
-  // ── Agent「边画边改」可视化:把操作逐步播放到 Univer 网格,用户看着它一格格地改 ──
-  const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-  const CINEMATIC_MAX = 10; // ≤ 此数才逐格电影感;更多则区域整体 + 分块快速应用,避免一格格爬
-  const playOps = async (ops: GridOp[]): Promise<void> => {
-    const api = univerRef.current;
-    if (!api || !ops.length) return;
-    setPlayList(ops);
-    setPlaying(true);
-    setSent(true);
-    if (ops.length <= CINEMATIC_MAX) {
-      // 少量:逐格电影感(光标移动 + 落笔闪蓝 + 落定)
-      for (let i = 0; i < ops.length; i++) {
-        const op = ops[i]!;
-        setPlayIdx(i);
-        api.focus(op.a1);
-        await delay(220);
-        api.setBackground(op.a1, '#dbeafe');
-        await delay(120);
-        if (op.value !== undefined) api.setCell(op.a1, op.value);
-        if (op.bold) api.setBold(op.a1);
-        if (op.color) api.setFontColor(op.a1, op.color);
-        if (op.numFmt) api.setNumberFormat(op.a1, op.numFmt);
-        if (op.align) api.setAlign(op.a1, op.align);
-        await delay(240);
-        api.setBackground(op.a1, op.bg ?? null);
-        await delay(140);
-      }
-    } else {
-      // 大批量:先聚焦整体区域(让用户看到"在改这一片"),再分块成批写入 + 进度条
-      const region = boundingA1(ops);
-      if (region) api.focus(region);
-      await delay(120);
-      const CHUNK = 24;
-      for (let i = 0; i < ops.length; i += CHUNK) {
-        const end = Math.min(i + CHUNK, ops.length);
-        for (let k = i; k < end; k++) applyGridOp(ops[k]!); // 一块内同步写,Univer 合并渲染
-        setPlayIdx(end);
-        await delay(20); // 让进度条刷新一帧
-      }
-    }
-    setPlayIdx(ops.length);
-    setPlaying(false);
-  };
+  const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
   /** drawio 兜底:provider 不流式吐入参时,在 done 后把对象逐个补到画板(保留"边画"观感)。 */
   const playBoard = async (nodes: BNode[], edges: BEdge[]): Promise<void> => {
     for (const n of nodes) { boardRef.current?.addObjects([n], []); await delay(75); }
     for (const ed of edges) { boardRef.current?.addObjects([], [ed]); await delay(45); }
-  };
-  // ── 逐条审阅:把单条改动应用/还原到左侧工作区(Excel 网格 / drawio 画板)+ 高亮当前条 ──
-  const applyGridOp = (op: GridOp): void => {
-    const api = univerRef.current; if (!api) return;
-    if (op.value !== undefined) api.setCell(op.a1, op.value);
-    if (op.bold) api.setBold(op.a1);
-    if (op.color) api.setFontColor(op.a1, op.color);
-    if (op.numFmt) api.setNumberFormat(op.a1, op.numFmt);
-    if (op.align) api.setAlign(op.a1, op.align);
-    if (op.bg != null) api.setBackground(op.a1, op.bg); // 只有真提了底色才动背景,别把用户原有填充抹掉
-  };
-  const revertGridOp = (op: GridOp): void => {
-    const api = univerRef.current; if (!api) return;
-    const bs = op.beforeState; // 改了哪个维度还原哪个维度(两条 op 同格时互不误伤)
-    if (op.value !== undefined) { if (bs?.f) api.setCell(op.a1, bs.f); else api.setCell(op.a1, (bs ? bs.v : op.before) ?? ''); } // 公式格回公式,不落算后值
-    if (op.bg != null) api.setBackground(op.a1, bs?.bg ?? null);
-    if (op.color) api.setFontColor(op.a1, bs?.color ?? '#1f2937');
-    if (op.bold) api.setBold(op.a1, bs?.bold ?? false);
-    if (op.align) api.setAlign(op.a1, bs?.align ?? null); // 改前没显式对齐就清回默认(文本左/数字右)
   };
   /** drawio 改动视图:原文=隐掉本轮提案(新增移除、改动还原改前快照);改后=按当前处置呈现。 */
   const applyBoardDiffView = (view: 'orig' | 'final'): void => {
@@ -1008,24 +946,15 @@ export function App() {
     });
     setBoardDiff(view);
   };
-  /** 一条 op 的"真实底色"(op 自己改了底色用 op 的,否则回改前采集值)——离开对照视图时恢复用。 */
-  const realBg = (op: GridOp, on: boolean): string | null => (on ? op.bg ?? op.beforeState?.bg ?? null : op.beforeState?.bg ?? null);
-  /** Excel 改动视图:原文=全部回改前;对照=改后 + 改动格着色(蓝=在案,红=已拒);改后=按当前处置回放。
-   *  着色只是视图层,切走时按处置恢复真实底色,不落进数据。 */
-  const applyExcelDiffView = (view: 'orig' | 'mark' | 'final'): void => {
-    let turn: DiffTurn | undefined;
-    for (let i = thread.length - 1; i >= 0; i--) { const tt = thread[i]; if (tt && tt.role === 'assistant' && tt.kind === 'diff' && tt.ops.length) { turn = tt; break; } }
+  const applyExcelDiffView = (view: ExcelDiffView): void => {
+    const turn = findLatestExcelDiffTurn(thread);
     if (!turn) return;
-    const api = univerRef.current;
-    for (const op of turn.ops) {
-      const on = !!op.editId && accepted.has(akey(turn.diff.changeSetId, op.editId));
-      if (view === 'orig') revertGridOp(op);
-      else if (on) applyGridOp(op);
-      else revertGridOp(op);
-      if (!api) continue;
-      if (view === 'mark') api.setBackground(op.a1, on ? MARK_BG_ON : MARK_BG_OFF);
-      else api.setBackground(op.a1, view === 'orig' ? op.beforeState?.bg ?? null : realBg(op, on));
-    }
+    renderExcelDiffView(
+      univerRef.current,
+      turn,
+      view,
+      (editId) => accepted.has(akey(turn.diff.changeSetId, editId)),
+    );
     setExcelDiff(view);
   };
   /** 高亮当前审阅的改动:Excel 聚焦该格、drawio 高亮该对象。 */
@@ -1054,12 +983,12 @@ export function App() {
     const it = turn.diff.items[idx]; if (!it) return;
     const k = akey(turn.diff.changeSetId, it.editId);
     if (!accepted.has(k)) { // 之前被拒 → 重新落回工作区(applyEdit 幂等,重复接受不叠标记)
-      if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(op); }
+      if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(univerRef.current, op); }
       else if (turn.format === 'drawio' && turn.board) setBoardEditState(turn.board, it.editId, 'next', boardRef.current);
       else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) applyWordEdit(w); }
       toggleAccept(k, true);
     }
-    if (turn.format === 'excel' && excelDiff === 'mark') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) univerRef.current?.setBackground(op.a1, realBg(op, true)); } // 已处置的格退出着色 → 网格上直观看到审阅进度
+    if (turn.format === 'excel' && excelDiff === 'mark') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) univerRef.current?.setBackground(op.a1, gridOpBackground(op, true)); } // 已处置的格退出着色 → 网格上直观看到审阅进度
     if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.markResolved(w.domId, 'accepted'); } // 物理定稿:删 del、ins 落地
     telemetry(turn.format, 'accept', reviewItemKind(turn, it));
     if (!silent) setReviewIdx(idx + 1);
@@ -1082,7 +1011,7 @@ export function App() {
     if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
     const it = turn.diff.items[idx]; if (!it) return;
     const k = akey(turn.diff.changeSetId, it.editId);
-    if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) { revertGridOp(op); if (excelDiff === 'mark') univerRef.current?.setBackground(op.a1, realBg(op, false)); } }
+    if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) { revertGridOp(univerRef.current, op); if (excelDiff === 'mark') univerRef.current?.setBackground(op.a1, gridOpBackground(op, false)); } }
     else if (turn.format === 'drawio' && turn.board) setBoardEditState(turn.board, it.editId, 'prior', boardRef.current);
     else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w && !wordRef.current?.revert(w.domId) && accepted.has(k)) notify(t('该改动已定稿,未找到可还原的位置')); } // undoMap 缺失时 revert 自带 DOM 兜底
     toggleAccept(k, false);
@@ -1106,10 +1035,8 @@ export function App() {
     ensureCommitFile,
     doCommit,
     markCommitted,
-    applyGridOp,
     applyWordEdit,
     boardRef,
-    realBg,
     telemetry,
     send,
   });

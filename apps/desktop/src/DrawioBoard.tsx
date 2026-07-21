@@ -375,21 +375,6 @@ export function makeRawBoardConv(seq: number, taken?: (id: string) => boolean): 
     return { editId: 'e' + index, boardId: id, node };
   };
 }
-/** 一组 A1 格的包围区(用于大批量改动时整体聚焦,而非逐格)。 */
-export function boundingA1(ops: { a1: string }[]): string | null {
-  let minC = Infinity, minR = Infinity, maxC = -Infinity, maxR = -Infinity;
-  for (const o of ops) {
-    const m = /([A-Za-z]+)([0-9]+)/.exec(o.a1.replace(/^.*!/, ''));
-    if (!m) continue;
-    let c = 0;
-    for (const ch of m[1]!.toUpperCase()) c = c * 26 + (ch.charCodeAt(0) - 64);
-    const r = parseInt(m[2]!, 10);
-    minC = Math.min(minC, c); maxC = Math.max(maxC, c); minR = Math.min(minR, r); maxR = Math.max(maxR, r);
-  }
-  if (!Number.isFinite(minC)) return null;
-  const col = (n: number): string => { let s = ''; let x = n; while (x > 0) { const r = (x - 1) % 26; s = String.fromCharCode(65 + r) + s; x = Math.floor((x - 1) / 26); } return s; };
-  return `${col(minC)}${minR}:${col(maxC)}${maxR}`;
-}
 const bandRect = (b: { x0: number; y0: number; x1: number; y1: number }): { x: number; y: number; w: number; h: number } => ({
   x: Math.min(b.x0, b.x1),
   y: Math.min(b.y0, b.y1),

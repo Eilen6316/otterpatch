@@ -4,11 +4,10 @@ import type { WordEdit } from './proposal-materializers.js';
 import type { RichDocHandle } from './RichDoc.js';
 import type { SheetHandle } from './UniverSheet.js';
 import { setBoardEditState, type DrawioReviewBoard } from './drawio-review-adapter.js';
+import { applyGridOp, gridOpBackground, type ExcelDiffView } from './excel-review-adapter.js';
 import { akey, AUTO_BATCH_CAP, BATCH_RX } from './review-shared.js';
 
 type Format = DiffTurn['format'];
-type GridOp = DiffTurn['ops'][number];
-type ExcelDiffView = 'orig' | 'mark' | 'final';
 
 export const reviewItemKind = (turn: DiffTurn, item: DiffTurn['diff']['items'][number]): string => {
   if (turn.format === 'word') {
@@ -43,9 +42,7 @@ export interface UseReviewActionsOptions {
   ensureCommitFile: (turn: DiffTurn) => boolean;
   doCommit: (acceptedEditIds: string[], turn: DiffTurn) => Promise<boolean>;
   markCommitted: (index: number, count: number) => void;
-  applyGridOp: (op: GridOp) => void;
   applyWordEdit: (edit: WordEdit) => void;
-  realBg: (op: GridOp, accepted: boolean) => string | null;
   telemetry: (format: Format, verb: 'accept' | 'reject', kind: string) => void;
   send: (text: string) => void | Promise<void>;
 }
@@ -72,9 +69,7 @@ export function useReviewActions({
   ensureCommitFile,
   doCommit,
   markCommitted,
-  applyGridOp,
   applyWordEdit,
-  realBg,
   telemetry,
   send,
 }: UseReviewActionsOptions): UseReviewActionsResult {
@@ -100,7 +95,7 @@ export function useReviewActions({
       if (turn.format === 'word' || accepted.has(akey(turn.diff.changeSetId, item.editId))) continue;
       if (turn.format === 'excel') {
         const op = turn.ops.find((candidate) => candidate.editId === item.editId);
-        if (op) applyGridOp(op);
+        if (op) applyGridOp(univerRef.current, op);
       } else if (turn.format === 'drawio') {
         if (turn.board) setBoardEditState(turn.board, item.editId, 'next', boardRef.current);
       }
@@ -110,7 +105,7 @@ export function useReviewActions({
       for (const edit of turn.word ?? []) wordRef.current?.markResolved(edit.domId, 'accepted');
     }
     if (turn.format === 'excel' && excelDiff === 'mark') {
-      for (const op of turn.ops) univerRef.current?.setBackground(op.a1, realBg(op, true));
+      for (const op of turn.ops) univerRef.current?.setBackground(op.a1, gridOpBackground(op, true));
       setExcelDiff('final');
     }
     for (const item of turn.diff.items) telemetry(turn.format, 'accept', reviewItemKind(turn, item));

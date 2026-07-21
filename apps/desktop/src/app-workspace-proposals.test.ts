@@ -30,7 +30,7 @@ test('captureGridOpBeforeState snapshots value and cell state without mutating o
   const ops: GridOp[] = [{ a1: 'B2', value: 42, note: 'set', editId: 'e1' }];
   const captured = captureGridOpBeforeState(ops, {
     getValue: (a1) => `old:${a1}`,
-    getCellState: (a1) => ({ v: `old:${a1}`, bg: '#fff', bold: true }),
+    getCellState: (a1) => ({ v: `old:${a1}`, bg: '#fff', bold: true, numFmt: '0.00' }),
   });
 
   assert.deepEqual(captured, [{
@@ -39,7 +39,7 @@ test('captureGridOpBeforeState snapshots value and cell state without mutating o
     note: 'set',
     editId: 'e1',
     before: 'old:B2',
-    beforeState: { v: 'old:B2', bg: '#fff', bold: true },
+    beforeState: { v: 'old:B2', bg: '#fff', bold: true, numFmt: '0.00' },
   }]);
   assert.equal(ops[0]!.before, undefined);
   assert.notEqual(captured[0], ops[0]);

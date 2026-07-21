@@ -12,6 +12,7 @@ export interface CellState {
   bg?: string | null;
   color?: string | null;
   bold?: boolean;
+  numFmt?: string | null;
   align?: 'left' | 'center' | 'right' | null;
 }
 

@@ -41,8 +41,8 @@ export interface SheetHandle {
   setAlign(a1: string, align: 'left' | 'center' | 'right' | null): void;
   focus(a1: string): void;
   getValue(a1: string): unknown;
-  /** 整格改前状态(值/公式/填充/字色/加粗/对齐)——供"拒绝/原文视图"维度级精确还原。 */
-  getCellState(a1: string): { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean; align?: 'left' | 'center' | 'right' | null };
+  /** 整格改前状态(值/公式/填充/字色/加粗/数字格式/对齐)——供"拒绝/原文视图"维度级精确还原。 */
+  getCellState(a1: string): { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean; numFmt?: string | null; align?: 'left' | 'center' | 'right' | null };
   /** 整张表的全局快照(概览 + 数据 + 焦点),与是否圈选无关。 */
   getSheet(): UniSel | null;
   // 结构性操作(Agent 赋能:插删行列 / 合并 / 冻结 / 清空)——驱动真实 Univer 网格
@@ -323,14 +323,14 @@ const UniverSheet = forwardRef<SheetHandle, { onSelection?: (s: UniSel | null) =
       }),
       getValue: (a1) => { let v: unknown; safe(() => { v = rangeOf(a1)?.getValue(); }); return v; },
       getCellState: (a1) => { // 尽力而为:facade 缺哪个 getter 就少采哪个维度(revert 有兜底默认值)
-        const st: { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean; align?: 'left' | 'center' | 'right' | null } = {};
+        const st: { v?: unknown; f?: string | null; bg?: string | null; color?: string | null; bold?: boolean; numFmt?: string | null; align?: 'left' | 'center' | 'right' | null } = {};
         safe(() => {
           const r = rangeOf(a1); if (!r) return;
           st.v = r.getValue();
           const f = (r as { getFormulas?: () => string[][] }).getFormulas?.()?.[0]?.[0];
           st.f = f && String(f).startsWith('=') ? String(f) : null;
-          const sd = (r as { getCellStyleData?: () => { bg?: { rgb?: string } | null; cl?: { rgb?: string } | null; bl?: number | null; ht?: number | null } | null }).getCellStyleData?.();
-          if (sd) { st.bg = sd.bg?.rgb ?? null; st.color = sd.cl?.rgb ?? null; st.bold = sd.bl === 1; st.align = sd.ht === 1 ? 'left' : sd.ht === 2 ? 'center' : sd.ht === 3 ? 'right' : null; }
+          const sd = (r as { getCellStyleData?: () => { bg?: { rgb?: string } | null; cl?: { rgb?: string } | null; bl?: number | null; n?: { pattern?: string } | null; ht?: number | null } | null }).getCellStyleData?.();
+          if (sd) { st.bg = sd.bg?.rgb ?? null; st.color = sd.cl?.rgb ?? null; st.bold = sd.bl === 1; st.numFmt = sd.n?.pattern ?? null; st.align = sd.ht === 1 ? 'left' : sd.ht === 2 ? 'center' : sd.ht === 3 ? 'right' : null; }
         });
         return st;
       },
