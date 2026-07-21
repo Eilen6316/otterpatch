@@ -15,7 +15,6 @@ import { akey } from './review-shared.js';
 import { streamPropose } from './agent-client.js';
 import {
   countAddedBoardObjects,
-  isGridStructureKind,
   materializeAddedBoardObjects,
   materializeGridOps,
   materializeWordEdits,
@@ -50,7 +49,8 @@ import { DrawioBoard, DrawioToolbar, DrawioPalette, extractDrawioOps, makeRawBoa
 import type { BNode, BEdge, BoardSel, BoardHandle } from './DrawioBoard.js';
 import { ThinkingPanel, ClarifyCard } from './ThreadCards.js';
 import { Markdown } from './Markdown.js';
-import { chartToPngDataUrl, gridToChartSpec, buildChartGrid, specFromInline } from './chart.js';
+import { chartToPngDataUrl } from './chart.js';
+import { applyExcelStructure, type ChartPlacement } from './excel-structure-adapter.js';
 import { buildHistory as buildAppHistory, sanitizeThread as sanitizeAppThread } from './app-history.js';
 import {
   appendAnswerDelta,
@@ -513,7 +513,7 @@ export function App() {
     t,
   });
   const applySeqRef = useRef(0);
-  const chartRects = useRef<Array<{ row: number; col: number }>>([]); // 已插入图表的锚点(会话级):新图撞上就下移,别叠在一起
+  const chartRects = useRef<ChartPlacement[]>([]); // 已插入图表的锚点(会话级):新图撞上就下移,别叠在一起
   // drawio「边生成边画」流式状态
   const draftBufRef = useRef('');
   const drawnOpsRef = useRef(0);
@@ -843,7 +843,11 @@ export function App() {
                   setReviewIdx(0);
                   if (wordEdits[0]) wordRef.current?.highlight(wordEdits[0].domId); // 审阅期定位第一条
                 } else {
-                  applyExcelStructure(cs); // 结构性操作(插删行列/合并/冻结/清空)先落,改变网格布局
+                  applyExcelStructure(cs, {
+                    sheet: univerRef.current,
+                    chartPlacements: chartRects.current,
+                    renderChart: chartToPngDataUrl,
+                  }); // 结构性操作先落,改变网格布局
                   // 采集整格改前状态(值/公式/填充/字色/加粗),供 git-diff 展示 + "撤销/拒绝"精确还原
                   const ops = captureGridOpBeforeState(materializeGridOps(diff), univerRef.current);
                   setExcelDiff('final'); // 新提案到达,速览条回到"改后"基准
@@ -970,84 +974,6 @@ export function App() {
   const playBoard = async (nodes: BNode[], edges: BEdge[]): Promise<void> => {
     for (const n of nodes) { boardRef.current?.addObjects([n], []); await delay(75); }
     for (const ed of edges) { boardRef.current?.addObjects([], [ed]); await delay(45); }
-  };
-  /** 把结构性改动(插删行列/合并/冻结/清空)从 ChangeSet 直接落到真实 Univer 网格(不走单元格播放)。 */
-  const a1RowCol = (a1: string): { row: number; col: number } => {
-    const m = /([A-Za-z]+)([0-9]+)/.exec((a1.replace(/^.*!/, '').split(':')[0]) ?? 'A1');
-    let c = 0;
-    if (m) for (const ch of m[1]!.toUpperCase()) c = c * 26 + (ch.charCodeAt(0) - 64);
-    return { col: m ? c - 1 : 0, row: m ? parseInt(m[2]!, 10) - 1 : 0 };
-  };
-  const applyExcelStructure = (cs: unknown): void => {
-    const api = univerRef.current;
-    const c = cs as { edits?: Array<{ target: string; op: { kind?: string; count?: number; before?: boolean; rows?: number; cols?: number; by?: number; asc?: boolean; when?: string; v1?: number | string; v2?: number; rule?: string; list?: string[]; min?: number; max?: number; v?: number; style?: { bgColor?: string; color?: string; bold?: boolean; italic?: boolean }; chartType?: 'bar' | 'line' | 'pie'; title?: string; range?: string; categories?: string[]; series?: { name?: string; data?: number[] }[]; anchor?: string } }>; anchors?: Record<string, { portable?: { a1?: string } }> } | null;
-    if (!api || !c?.edits) return;
-    const colA = (n: number): string => { let s = ''; let x = n + 1; while (x > 0) { const r = (x - 1) % 26; s = String.fromCharCode(65 + r) + s; x = Math.floor((x - 1) / 26); } return s; };
-    for (const e of c.edits) {
-      const k = e.op?.kind ?? '';
-      if (!isGridStructureKind(k)) continue;
-      const full = c.anchors?.[e.target]?.portable?.a1 ?? 'A1'; // 保留表名前缀:多 sheet 结构操作按前缀落目标表
-      const sheetName = /^([^!]+)!/.exec(full)?.[1];
-      const a1 = full.replace(/^.*!/, '');
-      const pa1 = sheetName ? `${sheetName}!${a1}` : a1;
-      const { row, col } = a1RowCol(a1);
-      const n = e.op?.count ?? 1;
-      if (k === 'insertRows') api.insertRows(e.op?.before === false ? row + 1 : row, n, sheetName);
-      else if (k === 'deleteRows') api.deleteRows(row, n, sheetName);
-      else if (k === 'insertCols') api.insertCols(e.op?.before === false ? col + 1 : col, n, sheetName);
-      else if (k === 'deleteCols') api.deleteCols(col, n, sheetName);
-      else if (k === 'mergeCells') api.mergeRange(pa1);
-      else if (k === 'unmergeCells') api.unmergeRange(pa1);
-      else if (k === 'freezePanes') api.freeze(e.op?.rows ?? 0, e.op?.cols ?? 0);
-      else if (k === 'sortRange') api.sortRange(pa1, e.op?.by ?? 0, e.op?.asc ?? true);
-      else if (k === 'deleteRange') api.clearRange(pa1);
-      else if (k === 'conditionalFormat') api.conditionalFormat(pa1, { when: e.op?.when ?? 'notEmpty', v1: e.op?.v1, v2: e.op?.v2 }, e.op?.style ?? {});
-      else if (k === 'dataValidation') api.dataValidation(pa1, { kind: e.op?.rule ?? 'list', list: e.op?.list, min: e.op?.min, max: e.op?.max, v: e.op?.v });
-      else if (k === 'autoFilter') api.createFilter(pa1);
-      else if (k === 'addSheet') api.addSheet((e.op as { name?: string })?.name ?? '新表');
-      else if (k === 'copyRange') api.copyRange(full, (e.op as { to?: string })?.to ?? 'A1');
-      else if (k === 'insertChart') {
-        const inline = (e.op?.categories?.length ?? 0) > 0;
-        let spec = null;
-        if (inline) {
-          // 内联模式(透视图首选):Agent 直接给 categories/series,不往表里写汇总表,主表保持干净。
-          spec = specFromInline(e.op?.chartType ?? 'bar', e.op?.title ?? '图表', e.op?.categories, e.op?.series);
-        } else {
-          // 范围模式:对已有/同 changeset 写入的数据范围画图。用"本次写入值优先 + 改前实时值"叠加,避开落值时序。
-          const written = new Map<string, unknown>();
-          for (const ed of c.edits) {
-            const ek = ed.op?.kind;
-            if (ek !== 'setValue' && ek !== 'setFormula') continue;
-            const ea1 = (c.anchors?.[ed.target]?.portable?.a1 ?? '').replace(/^.*!/, '').toUpperCase();
-            const ev = (ed.op as { value?: unknown; formula?: string }).value ?? (ed.op as { formula?: string }).formula;
-            if (ea1 && ev !== undefined) written.set(ea1, ev);
-          }
-          const grid = buildChartGrid(a1, written, (cell) => api.getValue(cell)); // a1 = 含表头的数据范围
-          if (grid.length && (grid[0]?.length ?? 0)) spec = gridToChartSpec(grid, e.op?.chartType ?? 'bar', e.op?.title ?? '图表');
-        }
-        if (spec && spec.categories.length && spec.series.length) {
-          const png = chartToPngDataUrl(spec);
-          let place: string;
-          if (inline) {
-            place = a1; // 内联模式:a1 = Agent 给的放置锚点格
-          } else {
-            const end = (a1.split(':')[1] ?? a1.split(':')[0] ?? 'A1'); // 范围模式:放到数据范围右侧两列处
-            const ec = a1RowCol(end);
-            place = colA(ec.col + 2) + (a1RowCol(a1.split(':')[0] ?? 'A1').row + 1);
-          }
-          // 防撞:图表是 640×400 浮动图片(约 8 列×18 行),Agent 用单元格思维给锚点(如 G2、G7)会让第二张盖在第一张上——撞上就整体下移
-          const W = 8, H = 18;
-          let rc = a1RowCol(place);
-          for (let guard = 0; guard < 20; guard++) {
-            const hit = chartRects.current.find((r) => rc.row < r.row + H && r.row < rc.row + H && rc.col < r.col + W && r.col < rc.col + W);
-            if (!hit) break;
-            rc = { row: hit.row + H + 1, col: rc.col };
-          }
-          chartRects.current.push({ row: rc.row, col: rc.col });
-          api.insertChartImage(colA(rc.col) + (rc.row + 1), png, 640, 400);
-        }
-      }
-    }
   };
   // ── 逐条审阅:把单条改动应用/还原到左侧工作区(Excel 网格 / drawio 画板)+ 高亮当前条 ──
   const applyGridOp = (op: GridOp): void => {

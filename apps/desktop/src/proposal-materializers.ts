@@ -2,6 +2,9 @@ import { cleanLabel, innerForStyle, parseDrawioStyle, snap } from './DrawioBoard
 import type { BEdge, BNode } from './DrawioBoard.js';
 import type { DocFmt, DocTable } from './richdoc-editing.js';
 import { styleToKind } from './shape-engine.js';
+import { isGridStructureKind } from './grid-operation-kinds.js';
+
+export { isGridStructureKind };
 
 export interface CellState {
   v?: unknown;
@@ -87,26 +90,6 @@ export interface AddedBoardObjects {
   byEdit: Record<string, string>;
   objs: Array<BoardObject & { editId: string }>;
 }
-
-const GRID_STRUCTURE_KINDS = new Set([
-  'insertRows',
-  'deleteRows',
-  'insertCols',
-  'deleteCols',
-  'mergeCells',
-  'unmergeCells',
-  'freezePanes',
-  'sortRange',
-  'deleteRange',
-  'conditionalFormat',
-  'dataValidation',
-  'autoFilter',
-  'insertChart',
-  'addSheet',
-  'copyRange',
-]);
-
-export const isGridStructureKind = (kind: string): boolean => GRID_STRUCTURE_KINDS.has(kind);
 
 export const wordEditOpts = (edit: WordEdit): {
   replacement?: string;
