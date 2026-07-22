@@ -71,6 +71,12 @@ test('Word 自检:quote 多次出现 → 阻断并要求唯一锚点', () => {
   assert.match(v.report, /出现.*次/);
 });
 
+test('Word 自检:重叠的重复 quote 也视为歧义', () => {
+  const v = buildDocVerifier('aaa')(cs([{ quote: 'aa', replacement: 'b' }]));
+  assert.equal(v.ok, false);
+  assert.equal(v.code, 'VERIFIER_AMBIGUOUS_ANCHOR');
+});
+
 test('Word 结构化快照:para 必须真实存在且 quote 必须属于该段', () => {
   const structured = buildDocVerifier({ blocks: [{ text: '第一段' }, { text: '重复文字在第二段' }] });
   const valid = structured(cs([{ quote: '重复文字', para: 2, replacement: '唯一目标' }]));

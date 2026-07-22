@@ -23,7 +23,7 @@ function occurrences(text: string, quote: string): number[] {
     const index = text.indexOf(quote, from);
     if (index < 0) break;
     hits.push(index);
-    from = index + Math.max(1, quote.length);
+    from = index + 1;
   }
   return hits;
 }

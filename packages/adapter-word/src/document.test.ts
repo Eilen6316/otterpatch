@@ -33,6 +33,29 @@ test('redlineDocumentXml: 多段命中各自红线,w:id 递增不冲突', () => 
   assert.equal(new Set(ids).size, ids.length); // all unique, no duplicates
 });
 
+test('redlineDocumentXml: ambiguous quote is dropped instead of changing the first match', () => {
+  const duplicate =
+    '<w:document><w:body>' +
+    '<w:p><w:r><w:t>same</w:t></w:r></w:p>' +
+    '<w:p><w:r><w:t>same</w:t></w:r></w:p>' +
+    '</w:body></w:document>';
+  const result = redlineDocumentXml(duplicate, [{ id: 'e1', old: 'same', new: 'changed' }]);
+
+  assert.equal(result.changed, 0);
+  assert.equal(result.xml, duplicate);
+  assert.deepEqual(result.appliedEditIds, []);
+  assert.match(result.droppedEdits[0]?.reason ?? '', /ambiguous anchor.*2 times/);
+});
+
+test('redlineDocumentXml: paraIdx still rejects duplicate occurrences inside one block', () => {
+  const duplicate = '<w:document><w:body><w:p><w:r><w:t>same same</w:t></w:r></w:p></w:body></w:document>';
+  const result = redlineDocumentXml(duplicate, [{ id: 'e1', old: 'same', new: 'changed', paraIdx: 0 }]);
+
+  assert.equal(result.changed, 0);
+  assert.equal(result.xml, duplicate);
+  assert.match(result.droppedEdits[0]?.reason ?? '', /ambiguous anchor.*selected block/);
+});
+
 // ── 新修订形态:删段(delPara)/ 图片(img)/ 段号锚(paraIdx)──
 
 const DOC2 =

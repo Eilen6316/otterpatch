@@ -78,6 +78,36 @@ test('Word 红线写回:replaceText → w:ins,保留 w:pPr,仅 document.xml 变'
   assert.equal(Buffer.compare(Buffer.from(a['word/styles.xml']!), Buffer.from(b['word/styles.xml']!)), 0);
 });
 
+test('Word writeback drops an ambiguous quote without changing document.xml', async () => {
+  const anchorId = 'a-ambiguous' as AnchorId;
+  const cs: ChangeSet = {
+    id: 'c-ambiguous',
+    hostId: 'h',
+    baseRev: 0 as DocRev,
+    anchors: {
+      [anchorId]: {
+        id: anchorId,
+        hostId: 'h' as HostId,
+        kind: 'flow',
+        ref: null,
+        portable: { kind: 'flow', path: [], quote: { prefix: '', text: 'same', suffix: '' }, bias: 'left' },
+        baseRev: 0 as DocRev,
+      },
+    },
+    origin: { by: 'human' },
+    meta: { intent: 'replace one occurrence' },
+    edits: [{ id: 'e-ambiguous', target: anchorId, op: { family: 'text', kind: 'replaceText', text: 'changed' } }],
+  };
+  const original = makeDocx('same same');
+  const res = await new WordRedlineWriteback().commit(cs, { hostId: 'h', bytes: original, rev: 0 as DocRev });
+
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.appliedEditIds, []);
+  assert.deepEqual(res.touchedParts, []);
+  assert.match(res.droppedEdits?.[0]?.reason ?? '', /ambiguous anchor.*2 times/);
+  assert.deepEqual(unzipSync(res.bytes)['word/document.xml'], unzipSync(original)['word/document.xml']);
+});
+
 test('Word 红线写回:insertTable → 原生 w:tbl,仍只修改 document.xml', async () => {
   const a0 = 'a-table' as AnchorId;
   const anchor: LogicalAnchor = {

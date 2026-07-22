@@ -226,7 +226,41 @@ function tryApply(para: string, edit: DocEdit, ctx: Ctx, blkIdx?: number): strin
   return open + newPPr + newBody + '</w:p>';
 }
 
-/** Apply a set of edits to document.xml; each edit locates its first matching paragraph and rewrites it surgically.
+const TOP_LEVEL_BLOCK = /<w:tbl\b[\s\S]*?<\/w:tbl>|<w:p\b[^>]*\/>|<w:p\b[\s\S]*?<\/w:p>/g;
+
+function countOccurrences(text: string, quote: string): number {
+  let count = 0;
+  let from = 0;
+  while (from <= text.length - quote.length) {
+    const index = text.indexOf(quote, from);
+    if (index < 0) break;
+    count++;
+    from = index + 1;
+  }
+  return count;
+}
+
+function anchorMatchCount(xml: string, edit: DocEdit): number {
+  const quote = isText(edit) ? edit.old : (edit.quote ?? '');
+  let matches = 0;
+  let blockIndex = -1;
+  for (const match of xml.matchAll(TOP_LEVEL_BLOCK)) {
+    blockIndex++;
+    const block = match[0];
+    if (edit.paraIdx != null && edit.paraIdx !== blockIndex) continue;
+    const table = block.startsWith('<w:tbl');
+    if (table && !isTable(edit)) continue;
+    if (quote) {
+      if (table) continue; // Quote anchors address paragraphs, not text nested inside a table block.
+      matches += countOccurrences(paraText(block), quote);
+    } else if (!isText(edit) && edit.paraIdx === blockIndex) {
+      matches++;
+    }
+  }
+  return matches;
+}
+
+/** Apply a set of edits to document.xml; quote anchors must resolve uniquely before any rewrite.
  *  Block indexing mirrors the workspace importer: top-level <w:tbl> consumes its inner paragraphs and counts
  *  as ONE block, so paraIdx from the workspace ("第N段") lands on the same paragraph here. */
 export function redlineDocumentXml(documentXml: string, edits: DocEdit[], opts: RedlineOptions = {}): { xml: string; changed: number; appliedEditIds: EditId[]; droppedEdits: Array<{ editId: EditId; reason: string }> } {
@@ -248,10 +282,20 @@ export function redlineDocumentXml(documentXml: string, edits: DocEdit[], opts: 
       }
       continue;
     }
+    const anchorMatches = anchorMatchCount(xml, edit);
+    if (anchorMatches > 1) {
+      if (edit.id) {
+        droppedEdits.push({
+          editId: edit.id,
+          reason: `ambiguous anchor: quote matched ${anchorMatches} times${edit.paraIdx == null ? '; provide paraIdx or a longer unique quote' : ' in the selected block; provide a longer unique quote'}`,
+        });
+      }
+      continue;
+    }
     let applied = false;
     let blk = -1; // top-level block cursor (w:tbl = one block, its inner w:p don't count)
     // Match tables first (skipped whole), then self-closing empty paragraphs <w:p .../> and regular <w:p>...</w:p>
-    xml = xml.replace(/<w:tbl\b[\s\S]*?<\/w:tbl>|<w:p\b[^>]*\/>|<w:p\b[\s\S]*?<\/w:p>/g, (el) => {
+    xml = xml.replace(TOP_LEVEL_BLOCK, (el) => {
       blk++;
       if (applied || (el.startsWith('<w:tbl') && !isTable(edit))) return el;
       const res = tryApply(el, edit, ctx, blk);
