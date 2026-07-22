@@ -11,7 +11,14 @@
 import { Agent, buildDocVerifier, buildDrawioVerifier } from '@otterpatch/agent';
 import type { AgentResponse, ChangeSetVerifier, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from '@otterpatch/agent';
 import type { ApprovalPolicy, ChangeSet, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
-import { DEFAULT_POLICY, assertChangeSet, decideApproval } from '@otterpatch/core';
+import {
+  CAPABILITY_MANIFEST_VERSION,
+  DEFAULT_POLICY,
+  assertChangeSet,
+  assertFormatCapabilities,
+  capabilityManifests,
+  decideApproval,
+} from '@otterpatch/core';
 import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
 import { buildXlsxCompiler, buildGridVerifier } from '@otterpatch/adapter-univer';
 import { DrawioSurgicalWriteback } from '@otterpatch/adapter-drawio';
@@ -113,6 +120,9 @@ export class OtterPatchRuntime {
   formats(): string[] {
     return Object.keys(this.backends);
   }
+  capabilities(): { version: typeof CAPABILITY_MANIFEST_VERSION; formats: ReturnType<typeof capabilityManifests> } {
+    return { version: CAPABILITY_MANIFEST_VERSION, formats: capabilityManifests() };
+  }
 
   /** Intent → constrained ChangeSet (injects the built-in skill library; BYOK model supplied by the caller). */
   async propose(req: ProposeRequest, model: ModelClient): Promise<ChangeSet> {
@@ -181,6 +191,7 @@ export class OtterPatchRuntime {
   /** Sign a model proposal before it is shown for review. The source file is bound when review completes. */
   createProposal(cs: ChangeSet, format: string, documentId = cs.hostId): ProposalEnvelope {
     if (!this.backends[format]) throw new Error(`OtterPatchRuntime: no writeback backend for format "${format}"`);
+    assertFormatCapabilities(format, cs, 'propose');
     return this.reviewAuthority.createProposal(cs, format, documentId);
   }
 
@@ -198,6 +209,7 @@ export class OtterPatchRuntime {
   /** Accepted subset → surgical writeback → new bytes + fidelity report. */
   async commit(input: CommitInput): Promise<WritebackResult> {
     assertChangeSet(input.changeSet);
+    assertFormatCapabilities(input.format, input.changeSet, 'writeback');
     const make = this.backends[input.format];
     if (!make) throw new Error(`OtterPatchRuntime: no writeback backend for format "${input.format}"`);
     const backends = [make(), ...(this.fallbackBackends[input.format] ?? []).map((factory) => factory())];

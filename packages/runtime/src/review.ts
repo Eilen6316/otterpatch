@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { ChangeSet } from '@otterpatch/core';
-import { assertChangeSet } from '@otterpatch/core';
+import { CAPABILITY_MANIFEST_VERSION, assertChangeSet } from '@otterpatch/core';
 
 export const REVIEW_POLICY_VERSION = 'review-v1';
 const SHA256_RX = /^[a-f0-9]{64}$/;
@@ -13,6 +13,7 @@ export interface ProposalEnvelope {
   changeSetSha256: string;
   sourceFileSha256?: string;
   baseRev: number;
+  capabilityManifestVersion: typeof CAPABILITY_MANIFEST_VERSION;
   policyVersion: typeof REVIEW_POLICY_VERSION;
   createdAt: string;
   expiresAt: string;
@@ -64,6 +65,7 @@ export class ReviewAuthority {
       format,
       changeSetSha256: sha256Canonical(changeSet),
       baseRev: changeSet.baseRev,
+      capabilityManifestVersion: CAPABILITY_MANIFEST_VERSION,
       policyVersion: REVIEW_POLICY_VERSION,
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + this.ttlMs).toISOString(),
@@ -150,6 +152,7 @@ export class ReviewAuthority {
     if (!this.hasValidSignature('proposal', payload, proposal.signature)) throw new Error('invalid proposal signature');
     if (Date.parse(proposal.expiresAt) < now) throw new Error('proposal expired');
     if (proposal.policyVersion !== REVIEW_POLICY_VERSION) throw new Error('proposal policy version is stale');
+    if (proposal.capabilityManifestVersion !== CAPABILITY_MANIFEST_VERSION) throw new Error('proposal capability manifest version is stale');
     if (proposal.format !== format || proposal.baseRev !== changeSet.baseRev) throw new Error('proposal format or revision mismatch');
     if (proposal.changeSetSha256 !== sha256Canonical(changeSet)) throw new Error('proposal ChangeSet hash mismatch');
     if (requireSourceHash && !proposal.sourceFileSha256) throw new Error('proposal is not bound to a source file');
@@ -192,6 +195,7 @@ function assertProposal(value: ProposalEnvelope): ProposalPayload {
   if (!value.proposalId || !value.documentId || !value.format || !SHA256_RX.test(value.changeSetSha256)) throw new Error('invalid proposal envelope fields');
   if (value.sourceFileSha256 !== undefined && !SHA256_RX.test(value.sourceFileSha256)) throw new Error('invalid proposal source file hash');
   if (!Number.isSafeInteger(value.baseRev) || value.baseRev < 0) throw new Error('invalid proposal revision');
+  if (value.capabilityManifestVersion !== CAPABILITY_MANIFEST_VERSION) throw new Error('invalid proposal capability manifest version');
   if (!isIsoDate(value.createdAt) || !isIsoDate(value.expiresAt)) throw new Error('invalid proposal timestamps');
   const { signature: _signature, ...payload } = value;
   return payload;

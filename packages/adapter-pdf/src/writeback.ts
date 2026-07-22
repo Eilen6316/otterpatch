@@ -6,6 +6,7 @@
  * Arbitrary body-text reflow is out of scope for this backend (PDF has no stable text parts) —
  * deferred to a future model-roundtrip / overlay-annotation approach.
  */
+import { assertFormatCapabilities, writebackOperationKindsFor } from '@otterpatch/core';
 import type {
   ChangeSet,
   DocHandle,
@@ -20,13 +21,18 @@ import type {
 } from '@otterpatch/core';
 import { PDFDocument } from 'pdf-lib';
 
-const SUPPORTED: ReadonlySet<EditOpKind> = new Set<EditOpKind>(['setValue']);
+const SUPPORTED: ReadonlySet<EditOpKind> = new Set(writebackOperationKindsFor('pdf'));
 
 export class PdfFormWriteback implements WritebackBackend {
   readonly id = 'pdf-form' as WritebackId;
   readonly strategy: WritebackKind = 'native-command';
 
   canHandle(cs: ChangeSet): { ok: boolean; reason?: string } {
+    try {
+      assertFormatCapabilities('pdf', cs, 'writeback');
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    }
     const bad = cs.edits.find((e) => !SUPPORTED.has(e.op.kind));
     if (bad) return { ok: false, reason: `pdf-form supports setValue (AcroForm fields) only (got ${bad.op.kind})` };
     return { ok: true };

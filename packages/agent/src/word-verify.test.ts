@@ -24,9 +24,15 @@ test('Word 自检:改后与原文相同 = 空改动 → 失败', () => {
   assert.match(v.report, /空改动/);
 });
 
-test('Word 自检:全文格式改动(all=true,无 quote)→ 跳过定位、通过', () => {
-  const v = buildDocVerifier(DOC)(cs([{ all: true, font: '宋体', size: 10.5 }]));
+test('Word 自检:页面设置使用空 quote → 跳过定位、通过', () => {
+  const v = buildDocVerifier(DOC)(cs([{ quote: '', columns: 2 }]));
   assert.equal(v.ok, true);
+});
+
+test('Word 自检:不支持无锚点的全文字符格式', () => {
+  const v = buildDocVerifier(DOC)(cs([{ quote: '', font: '宋体', size: 10.5 }]));
+  assert.equal(v.ok, false);
+  assert.match(v.report, /没有可定位的原文片段/);
 });
 
 test('Word 表格:文档末尾插入结构化表格无需源锚点', () => {

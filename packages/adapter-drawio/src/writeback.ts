@@ -9,6 +9,7 @@
  * Only uncompressed diagrams are supported; compressed ones (deflateRaw+base64) throw
  * with a hint to set compressed=false.
  */
+import { assertFormatCapabilities, writebackOperationKindsFor } from '@otterpatch/core';
 import type {
   ChangeSet,
   DocHandle,
@@ -32,13 +33,7 @@ const attrOf = (s: string, n: string): string | undefined => new RegExp(`\\b${n}
 const stringifyProps = (p: Record<string, unknown>): Record<string, string> =>
   Object.fromEntries(Object.entries(p).map(([k, v]) => [k, String(v)]));
 
-const SUPPORTED: ReadonlySet<EditOpKind> = new Set<EditOpKind>([
-  'setValue',
-  'setObjectProps',
-  'moveObject',
-  'addObject',
-  'deleteObject',
-]);
+const SUPPORTED: ReadonlySet<EditOpKind> = new Set(writebackOperationKindsFor('drawio'));
 
 function mapOp(anchor: LogicalAnchor, op: EditOp): DrawioEdit {
   const cellId = anchor.portable.kind === 'object' ? anchor.portable.elementId : '';
@@ -69,6 +64,11 @@ export class DrawioSurgicalWriteback implements WritebackBackend {
   readonly strategy: WritebackKind = 'surgical-xml';
 
   canHandle(cs: ChangeSet): { ok: boolean; reason?: string } {
+    try {
+      assertFormatCapabilities('drawio', cs, 'writeback');
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    }
     const bad = cs.edits.find((e) => !SUPPORTED.has(e.op.kind));
     if (bad) return { ok: false, reason: `op ${bad.op.kind} not supported by drawio surgical` };
     return { ok: true };

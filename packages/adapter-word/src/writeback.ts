@@ -5,6 +5,7 @@
  *  · setStyle    → character formatting <w:rPr>+<w:rPrChange> and paragraph formatting <w:pPr>+<w:pPrChange> (format revisions that can be accepted/rejected individually).
  * Fidelity comes from reusing writeback-surgical's repack; this is OtterPatch's moat.
  */
+import { assertFormatCapabilities, writebackOperationKindsFor } from '@otterpatch/core';
 import type {
   ChangeSet,
   EditId,
@@ -27,7 +28,7 @@ const enc = new TextEncoder();
 // replaceText → word-level redlines; setStyle → character (rPr/rPrChange) + paragraph (pPr/pPrChange) format revisions;
 // deleteRange → whole-paragraph deletion revision (runs in <w:del> + paragraph-mark <w:del/>);
 // setObjectProps(imgAction) → image remove (drawing run in <w:del>) / resize (wp:extent in EMU)
-const SUPPORTED: ReadonlySet<EditOpKind> = new Set<EditOpKind>(['replaceText', 'setStyle', 'deleteRange', 'setObjectProps', 'insertTable']);
+const SUPPORTED: ReadonlySet<EditOpKind> = new Set(writebackOperationKindsFor('word'));
 const DOC_PART = 'word/document.xml';
 
 export interface WordRedlineOptions {
@@ -42,6 +43,11 @@ export class WordRedlineWriteback implements WritebackBackend {
   constructor(private readonly opts: WordRedlineOptions = {}) {}
 
   canHandle(cs: ChangeSet): { ok: boolean; reason?: string } {
+    try {
+      assertFormatCapabilities('word', cs, 'writeback');
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    }
     const bad = cs.edits.find((e) => !SUPPORTED.has(e.op.kind));
     if (bad) return { ok: false, reason: `word-redline supports replaceText / setStyle / deleteRange / setObjectProps / insertTable (got ${bad.op.kind})` };
     return { ok: true };

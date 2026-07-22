@@ -10,7 +10,7 @@
  *  - Strings use inlineStr (sharedStrings untouched); formulas write <f> without a cached value (Excel recalculates on open).
  */
 import { unzipSync } from 'fflate';
-import type { CellValue, ChangeSet, EditId, LogicalAnchor } from '@otterpatch/core';
+import { supportsFormatOperation, type CellValue, type ChangeSet, type EditId, type LogicalAnchor } from '@otterpatch/core';
 import type { OoxmlParts, OoxmlPatchResult } from '@otterpatch/writeback-surgical';
 import { XlsxStyles, type AbstractCellStyle } from './xlsx-styles.js';
 
@@ -215,8 +215,6 @@ function resolveStylesPath(parts: OoxmlParts): string | null {
   return k ?? null;
 }
 
-const SUPPORTED = new Set(['setValue', 'setFormula', 'setStyle', 'setNumberFormat', 'deleteRange']);
-
 /** Build the Excel OoxmlPatchCompiler: ChangeSet → sheet/styles XML patches + per-edit report. */
 export function buildXlsxCompiler() {
   return async function compile(cs: ChangeSet, original: Uint8Array): Promise<OoxmlPatchResult> {
@@ -246,7 +244,7 @@ export function buildXlsxCompiler() {
     for (const edit of cs.edits) {
       const kind = edit.op.kind;
       try {
-        if (!SUPPORTED.has(kind)) {
+        if (!supportsFormatOperation('excel', kind, 'writeback')) {
           dropped.push({ editId: edit.id, reason: `op '${kind}' 不被 xlsx 外科写回支持(需结构/对象写回后端)` });
           continue;
         }

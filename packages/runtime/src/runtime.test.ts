@@ -313,3 +313,14 @@ test('runtime: proposal signing rejects non-JSON numeric values', () => {
   };
   assert.throws(() => rt.createProposal(cs, 'excel'), /non-finite/);
 });
+
+test('runtime: built-in capability gate rejects proposals that cannot be written back', () => {
+  const rt = new OtterPatchRuntime();
+  const cs = singleCellChangeSet('unsupported-capability');
+  const unsupported: ChangeSet = {
+    ...cs,
+    edits: [{ ...cs.edits[0]!, op: { family: 'structure', kind: 'insertRows', count: 1, before: true } }],
+  };
+  assert.throws(() => rt.createProposal(unsupported, 'excel'), /does not allow propose for op insertRows/);
+  assert.equal(rt.capabilities().version, 'capabilities-v1');
+});

@@ -6,7 +6,7 @@
  * v1 limitation: target text must fall within a single <a:t> run (common for short titles/bullets);
  * text split across runs is not merged yet.
  */
-import type { ChangeSet, EditId } from '@otterpatch/core';
+import { supportsFormatOperation, type ChangeSet, type EditId } from '@otterpatch/core';
 import { readOoxmlParts, type OoxmlParts, type OoxmlPatchCompiler, type OoxmlPatchResult } from '@otterpatch/writeback-surgical';
 
 const dec = new TextDecoder();
@@ -35,7 +35,7 @@ export function buildPptxCompiler(): OoxmlPatchCompiler {
     const applied: EditId[] = [];
     const dropped: Array<{ editId: EditId; reason: string }> = [];
     for (const e of cs.edits) {
-      if (e.op.kind !== 'replaceText') {
+      if (!supportsFormatOperation('ppt', e.op.kind, 'writeback') || e.op.kind !== 'replaceText') {
         dropped.push({ editId: e.id, reason: `unsupported op ${e.op.kind}` });
         continue;
       }

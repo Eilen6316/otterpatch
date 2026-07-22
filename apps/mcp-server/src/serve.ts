@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomBytes } from 'node:crypto';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
 import { assertChangeSet } from '@otterpatch/core';
-import { createModelClient, EXCEL_OPS, type Provider } from '@otterpatch/agent';
+import { createModelClient, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
 import { OtterPatchRuntime, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
 
@@ -126,7 +126,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       }
       const url = (req.url ?? '').split('?')[0];
       if (req.method === 'GET' && url === '/health') {
-        send(req, res, 200, { ok: true, formats: rt.formats(), skills: BUILTIN_SKILLS.map((s) => s.name), excelOps: EXCEL_OPS });
+        send(req, res, 200, { ok: true, formats: rt.formats(), capabilities: rt.capabilities(), skills: BUILTIN_SKILLS.map((s) => s.name) });
         return;
       }
       if (req.method === 'POST' && !hasValidToken(req)) {
@@ -241,6 +241,6 @@ server.listen(PORT, HOST, () => {
   process.stderr.write(`\n[otterpatch] serve on http://${HOST}:${PORT}\n`);
   process.stderr.write(AUTH_TOKEN ? '[otterpatch] POST auth enabled via X-OtterPatch-Token.\n' : '[otterpatch] POST auth disabled; set OtterPatch_TOKEN to require X-OtterPatch-Token. Suggested token: ' + generatedToken + '\n');
   process.stderr.write(configuredReviewToken ? '[otterpatch] Review authority enabled via X-OtterPatch-Review-Token.\n' : '[otterpatch] Generated review token: ' + REVIEW_TOKEN + '\n');
-  process.stderr.write(`[otterpatch] Excel ops (${EXCEL_OPS.length}): ${EXCEL_OPS.join(', ')}\n`);
+  process.stderr.write(`[otterpatch] Capability manifest: ${rt.capabilities().version}\n`);
   process.stderr.write('[otterpatch] If expected Excel ops are missing, restart npm run serve.\n\n');
 });

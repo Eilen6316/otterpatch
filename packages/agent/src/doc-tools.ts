@@ -116,7 +116,7 @@ export function getStyleUsage(doc: DocSnapshot): string {
   const rows = [...groups].sort((a, b) => b[1].length - a[1].length)
     .map(([k, ids]) => `${k} —— ${ids.length} 段(如 第${ids.slice(0, 5).join('、')}段${ids.length > 5 ? '…' : ''})`);
   const bodyKinds = [...groups.keys()].filter((k) => k.startsWith('正文')).length;
-  const hint = bodyKinds > 1 ? `\n⚠ 正文出现 ${bodyKinds} 种排版组合 —— 基线不统一,规范化时可用 all=true 一次拉齐(注意别动标题)。` : '';
+  const hint = bodyKinds > 1 ? `\n⚠ 正文出现 ${bodyKinds} 种排版组合 —— 基线不统一;当前需按段落逐条提出可审阅的格式改动,不要生成无锚点的全文样式。` : '';
   return `样式使用分布(${groups.size} 种组合 / ${doc.blocks.length} 段):\n` + rows.join('\n') + hint;
 }
 

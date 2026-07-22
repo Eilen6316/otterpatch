@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { DocRev } from '@otterpatch/core';
-import { Agent, ConventionStack, MockModelClient, OpenAICompatModelClient, conventionFromMarkdown, createModelClient, excelDialect, normalizeMessages, PROVIDERS, type Provider } from './index.js';
+import { Agent, ConventionStack, EXCEL_OPS, MockModelClient, OpenAICompatModelClient, conventionFromMarkdown, createModelClient, excelDialect, normalizeMessages, PROVIDERS, wordDialect, type Provider } from './index.js';
 import { defaultLibrary } from '@otterpatch/skills';
 
 test('Agent excel: 意图 + Mock → grid setValue ChangeSet', async () => {
@@ -37,6 +37,13 @@ test('Agent drawio: 意图 + Mock → object ChangeSet(按 mxCell id)', async ()
   const anchor = cs.anchors[e.target]!;
   assert.equal(anchor.portable.kind, 'object');
   assert.equal(anchor.portable.kind === 'object' && anchor.portable.elementId, '2');
+});
+
+test('Agent capability surfaces expose only operations with verified writeback', () => {
+  assert.deepEqual(EXCEL_OPS, ['setValue', 'setFormula', 'setStyle', 'setNumberFormat', 'clear']);
+  const excelSurface = excelDialect.systemPrompt + JSON.stringify(excelDialect.parameters);
+  assert.doesNotMatch(excelSurface, /insertRows|deleteRows|merge|freeze|condFormat|dataValidation|chart|addSheet/);
+  assert.doesNotMatch(wordDialect.systemPrompt + JSON.stringify(wordDialect.parameters), /all=true|"all"/);
 });
 
 test('Agent word: 二维 table 提案 → insertTable ChangeSet', async () => {

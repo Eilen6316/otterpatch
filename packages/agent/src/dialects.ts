@@ -2,7 +2,8 @@
  * Host dialects: Excel (A1 + setValue/setFormula) and drawio (mxCell id + add/update/delete/move).
  * Each format has its own system prompt, tool schema, and raw-proposal → ChangeSet construction.
  */
-import type { AnchorId, CellValue, ChangeSet, Edit, EditOp, HostId, LogicalAnchor } from '@otterpatch/core';
+import { proposalOperationNamesFor } from '@otterpatch/core';
+import type { AnchorId, CellValue, ChangeSet, Edit, EditOp, EditOpKind, HostId, LogicalAnchor } from '@otterpatch/core';
 import type { HostDialect, ProposeRequest } from './model.js';
 import {
   EXCEL_SYSTEM, EXCEL_TOOL_DESC, DRAWIO_SYSTEM, DRAWIO_TOOL_DESC,
@@ -35,16 +36,16 @@ export interface ExcelStyle {
   bgColor?: string; // fill/background color (red-flag highlighting means bgColor)
   align?: 'left' | 'center' | 'right';
 }
-/** Excel supported ops (single source of truth: used by both the schema and the serve startup banner, to verify serve is up to date). */
-export const EXCEL_OPS = [
-  'setValue', 'setFormula', 'setStyle', 'setNumberFormat',
-  'insertRows', 'deleteRows', 'insertCols', 'deleteCols',
-  'merge', 'unmerge', 'freeze', 'clear', 'sort',
-  'condFormat', 'dataValidation', 'filter', 'chart', 'addSheet', 'copy',
-] as const;
-export type ExcelOp = (typeof EXCEL_OPS)[number];
-export type CondWhen = 'greaterThan' | 'greaterThanOrEqual' | 'lessThan' | 'between' | 'equalTo' | 'textContains' | 'notEmpty' | 'formula';
-export type DvKind = 'list' | 'numberBetween' | 'numberGreaterThan' | 'checkbox' | 'dateBetween';
+const EXCEL_OP_BY_NAME = {
+  setValue: 'setValue',
+  setFormula: 'setFormula',
+  setStyle: 'setStyle',
+  setNumberFormat: 'setNumberFormat',
+  clear: 'deleteRange',
+} as const satisfies Record<string, EditOpKind>;
+export type ExcelOp = keyof typeof EXCEL_OP_BY_NAME;
+export const EXCEL_OPS = proposalOperationNamesFor('excel') as ExcelOp[];
+if (EXCEL_OPS.some((op) => !(op in EXCEL_OP_BY_NAME))) throw new Error('Excel capability manifest has no dialect mapping');
 export interface ExcelProposal {
   plan: string;
   edits: Array<{
@@ -54,26 +55,6 @@ export interface ExcelProposal {
     formula?: string;
     style?: ExcelStyle;
     pattern?: string; // setNumberFormat number format, e.g. 0% / "¥"#,##0.00
-    count?: number; // insert/delete row/column count
-    before?: boolean; // insert before the target
-    rows?: number; // freeze: number of rows to freeze
-    cols?: number; // freeze: number of columns to freeze
-    by?: number; // sort key column (0-based within range)
-    asc?: boolean; // sort ascending
-    when?: CondWhen; // condFormat condition
-    v1?: number | string; // condFormat operand 1 / between lower bound
-    v2?: number; // condFormat between upper bound
-    rule?: DvKind; // dataValidation kind
-    list?: string[]; // dataValidation dropdown options
-    min?: number; // dataValidation numberBetween lower bound
-    max?: number; // dataValidation numberBetween upper bound
-    v?: number; // dataValidation numberGreaterThan threshold
-    chartType?: 'bar' | 'line' | 'pie'; // chart type
-    title?: string; // chart title
-    categories?: string[]; // chart inline categories (x-axis/sector names); if given = inline mode, cell is the placement anchor, no summary table is written
-    series?: { name: string; data: number[] }[]; // chart inline series; each data must match categories length
-    name?: string; // addSheet: new sheet name
-    to?: string; // copy: destination top-left cell (may carry sheet prefix, e.g. Sheet2!A1)
   }>;
 }
 
@@ -100,27 +81,7 @@ function buildExcelChangeSet(req: ProposeRequest, p: ExcelProposal): ChangeSet {
       case 'setFormula': op = { family: 'value', kind: 'setFormula', formula: e.formula ?? '' }; break;
       case 'setStyle': op = { family: 'style', kind: 'setStyle', style: e.style ?? {} }; break;
       case 'setNumberFormat': op = { family: 'style', kind: 'setNumberFormat', pattern: e.pattern ?? 'General' }; break;
-      case 'insertRows': op = { family: 'structure', kind: 'insertRows', count: e.count ?? 1, before: e.before ?? true }; break;
-      case 'deleteRows': op = { family: 'structure', kind: 'deleteRows', count: e.count ?? 1 }; break;
-      case 'insertCols': op = { family: 'structure', kind: 'insertCols', count: e.count ?? 1, before: e.before ?? true }; break;
-      case 'deleteCols': op = { family: 'structure', kind: 'deleteCols', count: e.count ?? 1 }; break;
-      case 'merge': op = { family: 'structure', kind: 'mergeCells' }; break;
-      case 'unmerge': op = { family: 'structure', kind: 'unmergeCells' }; break;
-      case 'freeze': op = { family: 'structure', kind: 'freezePanes', rows: e.rows ?? 1, cols: e.cols ?? 0 }; break;
-      case 'sort': op = { family: 'structure', kind: 'sortRange', by: e.by ?? 0, asc: e.asc ?? true }; break;
-      case 'condFormat': op = { family: 'style', kind: 'conditionalFormat', when: e.when ?? 'notEmpty', ...(e.v1 != null ? { v1: e.v1 } : {}), ...(e.v2 != null ? { v2: e.v2 } : {}), style: e.style ?? {} }; break;
-      case 'dataValidation': op = { family: 'style', kind: 'dataValidation', rule: e.rule ?? 'list', ...(e.list ? { list: e.list } : {}), ...(e.min != null ? { min: e.min } : {}), ...(e.max != null ? { max: e.max } : {}), ...(e.v != null ? { v: e.v } : {}) }; break;
-      case 'filter': op = { family: 'structure', kind: 'autoFilter' }; break;
-      case 'chart':
-        // Inline mode (preferred for pivot-style charts): categories/series carry the data directly, cell = anchor cell for chart placement, no summary table written into the sheet.
-        // Range mode (charting existing data): no categories, cell = data range including headers.
-        op = e.categories?.length
-          ? { family: 'object', kind: 'insertChart', chartType: e.chartType ?? 'bar', title: e.title ?? '图表', categories: e.categories, series: e.series ?? [], anchor: e.cell }
-          : { family: 'object', kind: 'insertChart', chartType: e.chartType ?? 'bar', title: e.title ?? '图表', range: e.cell };
-        break;
       case 'clear': op = { family: 'value', kind: 'deleteRange' }; break;
-      case 'addSheet': op = { family: 'structure', kind: 'addSheet', name: e.name ?? '新表' }; break;
-      case 'copy': op = { family: 'structure', kind: 'copyRange', to: e.to ?? 'A1' }; break;
       case 'setValue': op = { family: 'value', kind: 'setValue', value: (e.value ?? null) as CellValue }; break;
       default: throw new Error('excel dialect: unknown op ' + (e as { op: string }).op);
     }
@@ -143,7 +104,7 @@ export const excelDialect: HostDialect = {
         items: {
           type: 'object',
           properties: {
-            cell: { type: 'string', description: 'A1 引用:单格如 B2;范围如 A1:C3(merge/clear/sort 用范围);插删行用该行任一格(如 A5),插删列用该列任一格(如 C1);freeze 用 A1;chart 内联模式时填放置图表的空白格(如 H2),范围模式时填含表头的数据范围' },
+            cell: { type: 'string', description: 'A1 引用:单格如 B2;setStyle/setNumberFormat/clear 可用范围如 A1:C3;多表必须带真实表名前缀如 Sheet2!B3' },
             op: { type: 'string', enum: [...EXCEL_OPS] },
             value: { description: 'setValue 的新值(字符串/数字/布尔/空)' },
             formula: { type: 'string', description: 'setFormula 的公式,如 =C2*D2' },
@@ -159,26 +120,6 @@ export const excelDialect: HostDialect = {
               },
             },
             pattern: { type: 'string', description: 'setNumberFormat 的数字格式,如 0% 或 "¥"#,##0.00' },
-            count: { type: 'number', description: 'insert/delete 行列的数量(默认 1)' },
-            before: { type: 'boolean', description: 'insertRows/insertCols 在目标行/列之前插入(默认 true)' },
-            rows: { type: 'number', description: 'freeze 冻结的行数' },
-            cols: { type: 'number', description: 'freeze 冻结的列数' },
-            by: { type: 'number', description: 'sort 排序依据列(范围内从 0 起)' },
-            asc: { type: 'boolean', description: 'sort 升序(默认 true)' },
-            when: { type: 'string', enum: ['greaterThan', 'greaterThanOrEqual', 'lessThan', 'between', 'equalTo', 'textContains', 'notEmpty', 'formula'], description: 'condFormat 条件;配合 style 给满足条件的格式' },
-            v1: { description: 'condFormat 操作数(>、<、=、between 下界、textContains 文本、formula 公式)' },
-            v2: { type: 'number', description: 'condFormat between 的上界' },
-            rule: { type: 'string', enum: ['list', 'numberBetween', 'numberGreaterThan', 'checkbox', 'dateBetween'], description: 'dataValidation 类型' },
-            list: { type: 'array', items: { type: 'string' }, description: 'dataValidation=list 的下拉选项' },
-            min: { type: 'number', description: 'dataValidation numberBetween 下界' },
-            max: { type: 'number', description: 'dataValidation numberBetween 上界' },
-            v: { type: 'number', description: 'dataValidation numberGreaterThan 阈值' },
-            chartType: { type: 'string', enum: ['bar', 'line', 'pie'], description: 'chart 图表类型' },
-            title: { type: 'string', description: 'chart 标题' },
-            categories: { type: 'array', items: { type: 'string' }, description: 'chart 内联类别(x 轴/扇区名)。做透视图首选:把 aggregate 算出的各组名放这里 → 不写汇总表、表格保持干净;此时 cell 改填【放置图表的左上角空白格】(如 H2)' },
-            name: { type: 'string', description: 'addSheet:新工作表名(如 Sheet2);cell 填 A1 即可' },
-            to: { type: 'string', description: 'copy:目标左上角格,可带表名前缀(如 Sheet2!A1)——把 cell 源区域的值/公式/数字格式整块搬过去' },
-            series: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, data: { type: 'array', items: { type: 'number' } } }, required: ['name', 'data'] }, description: 'chart 内联系列:[{name:系列名, data:[数值...]}],每个 data 与 categories 等长' },
           },
           required: ['cell', 'op'],
         },
@@ -328,8 +269,7 @@ export interface WordProposal {
     tableHeaderRows?: number;
     tableAt?: 'before' | 'after' | 'end';
     replacement?: string; // text rewrite: if given, replaces the original text
-    // Formatting (any present = format edit, replacement not needed); all=true means whole document, quote may be omitted
-    all?: boolean;
+    // Formatting (any present = format edit, replacement not needed).
     bold?: boolean;
     italic?: boolean;
     underline?: boolean;
@@ -341,7 +281,7 @@ export interface WordProposal {
     lineSpacing?: number; // line spacing multiple: 1 / 1.5 / 2
     bgColor?: string; // paragraph shading color
     block?: 'h1' | 'h2' | 'h3' | 'p' | 'blockquote'; // paragraph style: heading 1-3 / body / blockquote
-    // Page-level (requires all=true): columns / margins / orientation — key params for IEEE two-column layouts etc.
+    // Page-level: columns / margins / orientation use an empty document anchor.
     columns?: number;
     margin?: 'narrow' | 'normal' | 'moderate' | 'wide';
     orient?: 'portrait' | 'landscape';
@@ -353,7 +293,7 @@ function buildWordChangeSet(req: ProposeRequest, p: WordProposal): ChangeSet {
   const edits: Edit[] = [];
   (p.edits ?? []).forEach((e, i) => {
     const aid = ('a' + i) as AnchorId;
-    const quoteText = e.all ? '' : (e.quote ?? '');
+    const quoteText = e.quote ?? '';
     anchors[aid] = {
       id: aid,
       hostId: req.hostId as HostId,
@@ -416,7 +356,7 @@ export const wordDialect: HostDialect = {
         items: {
           type: 'object',
           properties: {
-            quote: { type: 'string', description: '文档中真实存在的原文片段(用于定位);改格式时也用它选中要套格式的文字。全文操作可配合 all=true 省略;空段落/无法唯一定位时给空串并用 para 段号锚定' },
+            quote: { type: 'string', description: '文档中真实存在的原文片段(用于定位);局部格式也必须用它选中目标。页面设置使用空串;空段落或无法唯一定位时给空串并用 para 段号锚定' },
             para: { type: 'number', description: '段号(1-based,即上下文/read_blocks 里的"第N段")。空段落、重复文本等 quote 无法唯一定位时用它锚定整段;给了 para 时 quote 可为空串' },
             deletePara: { type: 'boolean', description: '结构操作:true=删除 para(或 quote)所在的整段(清理空段落/删除冗余段落)。不要同时给 replacement 或格式字段' },
             img: { type: 'string', enum: ['remove', 'resize'], description: '图片操作:对锚定段落里的图片(上下文标注为 [图片 …] 的段)remove=删除该图 / resize=调宽(配 imgWidth)。锚定用 para 段号或该段 quote' },
@@ -431,7 +371,6 @@ export const wordDialect: HostDialect = {
             tableHeaderRows: { type: 'integer', minimum: 0, maximum: 100, description: '表头行数,默认 1;无表头给 0' },
             tableAt: { type: 'string', enum: ['before', 'after', 'end'], description: '表格插入位置:end=文档末尾(quote 给空串);before/after=锚定段前/后(须 quote 或 para)' },
             replacement: { type: 'string', description: '文本改写:改后的文字(给了它即为"替换原文"。要改格式就别给它)' },
-            all: { type: 'boolean', description: '格式改动作用于【全文】(如"全文宋体五号");true 时可不给 quote' },
             bold: { type: 'boolean', description: '加粗:true 设为加粗、false 取消加粗' },
             italic: { type: 'boolean', description: '斜体' },
             underline: { type: 'boolean', description: '下划线' },
@@ -442,9 +381,9 @@ export const wordDialect: HostDialect = {
             lineSpacing: { type: 'number', description: '行距倍数(作用于整段),如 1 / 1.5 / 2' },
             bgColor: { type: 'string', description: '段落底纹色,如 #fff3cd' },
             block: { type: 'string', enum: ['h1', 'h2', 'h3', 'p', 'blockquote'], description: '段落样式:h1/h2/h3=标题1/2/3、p=正文、blockquote=引用(如"把这行设为标题2""这段改成引用")' },
-            columns: { type: 'number', enum: [1, 2, 3], description: '【页面级,须 all=true】分栏数:2=双栏(IEEE/论文版式)、1=恢复单栏' },
-            margin: { type: 'string', enum: ['narrow', 'normal', 'moderate', 'wide'], description: '【页面级,须 all=true】页边距预设:narrow 窄 / normal 常规 / moderate 适中 / wide 宽' },
-            orient: { type: 'string', enum: ['portrait', 'landscape'], description: '【页面级,须 all=true】纸张方向:portrait 纵向 / landscape 横向' },
+            columns: { type: 'number', enum: [1, 2, 3], description: '【页面级,须 quote="" 且不带局部格式字段】分栏数:2=双栏、1=恢复单栏' },
+            margin: { type: 'string', enum: ['narrow', 'normal', 'moderate', 'wide'], description: '【页面级,须 quote="" 且不带局部格式字段】页边距预设' },
+            orient: { type: 'string', enum: ['portrait', 'landscape'], description: '【页面级,须 quote="" 且不带局部格式字段】纸张方向' },
           },
           required: ['quote'],
         },

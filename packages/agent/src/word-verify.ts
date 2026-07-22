@@ -24,7 +24,9 @@ export function buildDocVerifier(docText: string): (cs: ChangeSet) => VerifyRepo
       const a = cs.anchors[e.target];
       const quote = a?.portable.kind === 'flow' ? a.portable.quote.text : '';
       const paraIdx = a?.portable.kind === 'flow' ? a.portable.path[0] : undefined;
-      const isStyle = e.op.kind === 'setStyle';
+      const isPageStyle = e.op.kind === 'setStyle'
+        && Object.keys(e.op.style).length > 0
+        && Object.keys(e.op.style).every((key) => key === 'columns' || key === 'margin' || key === 'orient');
       const isEndTable = e.op.kind === 'insertTable' && e.op.at === 'end';
       // Appending a table to the document body has no source anchor by design.
       if (isEndTable) continue;
@@ -34,8 +36,8 @@ export function buildDocVerifier(docText: string): (cs: ChangeSet) => VerifyRepo
         else if (paraIdx >= paraCount * 2 + 50) warnings.push(`para=${paraIdx + 1} 远超全文段数(约 ${paraCount} 段),请核对上下文里的"第N段"编号`);
         continue;
       }
-      // Document-wide style edits (all=true) have no quote anchor and always land — skip location check
-      if (isStyle && !quote) continue;
+      // Page settings land in sectPr and intentionally use a document-level empty anchor.
+      if (isPageStyle && !quote) continue;
       if (!quote) {
         errors.push('有一条改动没有可定位的原文片段(quote 为空)也没有 para 段号,无法落地;空段落/无法唯一引用时请给 para=段号');
         continue;

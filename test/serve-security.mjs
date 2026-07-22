@@ -27,6 +27,10 @@ try {
   await waitForHealth();
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
+  const healthBody = await health.json();
+  assert.equal(healthBody.capabilities?.version, 'capabilities-v1');
+  const excelCapabilities = healthBody.capabilities?.formats?.find((entry) => entry.format === 'excel');
+  assert.deepEqual(excelCapabilities?.operations?.map((entry) => entry.proposalName || entry.op), ['setValue', 'setFormula', 'setStyle', 'setNumberFormat', 'clear']);
 
   const badOrigin = await fetch(`http://127.0.0.1:${port}/health`, { headers: { Origin: 'http://evil.test' } });
   assert.equal(badOrigin.status, 403);

@@ -96,6 +96,7 @@ npm test -w @otterpatch/writeback-surgical
 - [x] Agent turn: natural-language intent → constrained `ChangeSet` (BYOK, 8 providers)
 - [x] drawio adapter: mxCell add/delete/setProps/move + diagram-level surgical write-back
 - [x] Headless runtime: signed review → per-document single-writer queue → risk enforcement → surgical write-back → mandatory backend verification
+- [x] Versioned capability manifest drives model operation exposure, runtime gates, backend support, signed proposals, and `/health`
 - [x] MCP server + headless CLI with a JSON event stream (BYOK)
 - [x] Word redline + PDF form-fill + PowerPoint slide-text adapters — propose→commit for excel/word/pdf/ppt/drawio
 - [x] Ribbon formatting applies to the live selection (bold/italic/colors/align/number-format)
