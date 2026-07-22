@@ -19,7 +19,7 @@
     "@otterpatch/core": "0.0.1",
     "@otterpatch/agent": "0.0.1",
     "@otterpatch/runtime": "0.0.1",
-    "@modelcontextprotocol/sdk": "latest",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
