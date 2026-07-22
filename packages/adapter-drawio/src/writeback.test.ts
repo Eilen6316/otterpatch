@@ -56,7 +56,7 @@ test('drawio 写回:add + delete 跨两个 diagram', async () => {
     origin: { by: 'agent', sessionId: 't' },
     meta: { intent: 'add+delete' },
     edits: [
-      { id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'addObject', payload: { id: 'n1', value: '新节点', vertex: true, geometry: { x: 10, y: 10, width: 80, height: 40 } } } },
+      { id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'addObject', payload: { id: 'n1', value: '新节点', vertex: true, parent: '1', geometry: { x: 10, y: 10, width: 80, height: 40 } } } },
       { id: 'e1', target: 'a1' as AnchorId, op: { family: 'object', kind: 'deleteObject' } },
     ],
   };
@@ -85,7 +85,7 @@ test('drawio writeback: out-of-range diagram reports dropped edit', async () => 
   assert.match(res.droppedEdits?.[0]?.reason ?? '', /out of range/);
 });
 
-test('drawio writeback: rejects unsafe mxCell attrs and invalid geometry per edit', async () => {
+test('drawio writeback: validates ChangeSets at the commit boundary', async () => {
   const base = {
     id: 'cs-unsafe',
     hostId: 'h1',
@@ -94,18 +94,28 @@ test('drawio writeback: rejects unsafe mxCell attrs and invalid geometry per edi
     origin: { by: 'agent' as const, sessionId: 't' },
     meta: { intent: 'unsafe' },
   };
-  const res = await new DrawioSurgicalWriteback().commit({
+  for (const name of ['id', 'parent', 'source', 'target']) {
+    const cs = {
+      ...base,
+      edits: [
+        { id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'setObjectProps', props: { [name]: 'replacement' } } },
+      ],
+    } as unknown as ChangeSet;
+    assert.equal(new DrawioSurgicalWriteback().canHandle(cs).ok, false);
+    await assert.rejects(
+      () => new DrawioSurgicalWriteback().commit(cs, { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev }),
+      new RegExp(`unsupported fields: ${name}`),
+    );
+  }
+
+  const invalidGeometry = {
     ...base,
     edits: [
-      { id: 'e0', target: 'a0' as AnchorId, op: { family: 'object' as const, kind: 'setObjectProps' as const, props: { 'value" onclick="alert(1)': 'x' } } },
-      { id: 'e1', target: 'a1' as AnchorId, op: { family: 'object' as const, kind: 'addObject' as const, payload: { id: 'n1', vertex: true, geometry: { x: Number.NaN } } } },
+      { id: 'e1', target: 'a1' as AnchorId, op: { family: 'object', kind: 'addObject', payload: { id: 'n1', vertex: true, parent: '1', geometry: { x: Number.NaN } } } },
     ],
-  }, { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev });
-
-  assert.equal(res.ok, false);
-  assert.deepEqual(res.appliedEditIds, []);
-  assert.equal(res.droppedEdits?.length, 2);
-  const out = dec.decode(res.bytes);
-  assert.doesNotMatch(out, /onclick/);
-  assert.doesNotMatch(out, /id="n1"/);
+  } as unknown as ChangeSet;
+  await assert.rejects(
+    () => new DrawioSurgicalWriteback().commit(invalidGeometry, { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev }),
+    /must be finite/,
+  );
 });

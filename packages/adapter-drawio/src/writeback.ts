@@ -9,7 +9,7 @@
  * Only uncompressed diagrams are supported; compressed ones (deflateRaw+base64) throw
  * with a hint to set compressed=false.
  */
-import { assertFormatCapabilities, writebackOperationKindsFor } from '@otterpatch/core';
+import { assertChangeSet, assertFormatCapabilities, writebackOperationKindsFor } from '@otterpatch/core';
 import type {
   ChangeSet,
   DocHandle,
@@ -24,29 +24,32 @@ import type {
   WritebackKind,
   WritebackResult,
 } from '@otterpatch/core';
-import { applyEditsToModel, type DrawioEdit, type DrawioObjectSpec } from './mxgraph.js';
+import { applyEditsToModel, type DrawioDisplayProps, type DrawioEdit, type DrawioObjectSpec } from './mxgraph.js';
 
 const dec = new TextDecoder();
 const encd = new TextEncoder();
 const DIAGRAM_RE = /<diagram\b([^>]*)>([\s\S]*?)<\/diagram>/g;
 const attrOf = (s: string, n: string): string | undefined => new RegExp(`\\b${n}="([^"]*)"`).exec(s)?.[1];
-const stringifyProps = (p: Record<string, unknown>): Record<string, string> =>
-  Object.fromEntries(Object.entries(p).map(([k, v]) => [k, String(v)]));
-
 const SUPPORTED: ReadonlySet<EditOpKind> = new Set(writebackOperationKindsFor('drawio'));
+
+function displayProps(props: Record<string, unknown>): DrawioDisplayProps {
+  return {
+    ...(typeof props.value === 'string' ? { value: props.value } : {}),
+    ...(typeof props.style === 'string' ? { style: props.style } : {}),
+  };
+}
 
 function mapOp(anchor: LogicalAnchor, op: EditOp): DrawioEdit {
   const cellId = anchor.portable.kind === 'object' ? anchor.portable.elementId : '';
   if (op.family === 'object') {
     switch (op.kind) {
       case 'setObjectProps':
-        return { cellId, op: { kind: 'setProps', props: stringifyProps(op.props) } };
+        return { cellId, op: { kind: 'setProps', props: displayProps(op.props) } };
       case 'moveObject':
         return { cellId, op: { kind: 'move', box: { x: op.box.left, y: op.box.top, width: op.box.width, height: op.box.height } } };
       case 'addObject': {
         if (!op.payload || typeof op.payload !== 'object') throw new Error('drawio: addObject payload must be an object');
         const spec = { ...(op.payload as DrawioObjectSpec) };
-        if (spec.parent == null && cellId) spec.parent = cellId;
         return { cellId, op: { kind: 'add', spec } };
       }
       case 'deleteObject':
@@ -65,6 +68,7 @@ export class DrawioSurgicalWriteback implements WritebackBackend {
 
   canHandle(cs: ChangeSet): { ok: boolean; reason?: string } {
     try {
+      assertChangeSet(cs);
       assertFormatCapabilities('drawio', cs, 'writeback');
     } catch (error) {
       return { ok: false, reason: error instanceof Error ? error.message : String(error) };
@@ -80,6 +84,9 @@ export class DrawioSurgicalWriteback implements WritebackBackend {
 
   async commit(cs: ChangeSet, doc: DocHandle): Promise<WritebackResult> {
     if (!doc.bytes) throw new Error('DrawioSurgicalWriteback.commit: DocHandle.bytes required');
+    assertChangeSet(cs);
+    const support = this.canHandle(cs);
+    if (!support.ok) throw new Error(`DrawioSurgicalWriteback cannot handle ChangeSet: ${support.reason ?? 'unsupported'}`);
     const xml = dec.decode(doc.bytes);
     const matches = [...xml.matchAll(DIAGRAM_RE)];
 

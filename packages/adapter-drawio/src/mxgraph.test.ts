@@ -43,3 +43,15 @@ test('特殊字符转义', () => {
   const out = applyEditsToModel(MODEL, [{ cellId: '3', op: { kind: 'setProps', props: { value: 'a<b&c"' } } }]);
   assert.match(out, /id="3"[^>]*value="a&lt;b&amp;c&quot;"/);
 });
+
+test('setProps rejects identity and topology attributes', () => {
+  for (const name of ['id', 'parent', 'source', 'target']) {
+    assert.throws(
+      () => applyEditsToModel(MODEL, [{
+        cellId: '2',
+        op: { kind: 'setProps', props: { [name]: 'replacement' } },
+      } as never]),
+      new RegExp(`immutable mxCell attribute ${name}`),
+    );
+  }
+});

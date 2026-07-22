@@ -16,8 +16,13 @@ export interface DrawioObjectSpec {
   geometry?: { x?: number; y?: number; width?: number; height?: number };
 }
 
+export interface DrawioDisplayProps {
+  value?: string;
+  style?: string;
+}
+
 export type DrawioOp =
-  | { kind: 'setProps'; props: Record<string, string> } // value / style / … attributes
+  | { kind: 'setProps'; props: DrawioDisplayProps }
   | { kind: 'move'; box: { x?: number; y?: number; width?: number; height?: number } }
   | { kind: 'add'; spec: DrawioObjectSpec }
   | { kind: 'delete' };
@@ -39,10 +44,10 @@ const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 
-const SAFE_CELL_ATTRS = new Set(['id', 'value', 'style', 'vertex', 'edge', 'parent', 'source', 'target']);
+const MUTABLE_CELL_ATTRS = new Set(['value', 'style']);
 const SAFE_GEOMETRY_ATTRS = new Set(['x', 'y', 'width', 'height']);
-function assertSafeCellAttr(name: string): void {
-  if (!SAFE_CELL_ATTRS.has(name)) throw new Error('drawio: unsupported mxCell attribute ' + name);
+function assertMutableCellAttr(name: string): void {
+  if (!MUTABLE_CELL_ATTRS.has(name)) throw new Error('drawio: immutable mxCell attribute ' + name);
 }
 function assertSafeGeometryAttr(name: string, value: number): void {
   if (!SAFE_GEOMETRY_ATTRS.has(name)) throw new Error('drawio: unsupported mxGeometry attribute ' + name);
@@ -72,7 +77,7 @@ const serializeCells = (cells: Cell[]): string => cells.map((c) => c.raw).join('
 
 /** Set an attribute on a single tag string (up to the first >): replace if present, else insert before > or />. */
 function setTagAttr(tag: string, name: string, val: string): string {
-  assertSafeCellAttr(name);
+  assertMutableCellAttr(name);
   const re = new RegExp(`(\\b${name}=")[^"]*(")`);
   if (re.test(tag)) return tag.replace(re, `$1${esc(val)}$2`);
   return tag.replace(/(\s*\/?>)\s*$/, ` ${name}="${esc(val)}"$1`);
@@ -146,9 +151,13 @@ export function applyEdits(cells: Cell[], edits: DrawioEdit[]): Cell[] {
     let raw = arr[i]!.raw;
     if (ed.op.kind === 'setProps') {
       const props = ed.op.props;
+      if (Object.keys(props).length === 0) throw new Error('drawio: setProps requires value or style');
       raw = editOpenTag(raw, (t) => {
         let tt = t;
-        for (const [k, v] of Object.entries(props)) tt = setTagAttr(tt, k, v);
+        for (const [k, v] of Object.entries(props)) {
+          if (typeof v !== 'string') throw new Error(`drawio: ${k} must be a string`);
+          tt = setTagAttr(tt, k, v);
+        }
         return tt;
       });
     } else {
