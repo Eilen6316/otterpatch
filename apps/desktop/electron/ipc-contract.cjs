@@ -5,9 +5,10 @@ const MAX_CONTEXT_CHARS = 300_000;
 const MAX_INTENT_CHARS = 100_000;
 const MAX_API_KEY_CHARS = 8_192;
 const MAX_EDIT_IDS = 500;
+const SHA256_RX = /^[a-f0-9]{64}$/;
 const FORMATS = new Set(['excel', 'xlsx', 'word', 'docx', 'drawio', 'pdf', 'ppt', 'pptx']);
 const PROPOSE_KEYS = new Set([
-  'format', 'intent', 'context', 'baseRev', 'provider', 'model', 'apiKey', 'documentId',
+  'format', 'intent', 'context', 'baseRev', 'sourceFileSha256', 'provider', 'model', 'apiKey', 'documentId',
   'sheet', 'board', 'doc', 'ppt', 'history',
 ]);
 const COMMIT_KEYS = new Set(['format', 'fileBase64', 'changeSet', 'proposal', 'acceptedEditIds']);
@@ -31,6 +32,15 @@ function validateProposeInvocation(value) {
   optionalString(payload.documentId, 'documentId', 2_048);
   if (payload.baseRev !== undefined && (!Number.isSafeInteger(payload.baseRev) || payload.baseRev < 0)) {
     throw new Error('baseRev must be a non-negative safe integer');
+  }
+  if (payload.sourceFileSha256 !== undefined) {
+    if (typeof payload.sourceFileSha256 !== 'string' || !SHA256_RX.test(payload.sourceFileSha256)) {
+      throw new Error('sourceFileSha256 must be 64 lowercase hex characters');
+    }
+    const derivedRev = Number.parseInt(payload.sourceFileSha256.slice(0, 13), 16);
+    if (payload.baseRev !== derivedRev) throw new Error('baseRev must match sourceFileSha256');
+    const expectedDocumentId = `${String(payload.format).toLowerCase()}:sha256:${payload.sourceFileSha256}`;
+    if (payload.documentId !== expectedDocumentId) throw new Error('documentId must match sourceFileSha256');
   }
   return { requestId, body: boundedJson(payload, 'propose payload') };
 }

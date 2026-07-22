@@ -1,48 +1,59 @@
+import { docRevFromSha256, type DocRev } from '@otterpatch/core';
 import type { WorkspaceFormat } from './workspace-format.js';
 
 export interface FileSnapshot {
   format: WorkspaceFormat;
   name: string;
   byteLength: number;
-  hash: string;
+  sha256: string;
+  revision: DocRev;
   drawioSourceEncoding?: 'uncompressed' | 'compressed';
 }
 
-export function makeFileSnapshot(format: WorkspaceFormat, name: string, fileBase64: string, drawioSourceEncoding?: FileSnapshot['drawioSourceEncoding']): FileSnapshot {
+export async function makeFileSnapshot(format: WorkspaceFormat, name: string, fileBase64: string, drawioSourceEncoding?: FileSnapshot['drawioSourceEncoding']): Promise<FileSnapshot> {
+  const bytes = decodeBase64(fileBase64);
+  const sha256 = await sha256Hex(bytes);
   return {
     format,
     name,
-    byteLength: decodedBase64Length(fileBase64),
-    hash: hashString(fileBase64),
+    byteLength: bytes.byteLength,
+    sha256,
+    revision: docRevFromSha256(sha256),
     ...(format === 'drawio' && drawioSourceEncoding ? { drawioSourceEncoding } : {}),
   };
 }
 
 export function sameFileSnapshot(a: FileSnapshot | null | undefined, b: FileSnapshot | null | undefined): boolean {
-  return !!a && !!b && a.format === b.format && a.name === b.name && a.byteLength === b.byteLength && a.hash === b.hash
+  return !!a && !!b && a.format === b.format && a.name === b.name && a.byteLength === b.byteLength && a.sha256 === b.sha256
+    && a.revision === b.revision
     && a.drawioSourceEncoding === b.drawioSourceEncoding;
 }
 
-function decodedBase64Length(value: string): number {
+export function fileSnapshotDocumentId(snapshot: FileSnapshot): string {
+  return `${snapshot.format}:sha256:${snapshot.sha256}`;
+}
+
+export function proposalMatchesFileSnapshot(proposal: unknown, snapshot: FileSnapshot): boolean {
+  if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal)) return false;
+  const value = proposal as Record<string, unknown>;
+  return value.sourceFileSha256 === snapshot.sha256
+    && value.baseRev === snapshot.revision
+    && value.documentId === fileSnapshotDocumentId(snapshot)
+    && value.format === snapshot.format;
+}
+
+function decodeBase64(value: string): Uint8Array {
   const clean = value.replace(/\s/g, '');
-  if (!clean) return 0;
-  const padding = clean.endsWith('==') ? 2 : clean.endsWith('=') ? 1 : 0;
-  return Math.max(0, Math.floor((clean.length * 3) / 4) - padding);
+  const binary = atob(clean);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
-function hashString(value: string): string {
-  let h1 = 0x811c9dc5;
-  let h2 = 0x01000193 ^ value.length;
-  for (let i = 0; i < value.length; i++) {
-    const c = value.charCodeAt(i);
-    h1 ^= c;
-    h1 = Math.imul(h1, 0x01000193);
-    h2 ^= c + i;
-    h2 = Math.imul(h2, 0x85ebca6b);
-  }
-  return `${toHex(h1)}${toHex(h2)}`;
-}
-
-function toHex(value: number): string {
-  return (value >>> 0).toString(16).padStart(8, '0');
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  if (!globalThis.crypto?.subtle) throw new Error('Web Crypto SHA-256 is unavailable');
+  const input = new Uint8Array(bytes.byteLength);
+  input.set(bytes);
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', input.buffer));
+  return [...digest].map((value) => value.toString(16).padStart(2, '0')).join('');
 }

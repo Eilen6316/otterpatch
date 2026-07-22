@@ -36,6 +36,7 @@ import type {
   WorkspaceFormat as Fmt,
 } from './app-thread-types.js';
 import { useFileImport } from './use-file-import.js';
+import { fileSnapshotDocumentId, proposalMatchesFileSnapshot } from './file-snapshot.js';
 import { useCommitWriteback } from './use-commit-writeback.js';
 import { useReviewState } from './use-review-state.js';
 import { useReviewActions } from './use-review-actions.js';
@@ -768,7 +769,7 @@ export function App() {
         type StreamEvt = { type: string; status?: unknown; delta?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; proposal?: unknown; questions?: ClarifyQuestion[]; message?: string; error?: { kind?: string } };
         await streamPropose<StreamEvt>(
           ep,
-          { format: fmt, intent: theIntent, context: ctx, baseRev: 0, provider, model, apiKey, ...(proposalFile ? { documentId: `${proposalFile.format}:${proposalFile.name}:${proposalFile.byteLength}:${proposalFile.hash}` } : {}), ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(proposalBoard ? { board: proposalBoard } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildAppHistory(thread) } : {}) },
+          { format: fmt, intent: theIntent, context: ctx, baseRev: proposalFile?.revision ?? 0, provider, model, apiKey, ...(proposalFile ? { documentId: fileSnapshotDocumentId(proposalFile), sourceFileSha256: proposalFile.sha256 } : {}), ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(proposalBoard ? { board: proposalBoard } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildAppHistory(thread) } : {}) },
           () => {
             if (theIntent.trim()) setRecent((rr) => [{ t: theIntent.trim(), time: t('刚刚') }, ...rr.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
             setSent(true);
@@ -819,6 +820,9 @@ export function App() {
                 const diff = e.diff;
                 const cs = e.changeSet ?? null;
                 const proposal = e.proposal ?? null;
+                if (proposalFile && !proposalMatchesFileSnapshot(proposal, proposalFile)) {
+                  throw new Error('The local service returned a proposal that is not bound to the imported file. Regenerate after updating the service.');
+                }
                 setRealCs(cs);
                 setRealDiff(diff);
                 setReviewIdx(0);

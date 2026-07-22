@@ -279,13 +279,15 @@ export class OtterPatchRuntime {
     }
   }
 
-  /** Sign a model proposal before it is shown for review. The source file is bound when review completes. */
-  createProposal(cs: ChangeSet, format: string, documentId = cs.hostId): ProposalEnvelope {
+  /** Sign a model proposal before it is shown for review, optionally binding exact source bytes by hash. */
+  createProposal(cs: ChangeSet, format: string, documentId = cs.hostId, sourceFileSha256?: string): ProposalEnvelope {
     const adapter = this.adapters.create(format, cs.hostId);
     try {
       if (!adapter.writebacks().length) throw new Error(`OtterPatchRuntime: no writeback backend for format "${format}"`);
       assertAdapterValid(adapter, cs, 'propose');
-      return this.reviewAuthority.createProposal(cs, format, documentId);
+      return sourceFileSha256
+        ? this.reviewAuthority.createProposal(cs, format, documentId, sourceFileSha256)
+        : this.reviewAuthority.createProposal(cs, format, documentId);
     } finally {
       adapter.dispose();
     }

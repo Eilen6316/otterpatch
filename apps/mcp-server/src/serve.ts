@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
-import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, isResourceLimitError } from '@otterpatch/core';
+import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, docRevFromSha256, isResourceLimitError, isSha256 } from '@otterpatch/core';
 import { ProviderCallError, createModelClient, sanitizeStreamStatus, type AgentResponse, type ProposeRequest, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
-import { OtterPatchRuntime, type DiffInput, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
+import { OtterPatchRuntime, sha256Bytes, type DiffInput, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
 import { decodeDocumentBase64 } from './document-input.js';
 import { observeClientAbort } from './client-abort.js';
 import {
@@ -62,8 +62,30 @@ function cors(req: IncomingMessage, res: ServerResponse): boolean {
 
 
 function readDocRev(value: unknown, fallback: number): DocRev {
-  const n = Number(value ?? fallback);
-  return (Number.isSafeInteger(n) && n >= 0 ? n : fallback) as DocRev;
+  const candidate = value ?? fallback;
+  if (typeof candidate !== 'number' || !Number.isSafeInteger(candidate) || candidate < 0) {
+    throw new HttpError(400, 'baseRev/currentRev must be a non-negative safe integer');
+  }
+  return candidate as DocRev;
+}
+
+function proposalBinding(body: Record<string, unknown>): { baseRev: DocRev; sourceFileSha256?: string } {
+  const sourceFileSha256 = body.sourceFileSha256;
+  if (sourceFileSha256 !== undefined && !isSha256(sourceFileSha256)) {
+    throw new HttpError(400, 'sourceFileSha256 must be 64 lowercase hex characters');
+  }
+  const derived = sourceFileSha256 ? docRevFromSha256(sourceFileSha256) : 0 as DocRev;
+  const baseRev = readDocRev(body.baseRev, derived);
+  if (sourceFileSha256 && baseRev !== derived) {
+    throw new HttpError(409, 'baseRev does not match sourceFileSha256');
+  }
+  return { baseRev, ...(sourceFileSha256 ? { sourceFileSha256 } : {}) };
+}
+
+function proposalDocumentId(body: Record<string, unknown>, binding: ReturnType<typeof proposalBinding>, fallback: string): string {
+  return binding.sourceFileSha256
+    ? `${String(body.format).toLowerCase()}:sha256:${binding.sourceFileSha256}`
+    : String(body.documentId ?? fallback);
 }
 
 function hasValidToken(req: IncomingMessage): boolean {
@@ -179,6 +201,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       }
       if (req.method === 'POST' && url === '/propose') {
         const a = await readBody(req);
+        const binding = proposalBinding(a);
         const model = createModelClient((a.provider as Provider) || 'claude', {
           apiKey: a.apiKey as string | undefined,
           ...(a.model ? { model: a.model as string } : {}),
@@ -191,7 +214,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               hostId: 'serve',
               format: String(a.format),
               intent: String(a.intent ?? ''),
-              baseRev: readDocRev(a.baseRev, 0),
+              baseRev: binding.baseRev,
               anchors: [],
               context: String(a.context ?? ''),
               ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}),
@@ -211,12 +234,13 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         else send(req, res, 200, {
           changeSet: r.changeSet,
           diff: await rt.diff(r.changeSet, diffInput(a)),
-          proposal: rt.createProposal(r.changeSet, String(a.format), String(a.documentId ?? r.changeSet.hostId)),
+          proposal: rt.createProposal(r.changeSet, String(a.format), proposalDocumentId(a, binding, r.changeSet.hostId), binding.sourceFileSha256),
         });
         return;
       }
       if (req.method === 'POST' && url === '/propose-stream') {
         const a = await readBody(req);
+        const binding = proposalBinding(a);
         const model = createModelClient((a.provider as Provider) || 'claude', {
           apiKey: a.apiKey as string | undefined,
           ...(a.model ? { model: a.model as string } : {}),
@@ -234,7 +258,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               hostId: 'serve',
               format: String(a.format),
               intent: String(a.intent ?? ''),
-              baseRev: readDocRev(a.baseRev, 0),
+              baseRev: binding.baseRev,
               anchors: [],
               context: String(a.context ?? ''),
               ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}),
@@ -260,7 +284,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               kind: 'changeset',
               changeSet: result.changeSet,
               diff: await rt.diff(result.changeSet, diffInput(a)),
-              proposal: rt.createProposal(result.changeSet, String(a.format), String(a.documentId ?? result.changeSet.hostId)),
+              proposal: rt.createProposal(result.changeSet, String(a.format), proposalDocumentId(a, binding, result.changeSet.hostId), binding.sourceFileSha256),
             });
           } else if (result.kind === 'clarify') {
             sse({ type: 'done', kind: 'clarify', questions: result.questions });
@@ -282,11 +306,19 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         const a = await readBody(req);
         assertChangeSet(a.changeSet);
         if (!Array.isArray(a.acceptedEditIds)) throw new HttpError(400, 'acceptedEditIds array required');
+        const proposal = a.proposal as ProposalEnvelope;
+        if (!proposal?.sourceFileSha256) throw new HttpError(409, 'proposal is not bound to a source file; regenerate it');
+        const sourceBytes = decodeDocumentBase64(a.fileBase64);
+        const sourceFileSha256 = sha256Bytes(sourceBytes);
+        if (proposal.sourceFileSha256 !== sourceFileSha256) throw new HttpError(409, 'proposal source file SHA-256 mismatch');
+        if ((a.changeSet as ChangeSet).baseRev !== docRevFromSha256(sourceFileSha256)) {
+          throw new HttpError(409, 'proposal revision does not match source file SHA-256');
+        }
         const reviewed = rt.reviewProposal(
-          a.proposal as ProposalEnvelope,
+          proposal,
           a.changeSet as ChangeSet,
           a.acceptedEditIds as string[],
-          decodeDocumentBase64(a.fileBase64),
+          sourceBytes,
           String(a.reviewerSessionId ?? 'desktop'),
         );
         send(req, res, 200, reviewed);
@@ -296,12 +328,16 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         const a = await readBody(req);
         if (!a.proposal || !a.reviewReceipt) throw new HttpError(403, 'signed proposal and review receipt required');
         const bytes = decodeDocumentBase64(a.fileBase64);
+        const sourceRevision = docRevFromSha256(sha256Bytes(bytes));
+        if (a.currentRev !== undefined && readDocRev(a.currentRev, sourceRevision) !== sourceRevision) {
+          throw new HttpError(409, 'currentRev does not match the uploaded source file');
+        }
         assertChangeSet(a.changeSet);
         const r = await rt.commit({
           format: String(a.format),
           bytes,
           changeSet: a.changeSet as ChangeSet,
-          currentRev: readDocRev(a.currentRev, Number((a.changeSet as ChangeSet | undefined)?.baseRev ?? 0)),
+          currentRev: sourceRevision,
           proposal: a.proposal as ProposalEnvelope,
           reviewReceipt: a.reviewReceipt as ReviewReceipt,
         });

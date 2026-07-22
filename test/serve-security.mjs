@@ -141,6 +141,15 @@ try {
   });
   assert.equal(unauth.status, 401);
 
+  const sourceFileSha256 = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
+  const mismatchedRevision = await fetch(`http://127.0.0.1:${port + 1}/propose`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-OtterPatch-Token': token },
+    body: JSON.stringify({ format: 'excel', intent: 'x', sourceFileSha256, baseRev: 0 }),
+  });
+  assert.equal(mismatchedRevision.status, 409);
+  assert.match(await mismatchedRevision.text(), /baseRev does not match/);
+
   const oversizeBody = JSON.stringify({ format: 'excel', intent: 'x', context: 'x'.repeat(2048) });
   const oversize = await fetch(`http://127.0.0.1:${port + 1}/propose`, {
     method: 'POST',
@@ -160,18 +169,42 @@ try {
   assert.equal(unsignedReview.status, 403);
   assert.match(await unsignedReview.text(), /review token/);
 
+  const emptyChangeSet = { id: 'c', hostId: 'h', baseRev: 0, anchors: {}, origin: { by: 'human' }, meta: { intent: 'x' }, edits: [] };
+  const unboundReview = await fetch(`http://127.0.0.1:${port + 1}/review`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-OtterPatch-Token': token,
+      'X-OtterPatch-Review-Token': reviewToken,
+    },
+    body: JSON.stringify({ fileBase64: 'aGVsbG8=', changeSet: emptyChangeSet, proposal: {}, acceptedEditIds: [] }),
+  });
+  assert.equal(unboundReview.status, 409);
+  assert.match(await unboundReview.text(), /not bound to a source file/);
+
+  const spoofedCurrentRevision = await fetch(`http://127.0.0.1:${port + 1}/commit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-OtterPatch-Token': token },
+    body: JSON.stringify({
+      format: 'excel', fileBase64: 'aGVsbG8=', changeSet: emptyChangeSet,
+      proposal: { present: true }, reviewReceipt: { present: true }, currentRev: 0,
+    }),
+  });
+  assert.equal(spoofedCurrentRevision.status, 409);
+  assert.match(await spoofedCurrentRevision.text(), /currentRev does not match/);
+
   const unreviewedCommit = await fetch(`http://127.0.0.1:${port + 1}/commit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-OtterPatch-Token': token },
     body: JSON.stringify({
       format: 'excel', fileBase64: '',
-      changeSet: { id: 'c', hostId: 'h', baseRev: 0, anchors: {}, origin: { by: 'human' }, meta: { intent: 'x' }, edits: [] },
+      changeSet: emptyChangeSet,
     }),
   });
   assert.equal(unreviewedCommit.status, 403);
   assert.match(await unreviewedCommit.text(), /review receipt required/);
 
-  console.log('[serve-security] defaultAuth=401 generatedAuth=403 exactOrigin=403 rateLimit=429 explicitAuth=401 bodyLimit=413 review=403 commit=403');
+  console.log('[serve-security] auth=401 review=403 binding=409 revision=409 bodyLimit=413 rateLimit=429');
 } finally {
   for (const instance of servers.reverse()) await stopServer(instance);
 }

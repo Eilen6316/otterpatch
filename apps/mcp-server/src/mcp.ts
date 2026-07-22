@@ -15,7 +15,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
-import { assertChangeSet, isResourceLimitError } from '@otterpatch/core';
+import { assertChangeSet, docRevFromSha256, isResourceLimitError } from '@otterpatch/core';
 import { createModelClient, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
 import { OtterPatchRuntime, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
@@ -112,7 +112,8 @@ server.registerTool(
       format: z.string().describe('excel | drawio | word | ...'),
       intent: z.string().describe('natural-language edit intent'),
       context: z.string().default('').describe('read-only snapshot of the selected region, fed to the model'),
-      baseRev: z.number().int().nonnegative().default(0).describe('document revision used as the ChangeSet base revision'),
+      baseRev: z.number().int().nonnegative().optional().describe('document revision used as the ChangeSet base revision; derived when sourceFileSha256 is present'),
+      sourceFileSha256: z.string().regex(/^[a-f0-9]{64}$/).optional().describe('SHA-256 of the exact source bytes this proposal reviews'),
       documentId: z.string().optional().describe('stable host document identity used for single-writer commit serialization'),
       provider: z.string().default('claude').describe('claude | openai | deepseek | glm | kimi | doubao | minimax | gemini'),
       model: z.string().optional(),
@@ -126,6 +127,9 @@ server.registerTool(
   },
   async (a) => {
     try {
+      const derivedRev = a.sourceFileSha256 ? docRevFromSha256(a.sourceFileSha256) : 0 as DocRev;
+      const baseRev = (a.baseRev ?? derivedRev) as DocRev;
+      if (a.sourceFileSha256 && baseRev !== derivedRev) throw new Error('baseRev does not match sourceFileSha256');
       const model = createModelClient((a.provider as Provider) || 'claude', {
         apiKey: a.apiKey ?? process.env.OtterPatch_API_KEY,
         ...(a.model ? { model: a.model } : {}),
@@ -135,7 +139,7 @@ server.registerTool(
           hostId: 'mcp',
           format: a.format,
           intent: a.intent,
-          baseRev: a.baseRev as DocRev,
+          baseRev,
           anchors: [],
           context: a.context ?? '',
           ...(a.sheet ? { sheet: a.sheet } : {}),
@@ -157,7 +161,7 @@ server.registerTool(
           ...(a.doc ? { doc: a.doc } : {}),
           ...(a.ppt ? { ppt: a.ppt } : {}),
         }),
-        proposal: rt.createProposal(r.changeSet, a.format, a.documentId ?? r.changeSet.hostId),
+        proposal: rt.createProposal(r.changeSet, a.format, a.documentId ?? r.changeSet.hostId, a.sourceFileSha256),
       });
     } catch (e) {
       return failWith('propose', e);
@@ -206,7 +210,7 @@ server.registerTool(
       proposal: z.string().optional().describe('signed ProposalEnvelope JSON returned by otterpatch_propose'),
       reviewReceipt: z.string().optional().describe('signed ReviewReceipt JSON issued by a trusted review UI'),
       acceptedEditIds: z.array(z.string()).optional().describe('required only in explicitly enabled unreviewed mode; never defaults to accept all'),
-      currentRev: z.number().int().nonnegative().optional().describe('live document revision observed immediately before commit'),
+      currentRev: z.number().int().nonnegative().describe('live document revision independently observed immediately before commit'),
     },
   },
   async (a) => {
@@ -220,7 +224,7 @@ server.registerTool(
         bytes,
         changeSet,
         ...(a.acceptedEditIds ? { acceptedEditIds: a.acceptedEditIds } : {}),
-        currentRev: (a.currentRev ?? changeSet.baseRev) as DocRev,
+        currentRev: a.currentRev as DocRev,
         ...(proposal ? { proposal } : {}),
         ...(reviewReceipt ? { reviewReceipt } : {}),
       });

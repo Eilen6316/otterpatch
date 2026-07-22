@@ -56,6 +56,10 @@ otterpatch_diff     ChangeSet + read-only host snapshot → shadow-derived diff 
 otterpatch_commit   signed proposal + review receipt + file → surgical write-back + fidelity report
 ```
 
+For file-backed proposals, pass the source SHA-256 to `otterpatch_propose`; `baseRev` is then derived
+from that digest. `otterpatch_commit` requires a `currentRev` independently observed by the host and
+never defaults it from the ChangeSet.
+
 ```jsonc
 // register the server (BYOK key via env or per-call apiKey arg)
 { "mcpServers": { "otterpatch": { "command": "otterpatch-mcp", "env": { "OtterPatch_API_KEY": "sk-..." } } } }
@@ -108,7 +112,7 @@ npm test -w @otterpatch/writeback-surgical
 - [x] Word redline + PDF form-fill + PowerPoint slide-text adapters — propose→commit for excel/word/pdf/ppt/drawio
 - [x] Ribbon formatting applies to the live selection (bold/italic/colors/align/number-format)
 - [x] Electron desktop shell + electron-builder packaging config (Chinese/English UI)
-- [x] Closed write-back loop in the cockpit (otterpatch-serve): load a file → signed proposal → review diff → receipt-bound subset → verified surgical write-back → download
+- [x] Closed write-back loop in the cockpit (otterpatch-serve): load a file → SHA-256/revision-bound signed proposal → review diff → receipt-bound subset → server-reverified surgical write-back → download
 - [x] Word: full Office-style six-tab ribbon + **inline tracked-change review** — per-change hover cards, 4-state view toggle (original/markup/clean/final), flatten-on-accept (accepting physically finalizes; no markup pollution)
 - [x] Agent read tools — Excel `read_range`/`aggregate`; Word `read_blocks`/`find_text`/`get_outline`/`get_style_usage` (full-doc snapshot, both model channels)
 - [x] Domain playbooks with progressive disclosure (`load_skill`): GB/T 9704 official-document layout, financial-sheet rules, chart selection

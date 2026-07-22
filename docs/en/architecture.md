@@ -61,6 +61,11 @@ as opening a pull request against an `.xlsx` / `.docx` / `.drawio` file.
   marks (tracked changes / grid values with captured before-state) make in-place review possible,
   while each item starts in an unapproved state. Rejection replays the captured before-state;
   acceptance physically finalizes, and commit receives only the explicitly accepted subset.
+- **Source identity is cryptographic and server-verified.** File import computes SHA-256 over the
+  decoded bytes and projects a 52-bit numeric `baseRev` from that digest. The local service checks
+  that pair before signing the proposal, then recomputes both from uploaded bytes at review and
+  commit. The full digest, ChangeSet hash, accepted subset, and reviewer nonce remain signed in the
+  proposal/receipt chain; the renderer cannot make a stale check pass by echoing `baseRev`.
 - **Server-side commit is independent**: the accepted subset of the ChangeSet is applied to the
   uploaded original file by the surgical write-back — the in-app preview never touches your file.
 - **Desktop credentials stay in the main process.** The preload exposes bounded proposal,

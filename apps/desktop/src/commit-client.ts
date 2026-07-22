@@ -64,7 +64,6 @@ export async function commitWriteback(input: {
       changeSet: input.changeSet,
       proposal: reviewed.proposal,
       reviewReceipt: reviewed.reviewReceipt,
-      currentRev: (input.changeSet as { baseRev?: number } | null)?.baseRev ?? 0,
     }),
   });
   const data = (await response.json()) as CommitWritebackResult;

@@ -76,7 +76,7 @@ npm test -w @otterpatch/writeback-surgical
 - [x] 版本化能力清单统一驱动模型操作暴露、runtime 门禁、写回支持、签名提案与 `/health`
 - [x] HTTP/文档、OOXML 解压/XML 深度、ChangeSet/范围、工具/模型输出、超时与并发均有硬资源预算
 - [x] Word 红线 / PDF 表单 / PPT 文本适配器 —— excel/word/pdf/ppt/drawio 全链路 propose→commit
-- [x] 驾驶舱写回闭环(otterpatch-serve):载入文件 → 签名提案 → 逐条审阅 → 签名回执绑定源文件 SHA-256 与接受子集 → 外科写回 → 下载
+- [x] 驾驶舱写回闭环(otterpatch-serve):载入文件 → SHA-256/revision 绑定的签名提案 → 逐条审阅 → 签名回执绑定接受子集 → 服务端重算摘要与 revision → 外科写回 → 下载
 - [x] Word:Office 式六选项卡功能区 + **行内修订审阅**——逐条悬浮卡、四态视图(原文/修订/清样/改后)、flatten-on-accept(接受即物理定稿,零标记残留)
 - [x] Agent 取数工具 —— Excel `read_range`/`aggregate`;Word `read_blocks`/`find_text`/`get_outline`/`get_style_usage`(全文快照,双模型通道)
 - [x] 领域打法手册 + 渐进披露(`load_skill`):GB/T 9704 公文版式、财务表规范、图表选型

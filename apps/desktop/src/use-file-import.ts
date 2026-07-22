@@ -29,15 +29,22 @@ export function useFileImport({ format, wordRef, boardRef, notify, t }: UseFileI
   const [fileSnapshot, setFileSnapshot] = useState<FileSnapshot | null>(null);
   const fileLoadSeqRef = useRef(0);
 
-  const setLoadedFile = (loadFormat: ImportFormat, name: string, b64: string, drawioSourceEncoding?: FileSnapshot['drawioSourceEncoding']): void => {
+  const setLoadedFile = async (loadSeq: number, loadFormat: ImportFormat, name: string, b64: string, drawioSourceEncoding?: FileSnapshot['drawioSourceEncoding']): Promise<boolean> => {
+    const snapshot = await makeFileSnapshot(loadFormat, name, b64, drawioSourceEncoding);
+    if (loadSeq !== fileLoadSeqRef.current) return false;
     setFileB64(b64);
     setFileName(name);
-    setFileSnapshot(makeFileSnapshot(loadFormat, name, b64, drawioSourceEncoding));
+    setFileSnapshot(snapshot);
+    return true;
   };
-  const clearLoadedFile = (): void => {
+  const clearLoadedFileState = (): void => {
     setFileB64('');
     setFileName('');
     setFileSnapshot(null);
+  };
+  const clearLoadedFile = (): void => {
+    fileLoadSeqRef.current++;
+    clearLoadedFileState();
   };
 
   const onFile = (file: File | undefined): void => {
@@ -46,61 +53,54 @@ export function useFileImport({ format, wordRef, boardRef, notify, t }: UseFileI
     const loadSeq = ++fileLoadSeqRef.current;
     const reader = new FileReader();
     reader.onload = () => {
-      if (loadSeq !== fileLoadSeqRef.current) return;
-      const res = String(reader.result);
-      const b64 = res.slice(res.indexOf(',') + 1);
-      if (loadFormat === 'word' && /\.docx$/i.test(file.name)) {
-        try {
-          const bin = atob(b64);
-          const bytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-          const imported = docxToHtml(bytes);
-          wordRef.current?.loadHTML(imported.html);
-          setLoadedFile(loadFormat, file.name, b64);
-          notify(t('已载入并渲染') + ' · ' + file.name + (imported.skipped.length ? `(${imported.skipped.join('、')}${t('以占位显示')})` : ''));
-          return;
-        } catch (err) {
-          setLoadedFile(loadFormat, file.name, b64);
-          notify(t('已载入(渲染失败,仍可写回)') + ':' + (err instanceof Error ? err.message : String(err)));
+      void (async () => {
+        if (loadSeq !== fileLoadSeqRef.current) return;
+        const res = String(reader.result);
+        const b64 = res.slice(res.indexOf(',') + 1);
+        if (loadFormat === 'word' && /\.docx$/i.test(file.name)) {
+          let message: string;
+          try {
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const imported = docxToHtml(bytes);
+            wordRef.current?.loadHTML(imported.html);
+            message = t('已载入并渲染') + ' · ' + file.name + (imported.skipped.length ? `(${imported.skipped.join('、')}${t('以占位显示')})` : '');
+          } catch (err) {
+            message = t('已载入(渲染失败,仍可写回)') + ':' + (err instanceof Error ? err.message : String(err));
+          }
+          if (await setLoadedFile(loadSeq, loadFormat, file.name, b64)) notify(message);
           return;
         }
-      }
-      if (loadFormat === 'drawio' && /\.(drawio|xml)$/i.test(file.name)) {
-        try {
+        if (loadFormat === 'drawio' && /\.(drawio|xml)$/i.test(file.name)) {
           const xml = decodeURIComponent(escape(atob(b64)));
-          void import('./drawio-io.js').then(({ parseDrawioFile }) => {
-            if (loadSeq !== fileLoadSeqRef.current) return;
-            const parsed = parseDrawioFile(xml);
-            if (parsed.skipped.length) {
-              clearLoadedFile();
-              notify(`Drawio import blocked: ${parsed.skipped.length}/${parsed.total} page(s) could not be decoded. Exporting now would lose pages.`);
-              return;
-            }
-            const pages = parsed.pages.filter((g) => g.nodes.length || g.edges.length);
-            if (!pages.length) {
-              clearLoadedFile();
-              notify(t('未解析出图形(不是有效的 .drawio?)'));
-              return;
-            }
-            boardRef.current?.loadPages(pages);
-            setLoadedFile(loadFormat, file.name, b64, parsed.sourceEncoding);
-            const nodes = pages.reduce((sum, g) => sum + g.nodes.length, 0);
-            const edges = pages.reduce((sum, g) => sum + g.edges.length, 0);
-            notify(`导入 drawio: ${pages.length} 页 / ${nodes} 节点 / ${edges} 连线`);
-          }).catch((err: unknown) => {
-            if (loadSeq !== fileLoadSeqRef.current) return;
+          const { parseDrawioFile } = await import('./drawio-io.js');
+          if (loadSeq !== fileLoadSeqRef.current) return;
+          const parsed = parseDrawioFile(xml);
+          if (parsed.skipped.length) {
             clearLoadedFile();
-            notify('Drawio import failed: ' + (err instanceof Error ? err.message : String(err)));
-          });
-          return;
-        } catch (err) {
-          clearLoadedFile();
-          notify(t('已载入(渲染失败)') + ':' + (err instanceof Error ? err.message : String(err)));
+            notify(`Drawio import blocked: ${parsed.skipped.length}/${parsed.total} page(s) could not be decoded. Exporting now would lose pages.`);
+            return;
+          }
+          const pages = parsed.pages.filter((g) => g.nodes.length || g.edges.length);
+          if (!pages.length) {
+            clearLoadedFile();
+            notify(t('未解析出图形(不是有效的 .drawio?)'));
+            return;
+          }
+          boardRef.current?.loadPages(pages);
+          if (!await setLoadedFile(loadSeq, loadFormat, file.name, b64, parsed.sourceEncoding)) return;
+          const nodes = pages.reduce((sum, g) => sum + g.nodes.length, 0);
+          const edges = pages.reduce((sum, g) => sum + g.edges.length, 0);
+          notify(`导入 drawio: ${pages.length} 页 / ${nodes} 节点 / ${edges} 连线`);
           return;
         }
-      }
-      setLoadedFile(loadFormat, file.name, b64);
-      notify(t('已载入') + ' · ' + file.name);
+        if (await setLoadedFile(loadSeq, loadFormat, file.name, b64)) notify(t('已载入') + ' · ' + file.name);
+      })().catch((err: unknown) => {
+        if (loadSeq !== fileLoadSeqRef.current) return;
+        clearLoadedFile();
+        notify('File import failed: ' + (err instanceof Error ? err.message : String(err)));
+      });
     };
     reader.onerror = () => {
       if (loadSeq !== fileLoadSeqRef.current) return;

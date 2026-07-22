@@ -180,7 +180,6 @@ async function reviewAndCommit(event, invocation) {
     changeSet: input.changeSet,
     proposal: reviewed.proposal,
     reviewReceipt: reviewed.reviewReceipt,
-    currentRev: Number.isSafeInteger(input.changeSet.baseRev) ? input.changeSet.baseRev : 0,
   });
   return validateCommitResult(result);
 }

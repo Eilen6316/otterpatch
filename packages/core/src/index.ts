@@ -17,3 +17,4 @@ export * from './validate.js';
 export * from './capabilities.js';
 export * from './limits.js';
 export * from './sheet-scalar.js';
+export * from './revision.js';

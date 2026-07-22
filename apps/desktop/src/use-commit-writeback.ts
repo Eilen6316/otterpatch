@@ -1,5 +1,5 @@
 import { commitWriteback } from './commit-client.js';
-import { sameFileSnapshot, type FileSnapshot } from './file-snapshot.js';
+import { proposalMatchesFileSnapshot, sameFileSnapshot, type FileSnapshot } from './file-snapshot.js';
 import type { WorkspaceFormat } from './workspace-format.js';
 
 export type WritebackFormat = WorkspaceFormat;
@@ -63,6 +63,10 @@ export function useCommitWriteback({
     }
     if (!fileSnapshot || !sameFileSnapshot(fileSnapshot, turn.fileSnapshot)) {
       notify('The target file changed. Regenerate the proposal for the current file before committing.');
+      return false;
+    }
+    if (!proposalMatchesFileSnapshot(turn.proposal, turn.fileSnapshot)) {
+      notify('This proposal is not cryptographically bound to the target file. Regenerate it before committing.');
       return false;
     }
     return true;

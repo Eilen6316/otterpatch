@@ -40,6 +40,7 @@ test('commit client obtains a bound review receipt before commit', async () => {
     assert.deepEqual(calls[1]!.body.proposal, { proposalId: 'bound' });
     assert.deepEqual(calls[1]!.body.reviewReceipt, { nonce: 'receipt' });
     assert.equal('acceptedEditIds' in calls[1]!.body, false, 'commit authority comes from the signed receipt');
+    assert.equal('currentRev' in calls[1]!.body, false, 'the service derives currentRev from uploaded bytes');
   } finally {
     globalThis.fetch = originalFetch;
     if (originalStorage) Object.defineProperty(globalThis, 'localStorage', originalStorage);

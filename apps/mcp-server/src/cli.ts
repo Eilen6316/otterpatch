@@ -9,9 +9,9 @@
  * BYOK:export OtterPatch_API_KEY=...(非 --mock 时必需);--provider/--model 可选。
  */
 import { writeFileSync } from 'node:fs';
-import { isResourceLimitError, type DocRev } from '@otterpatch/core';
+import { docRevFromSha256, isResourceLimitError, type DocRev } from '@otterpatch/core';
 import { createModelClient, MockModelClient, type ModelClient, type Provider, type ProposeRequest } from '@otterpatch/agent';
-import { OtterPatchRuntime } from '@otterpatch/runtime';
+import { OtterPatchRuntime, sha256Bytes } from '@otterpatch/runtime';
 import { readDocumentFile } from './document-input.js';
 
 function arg(name: string): string | undefined {
@@ -48,9 +48,11 @@ const client: ModelClient = mock
   ? new MockModelClient(() => mockProposal)
   : createModelClient(provider, { apiKey: process.env.OtterPatch_API_KEY, ...(model ? { model } : {}) });
 
-const req: ProposeRequest = { hostId: 'cli', format, intent, baseRev: 0 as DocRev, anchors: [], context };
-
 try {
+  const inputBytes = inPath ? readDocumentFile(inPath) : undefined;
+  const sourceFileSha256 = inputBytes ? sha256Bytes(inputBytes) : undefined;
+  const baseRev = sourceFileSha256 ? docRevFromSha256(sourceFileSha256) : 0 as DocRev;
+  const req: ProposeRequest = { hostId: 'cli', format, intent, baseRev, anchors: [], context };
   const cs = await rt.propose(req, client);
   await rt.diff(cs, {
     format,
@@ -61,10 +63,10 @@ try {
   });
   if (inPath) {
     if (!confirmed) throw new Error('refusing to commit without explicit --yes after reviewing the emitted diff');
-    const bytes = readDocumentFile(inPath);
-    const proposal = rt.createProposal(cs, format, inPath);
+    const bytes = inputBytes!;
+    const proposal = rt.createProposal(cs, format, inPath, sourceFileSha256);
     const reviewed = rt.reviewProposal(proposal, cs, cs.edits.map((edit) => edit.id), bytes, 'cli-explicit-yes');
-    const res = await rt.commit({ format, bytes, changeSet: cs, ...reviewed });
+    const res = await rt.commit({ format, bytes, changeSet: cs, currentRev: baseRev, ...reviewed });
     if (outPath && res.ok) {
       writeFileSync(outPath, res.bytes);
       emit({ type: 'wrote', path: outPath, bytes: res.bytes.length });

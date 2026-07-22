@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { ChangeSet } from '@otterpatch/core';
-import { CAPABILITY_MANIFEST_VERSION, assertChangeSet } from '@otterpatch/core';
+import { CAPABILITY_MANIFEST_VERSION, assertChangeSet, docRevFromSha256, isSha256 } from '@otterpatch/core';
 
 export const REVIEW_POLICY_VERSION = 'review-v1';
 const SHA256_RX = /^[a-f0-9]{64}$/;
@@ -54,21 +54,38 @@ export class ReviewAuthority {
     if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) throw new Error('review receipt TTL must be a positive integer');
   }
 
-  createProposal(changeSet: ChangeSet, format: string, documentId = changeSet.hostId, now = Date.now()): ProposalEnvelope {
+  createProposal(changeSet: ChangeSet, format: string, documentId?: string, now?: number): ProposalEnvelope;
+  createProposal(changeSet: ChangeSet, format: string, documentId: string | undefined, sourceFileSha256: string, now?: number): ProposalEnvelope;
+  createProposal(
+    changeSet: ChangeSet,
+    format: string,
+    documentId = changeSet.hostId,
+    sourceFileSha256OrNow?: string | number,
+    now = Date.now(),
+  ): ProposalEnvelope {
+    const sourceFileSha256 = typeof sourceFileSha256OrNow === 'string' ? sourceFileSha256OrNow : undefined;
+    const createdAt = typeof sourceFileSha256OrNow === 'number' ? sourceFileSha256OrNow : now;
     assertChangeSet(changeSet);
     if (!format.trim()) throw new Error('proposal format is required');
     if (!documentId.trim()) throw new Error('proposal documentId is required');
+    if (sourceFileSha256 !== undefined) {
+      if (!isSha256(sourceFileSha256)) throw new Error('proposal source file SHA-256 is invalid');
+      if (changeSet.baseRev !== docRevFromSha256(sourceFileSha256)) {
+        throw new Error('proposal base revision does not match source file SHA-256');
+      }
+    }
     const payload: ProposalPayload = {
       version: 1,
       proposalId: randomUUID(),
       documentId,
       format,
       changeSetSha256: sha256Canonical(changeSet),
+      ...(sourceFileSha256 ? { sourceFileSha256 } : {}),
       baseRev: changeSet.baseRev,
       capabilityManifestVersion: CAPABILITY_MANIFEST_VERSION,
       policyVersion: REVIEW_POLICY_VERSION,
-      createdAt: new Date(now).toISOString(),
-      expiresAt: new Date(now + this.ttlMs).toISOString(),
+      createdAt: new Date(createdAt).toISOString(),
+      expiresAt: new Date(createdAt + this.ttlMs).toISOString(),
     };
     return { ...payload, signature: this.sign('proposal', payload) };
   }
@@ -193,7 +210,7 @@ function normalizeAcceptedEditIds(changeSet: ChangeSet, ids: string[]): string[]
 function assertProposal(value: ProposalEnvelope): ProposalPayload {
   if (!value || typeof value !== 'object' || value.version !== 1) throw new Error('invalid proposal envelope');
   if (!value.proposalId || !value.documentId || !value.format || !SHA256_RX.test(value.changeSetSha256)) throw new Error('invalid proposal envelope fields');
-  if (value.sourceFileSha256 !== undefined && !SHA256_RX.test(value.sourceFileSha256)) throw new Error('invalid proposal source file hash');
+  if (value.sourceFileSha256 !== undefined && !isSha256(value.sourceFileSha256)) throw new Error('invalid proposal source file hash');
   if (!Number.isSafeInteger(value.baseRev) || value.baseRev < 0) throw new Error('invalid proposal revision');
   if (value.capabilityManifestVersion !== CAPABILITY_MANIFEST_VERSION) throw new Error('invalid proposal capability manifest version');
   if (!isIsoDate(value.createdAt) || !isIsoDate(value.expiresAt)) throw new Error('invalid proposal timestamps');
