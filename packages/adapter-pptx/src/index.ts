@@ -5,3 +5,4 @@
  */
 export * from './pptx-patch.js';
 export * from './pptx-text.js';
+export * from './adapter.js';

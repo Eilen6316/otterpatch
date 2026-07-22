@@ -4,7 +4,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync } from 'fflate';
-import { STRICT_POLICY, type AnchorId, type ChangeSet, type DocRev, type HostId, type WritebackBackend, type WritebackId } from '@otterpatch/core';
+import { AdapterRegistry, STRICT_POLICY, capabilityManifestFor, type AnchorId, type ChangeSet, type DocRev, type HostId, type WritebackBackend, type WritebackId } from '@otterpatch/core';
+import { UniverAdapter } from '@otterpatch/adapter-univer';
 import { MockModelClient, type ModelClient, type ProposeRequest, type RespondOptions, type AgentResponse } from '@otterpatch/agent';
 import { comparePartsIntegrity, readOoxmlParts } from '@otterpatch/writeback-surgical';
 import { OtterPatchRuntime } from './runtime.js';
@@ -277,6 +278,70 @@ test('runtime: legacy propose path runs verifier and fails closed', async () => 
     () => rt.propose({ hostId: 'h1', format: 'excel', intent: 'bad', baseRev: 0 as DocRev, anchors: [], context: 'A1=1' }, model),
     /forced verifier failure/,
   );
+});
+
+test('runtime: injected AdapterRegistry controls verifier and diff preview without runtime format tables', async () => {
+  let verified = 0;
+  let previewed = 0;
+  class ProbeAdapter extends UniverAdapter {
+    override proposalVerifier() {
+      return async () => {
+        verified++;
+        return { ok: true, level: 'simulation' as const, report: 'probe verifier' };
+      };
+    }
+    override async preview(cs: ChangeSet) {
+      previewed++;
+      return {
+        supportByEdit: Object.fromEntries(cs.edits.map((edit) => [edit.id, 'partial' as const])),
+        expectedTouchedPartsByEdit: Object.fromEntries(cs.edits.map((edit) => [edit.id, ['probe/control-plane']])),
+        unavailableReason: 'probe preview',
+      };
+    }
+  }
+  const registry = new AdapterRegistry();
+  registry.register({
+    format: 'excel', aliases: ['xlsx'], manifest: capabilityManifestFor('excel'),
+    create: (hostId) => new ProbeAdapter(hostId),
+  });
+  const runtime = new OtterPatchRuntime({ adapterRegistry: registry });
+  const request: ProposeRequest = {
+    hostId: 'h1', format: 'xlsx', intent: 'set A1', baseRev: 0 as DocRev, anchors: [], context: '',
+    sheet: { a1: 'Sheet1!A1', values: [[1]], formulas: [[null]], name: 'Sheet1' },
+  };
+  const cs = await runtime.propose(request, new MockModelClient(() => ({ plan: 'set A1', edits: [{ cell: 'Sheet1!A1', op: 'setValue', value: 2 }] })));
+  const diff = await runtime.diff(cs, { format: 'xlsx', sheet: request.sheet });
+  assert.equal(verified, 1);
+  assert.equal(previewed, 1);
+  assert.deepEqual(diff.expectedTouchedParts, ['probe/control-plane']);
+  assert.deepEqual(runtime.formats().sort(), ['excel', 'xlsx']);
+  assert.deepEqual(runtime.capabilities().formats.map((manifest) => manifest.format), ['excel']);
+});
+
+test('runtime: drawio registry adapter produces an observed shadow diff from the board snapshot', async () => {
+  const anchor = 'a0' as AnchorId;
+  const cs: ChangeSet = {
+    id: 'drawio-shadow', hostId: 'h', baseRev: 0 as DocRev, origin: { by: 'human' }, meta: { intent: 'move' },
+    anchors: {
+      [anchor]: {
+        id: anchor, hostId: 'h' as HostId, kind: 'object', ref: null, baseRev: 0 as DocRev,
+        portable: { kind: 'object', slide: 0, elementId: 'n1' },
+      },
+    },
+    edits: [{ id: 'e0', target: anchor, op: { family: 'object', kind: 'moveObject', box: { left: 40 } } }],
+  };
+  const diff = await new OtterPatchRuntime().diff(cs, {
+    format: 'drawio',
+    board: { nodes: [{ id: 'n1', x: 10, y: 20, width: 30, height: 40 }], edges: [] },
+  });
+  assert.equal(diff.source, 'shadow');
+  assert.equal(diff.previewStatus, 'verified');
+  assert.deepEqual(diff.items[0]?.before, {
+    kind: 'object', box: { left: 10, top: 20, width: 30, height: 40, rotate: 0 }, props: { id: 'n1', kind: 'node' },
+  });
+  assert.deepEqual(diff.items[0]?.after, {
+    kind: 'object', box: { left: 40, top: 20, width: 30, height: 40, rotate: 0 }, props: { id: 'n1', kind: 'node' },
+  });
 });
 
 test('runtime: commit rejects stale base revision', async () => {

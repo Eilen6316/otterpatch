@@ -5,8 +5,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { DocRev } from '@otterpatch/core';
-import { Agent, MockModelClient } from '@otterpatch/agent';
-import { DrawioSurgicalWriteback } from './writeback.js';
+import { Agent, MockModelClient } from './index.js';
+import { DrawioSurgicalWriteback } from '@otterpatch/adapter-drawio';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 const dec = new TextDecoder();

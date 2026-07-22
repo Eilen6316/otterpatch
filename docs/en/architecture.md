@@ -39,10 +39,10 @@ as opening a pull request against an `.xlsx` / `.docx` / `.drawio` file.
 | Package | Role |
 |---|---|
 | `packages/core` | Format-agnostic types: `Anchor`, `ChangeSet`, `EditOp`, `AbstractStyle`, adapter registry, writeback contracts |
-| `packages/agent` | Intent → constrained `ChangeSet`. Provider-agnostic `ModelClient` (Claude native + OpenAI-compatible ×8). The multi-step loop, read tools, verifiers live here |
+| `packages/agent` | Intent → constrained `ChangeSet`. Provider-agnostic `ModelClient` (Claude native + OpenAI-compatible ×8), multi-step loop, and read tools |
 | `packages/skills` | Skill hub: SKILL.md parsing, matching, progressive disclosure, built-in capability cards + domain playbooks |
-| `packages/runtime` | Headless orchestrator: `propose → shadow-derived diff → commit` + JSON event stream. Diff output separates observed before/after from proposal data and reports unavailable previews explicitly. Shared by MCP server, CLI, desktop |
-| `packages/adapter-*` | Per-format compile/write-back: `univer` (Excel), `word` (redline `w:ins`/`w:del` + `rPrChange`/`pPrChange`), `drawio`, `pdf` (AcroForm), `pptx` |
+| `packages/runtime` | Format-agnostic headless orchestrator. It resolves one `HostAdapter` through `AdapterRegistry` for proposal verification, preview, and writeback, then emits the JSON event stream used by MCP, CLI, and desktop |
+| `packages/adapter-*` | Per-format control planes: capability manifest, deterministic validator, optional shadow preview, touched-part description, and ordered writeback candidates. `univer` and `drawio` provide headless shadows; Word/PDF/PPTX disclose unavailable rendering explicitly |
 | `packages/writeback-surgical` | The OOXML surgical write-back engine (validated: 30/31 parts byte-identical on a real 531 KB docx) |
 | `apps/desktop` | The cockpit UI (Vite + React + Electron): workspaces (Univer sheet, rich-text Word, drawio board), review rail, BYOK model panel |
 | `apps/mcp-server` | MCP server (stdio) + headless CLI + `otterpatch-serve` local HTTP bridge for the cockpit |
@@ -62,3 +62,6 @@ as opening a pull request against an `.xlsx` / `.docx` / `.drawio` file.
   before-state; acceptance physically finalizes.
 - **Server-side commit is independent**: the accepted subset of the ChangeSet is applied to the
   uploaded original file by the surgical write-back — the in-app preview never touches your file.
+- **Format routing has one owner.** Runtime does not maintain backend or verifier maps. Built-in and
+  host-provided adapters are selected by `AdapterRegistry`; aliases such as `xlsx`, `docx`, and
+  `pptx` resolve to the same manifest and adapter implementation.

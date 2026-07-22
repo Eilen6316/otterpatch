@@ -52,7 +52,13 @@ const req: ProposeRequest = { hostId: 'cli', format, intent, baseRev: 0 as DocRe
 
 try {
   const cs = await rt.propose(req, client);
-  await rt.diff(cs, { format, ...(req.sheet ? { sheet: req.sheet } : {}) });
+  await rt.diff(cs, {
+    format,
+    ...(req.sheet ? { sheet: req.sheet } : {}),
+    ...(req.board ? { board: req.board } : {}),
+    ...(req.doc ? { doc: req.doc } : {}),
+    ...(req.ppt ? { ppt: req.ppt } : {}),
+  });
   if (inPath) {
     if (!confirmed) throw new Error('refusing to commit without explicit --yes after reviewing the emitted diff');
     const bytes = readDocumentFile(inPath);

@@ -82,6 +82,13 @@ const pptSchema = z.object({
   }).strict()),
 }).strict();
 
+const docSchema = z.object({
+  blocks: z.array(z.object({
+    style: z.string(), text: z.string(), font: z.string().optional(), size: z.number().optional(),
+    align: z.string().optional(), lineSpacing: z.number().optional(),
+  })),
+});
+
 server.registerTool(
   'otterpatch_skills',
   { description: 'List OtterPatch built-in (universal) document skills (xlsx/docx/pptx/pdf/drawio).', inputSchema: {} },
@@ -112,7 +119,7 @@ server.registerTool(
       apiKey: z.string().optional(),
       sheet: sheetSchema.optional(),
       board: boardSchema.optional(),
-      doc: z.object({ blocks: z.array(z.object({ style: z.string(), text: z.string(), font: z.string().optional(), size: z.number().optional(), align: z.string().optional(), lineSpacing: z.number().optional() })) }).optional(),
+      doc: docSchema.optional(),
       ppt: pptSchema.optional().describe('required for PPTX proposals; preserves slide, paragraph, and text-run boundaries'),
       history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).optional(),
     },
@@ -141,7 +148,17 @@ server.registerTool(
       );
       if (r.kind === 'answer') return ok({ answer: r.text });
       if (r.kind === 'clarify') return ok({ questions: r.questions });
-      return ok({ changeSet: r.changeSet, diff: await rt.diff(r.changeSet, { format: a.format, ...(a.sheet ? { sheet: a.sheet } : {}) }), proposal: rt.createProposal(r.changeSet, a.format, a.documentId ?? r.changeSet.hostId) });
+      return ok({
+        changeSet: r.changeSet,
+        diff: await rt.diff(r.changeSet, {
+          format: a.format,
+          ...(a.sheet ? { sheet: a.sheet } : {}),
+          ...(a.board ? { board: a.board } : {}),
+          ...(a.doc ? { doc: a.doc } : {}),
+          ...(a.ppt ? { ppt: a.ppt } : {}),
+        }),
+        proposal: rt.createProposal(r.changeSet, a.format, a.documentId ?? r.changeSet.hostId),
+      });
     } catch (e) {
       return failWith('propose', e);
     }
@@ -156,13 +173,22 @@ server.registerTool(
       changeSet: z.string().describe('ChangeSet JSON'),
       format: z.string().optional().describe('excel | drawio | word | ...; inferred conservatively when omitted'),
       sheet: sheetSchema.optional().describe('required for a shadow-derived Excel preview'),
+      board: boardSchema.optional().describe('required for a drawio topology shadow preview'),
+      doc: docSchema.optional(),
+      ppt: pptSchema.optional(),
     },
   },
   async (a) => {
     try {
       const changeSet = JSON.parse(a.changeSet) as ChangeSet;
       assertChangeSet(changeSet);
-      return ok(await rt.diff(changeSet, { ...(a.format ? { format: a.format } : {}), ...(a.sheet ? { sheet: a.sheet } : {}) }));
+      return ok(await rt.diff(changeSet, {
+        ...(a.format ? { format: a.format } : {}),
+        ...(a.sheet ? { sheet: a.sheet } : {}),
+        ...(a.board ? { board: a.board } : {}),
+        ...(a.doc ? { doc: a.doc } : {}),
+        ...(a.ppt ? { ppt: a.ppt } : {}),
+      }));
     } catch (e) {
       return failWith('diff', e);
     }

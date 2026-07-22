@@ -5,53 +5,38 @@
  *
  * End to end: propose (intent → ChangeSet) → diff (reviewable) → user accepts a subset → commit
  * (surgical writeback → new bytes + fidelity report).
- * Writeback backends are routed by format: excel/xlsx → surgical OOXML (Univer compiler);
- * drawio → single-XML surgical edit.
+ * Formats are resolved through AdapterRegistry; the runtime never imports a format compiler,
+ * verifier, preview engine, or writeback backend directly.
  */
-import { Agent, assertProposeRequestBudget, assertSheetSnapshotBudget, buildDocVerifier, buildDrawioVerifier } from '@otterpatch/agent';
+import { Agent, assertProposeRequestBudget } from '@otterpatch/agent';
 import type { AgentResponse, ChangeSetVerifier, ModelCallOptions, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from '@otterpatch/agent';
-import type { ApprovalPolicy, CellValue, ChangeSet, ChangeSetRiskContext, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
+import type {
+  AdapterRegistration,
+  AdapterRegistry,
+  ApprovalPolicy,
+  CapabilityStage,
+  ChangeSet,
+  ChangeSetRiskContext,
+  DocHandle,
+  FormatCapabilityManifest,
+  HostAdapter,
+  WritebackBackend,
+  WritebackResult,
+} from '@otterpatch/core';
 import {
   CAPABILITY_MANIFEST_VERSION,
   DEFAULT_POLICY,
   RESOURCE_LIMITS,
   ResourceLimitError,
   assertChangeSet,
-  assertFormatCapabilities,
   assertJsonBudget,
-  capabilityManifests,
   decideApproval,
   isResourceLimitError,
-  supportsFormatOperation,
 } from '@otterpatch/core';
-import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
-import {
-  GridChangeSetEngine,
-  GridSimulationError,
-  buildXlsxCompiler,
-  buildGridVerifier,
-  expandGridRange,
-  gridEngineSupports,
-  gridShadowFromSnapshot,
-  sheetSnapshotContains,
-  sheetSnapshotHasCompleteFormulaState,
-  sheetSnapshotHasStyleAt,
-  type GridShadow,
-  type SheetSnapshot,
-} from '@otterpatch/adapter-univer';
-import { DrawioSurgicalWriteback } from '@otterpatch/adapter-drawio';
-import { WordRedlineWriteback } from '@otterpatch/adapter-word';
-import { PdfFormWriteback } from '@otterpatch/adapter-pdf';
-import { buildPptxCompiler, buildPptxVerifier } from '@otterpatch/adapter-pptx';
 import { defaultLibrary } from '@otterpatch/skills';
 import type { SkillLibrary } from '@otterpatch/skills';
-import {
-  buildDiff,
-  type DiffObservation,
-  type DiffSupport,
-  type OtterPatchDiff,
-  type OtterPatchDiffEffect,
-} from './diff.js';
+import { buildDiff, type OtterPatchDiff } from './diff.js';
+import { createBuiltinAdapterRegistry, decorateAdapter } from './adapters.js';
 import type { OtterPatchEvent, OtterPatchEventListener } from './events.js';
 import { ReviewAuthority, sha256Bytes, type ProposalEnvelope, type ReviewedProposal, type ReviewReceipt } from './review.js';
 
@@ -73,7 +58,11 @@ export interface DiffInput {
   /** Required for a format-engine preview. Inferred conservatively when omitted. */
   format?: string;
   /** Read-only sheet snapshot used to construct an isolated Excel shadow. */
-  sheet?: SheetSnapshot;
+  sheet?: ProposeRequest['sheet'];
+  /** Structured snapshots used by non-grid adapters. */
+  board?: ProposeRequest['board'];
+  doc?: ProposeRequest['doc'];
+  ppt?: ProposeRequest['ppt'];
   /** Trusted host observations used by the contextual risk assessment. */
   riskContext?: ChangeSetRiskContext;
 }
@@ -85,14 +74,13 @@ export interface OtterPatchRuntimeOptions {
   reviewTtlMs?: number;
   approvalPolicy?: ApprovalPolicy;
   maxConcurrentModelRequests?: number;
+  adapterRegistry?: AdapterRegistry;
 }
 
 export class OtterPatchRuntime {
   private readonly listeners = new Set<OtterPatchEventListener>();
   private readonly skills: SkillLibrary;
-  private readonly backends: Record<string, () => WritebackBackend>;
-  private readonly fallbackBackends: Record<string, Array<() => WritebackBackend>> = {};
-  private readonly verifiers: Record<string, (req: ProposeRequest) => ChangeSetVerifier | undefined>;
+  private readonly adapters: AdapterRegistry;
   private readonly reviewAuthority: ReviewAuthority;
   private readonly allowUnreviewedCommit: boolean;
   private readonly approvalPolicy: ApprovalPolicy;
@@ -104,6 +92,7 @@ export class OtterPatchRuntime {
 
   constructor(opts: OtterPatchRuntimeOptions = {}) {
     this.skills = opts.skills ?? defaultLibrary();
+    this.adapters = opts.adapterRegistry ?? createBuiltinAdapterRegistry();
     this.reviewAuthority = new ReviewAuthority(opts.reviewSecret, opts.reviewTtlMs);
     this.allowUnreviewedCommit = opts.allowUnreviewedCommit ?? false;
     this.approvalPolicy = opts.approvalPolicy ?? DEFAULT_POLICY;
@@ -111,25 +100,6 @@ export class OtterPatchRuntime {
     if (!Number.isSafeInteger(this.maxConcurrentModelRequests) || this.maxConcurrentModelRequests <= 0 || this.maxConcurrentModelRequests > RESOURCE_LIMITS.concurrentModelRequests) {
       throw new ResourceLimitError('concurrent_model_requests', RESOURCE_LIMITS.concurrentModelRequests, this.maxConcurrentModelRequests);
     }
-    this.verifiers = {
-      excel: (req) => (req.sheet ? buildGridVerifier(req.sheet) : undefined),
-      xlsx: (req) => (req.sheet ? buildGridVerifier(req.sheet) : undefined),
-      word: (req) => (req.doc ? buildDocVerifier(req.doc) : req.context.trim() ? buildDocVerifier(req.context) : undefined),
-      docx: (req) => (req.doc ? buildDocVerifier(req.doc) : req.context.trim() ? buildDocVerifier(req.context) : undefined),
-      drawio: (req) => (req.board ? buildDrawioVerifier(req.board) : req.context.trim() ? buildDrawioVerifier(req.context) : undefined),
-      ppt: (req) => buildPptxVerifier(req.ppt),
-      pptx: (req) => buildPptxVerifier(req.ppt),
-    };
-    this.backends = {
-      excel: () => new SurgicalOoxmlWriteback(buildXlsxCompiler()),
-      xlsx: () => new SurgicalOoxmlWriteback(buildXlsxCompiler()),
-      drawio: () => new DrawioSurgicalWriteback(),
-      word: () => new WordRedlineWriteback(),
-      docx: () => new WordRedlineWriteback(),
-      pdf: () => new PdfFormWriteback(),
-      ppt: () => new SurgicalOoxmlWriteback(buildPptxCompiler()),
-      pptx: () => new SurgicalOoxmlWriteback(buildPptxCompiler()),
-    };
   }
 
   /** Subscribe to the event stream; returns an unsubscribe function. */
@@ -149,23 +119,29 @@ export class OtterPatchRuntime {
     }
   }
 
-  /** Register/override the writeback backend for a format (Word redline / PDF etc. to be added later). */
+  /** Register a complete adapter. Higher priority wins for overlapping formats. */
+  registerAdapter(registration: AdapterRegistration): void {
+    this.adapters.register(registration);
+  }
+  /** Compatibility API: override the selected adapter's primary writeback candidate. */
   registerWriteback(format: string, make: () => WritebackBackend): void {
-    this.backends[format] = make;
+    decorateAdapter(this.adapters, format, { writebacks: () => [make()] });
   }
   /** Add a lower-priority backend used when the primary cannot handle or verify a ChangeSet. */
   registerWritebackFallback(format: string, make: () => WritebackBackend): void {
-    (this.fallbackBackends[format] ??= []).push(make);
+    decorateAdapter(this.adapters, format, { writebacks: (base) => [...base, make()] });
   }
   /** Register/override the pre-commit checker for a format (lint, simulation, or output verification). */
   registerVerifier(format: string, make: (req: ProposeRequest) => ChangeSetVerifier | undefined): void {
-    this.verifiers[format] = make;
+    decorateAdapter(this.adapters, format, {
+      proposalVerifier: (input) => make(input.snapshot as ProposeRequest),
+    });
   }
   formats(): string[] {
-    return Object.keys(this.backends);
+    return this.adapters.formats();
   }
-  capabilities(): { version: typeof CAPABILITY_MANIFEST_VERSION; formats: ReturnType<typeof capabilityManifests> } {
-    return { version: CAPABILITY_MANIFEST_VERSION, formats: capabilityManifests() };
+  capabilities(): { version: typeof CAPABILITY_MANIFEST_VERSION; formats: readonly FormatCapabilityManifest[] } {
+    return { version: CAPABILITY_MANIFEST_VERSION, formats: this.adapters.manifests() };
   }
 
   /** Intent → constrained ChangeSet (injects the built-in skill library; BYOK model supplied by the caller). */
@@ -173,30 +149,35 @@ export class OtterPatchRuntime {
     assertProposeRequestBudget(req);
     control.signal?.throwIfAborted();
     const release = this.acquireModelSlot();
+    let adapter: HostAdapter | undefined;
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
+      adapter = this.adapters.create(req.format, req.hostId);
+      const routedReq = routeRequest(req, adapter);
       const agent = new Agent(model, undefined, this.skills, undefined, {
         approvalPolicy: this.approvalPolicy,
         allowUnreviewedCommit: this.allowUnreviewedCommit,
       });
-      const r = await agent.respond(req, this.verifyOpts(req, control));
+      const r = await agent.respond(routedReq, this.verifyOpts(routedReq, adapter, control));
       control.signal?.throwIfAborted();
       if (r.kind !== 'changeset') throw new Error(r.kind === 'answer' ? r.text : 'proposal requires clarification');
       const cs = r.changeSet;
+      assertAdapterValid(adapter, cs, 'propose');
       this.emit({ type: 'propose:done', changeSetId: cs.id, editCount: cs.edits.length, ...(cs.meta.planSummary ? { planSummary: cs.meta.planSummary } : {}) });
       return cs;
     } catch (err) {
       this.emit({ type: 'error', stage: 'propose', message: errMsg(err) });
       throw err;
     } finally {
+      adapter?.dispose();
       release();
     }
   }
 
   /** Format check after a proposal: Excel performs simulation; Word performs anchor lint;
    *  drawio simulates topology and PPTX resolves text against exact run boundaries. */
-  private verifyOpts(req: ProposeRequest, control: ModelCallOptions = {}): RespondOptions | undefined {
-    const structural = this.verifiers[req.format]?.(req);
+  private verifyOpts(req: ProposeRequest, adapter: HostAdapter, control: ModelCallOptions = {}): RespondOptions | undefined {
+    const structural = adapter.proposalVerifier({ context: req.context, snapshot: req });
     if (!structural && !control.signal) return undefined;
     return {
       ...(control.signal ? { signal: control.signal } : {}),
@@ -209,15 +190,19 @@ export class OtterPatchRuntime {
     assertProposeRequestBudget(req);
     control.signal?.throwIfAborted();
     const release = this.acquireModelSlot();
+    let adapter: HostAdapter | undefined;
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
+      adapter = this.adapters.create(req.format, req.hostId);
+      const routedReq = routeRequest(req, adapter);
       const agent = new Agent(model, undefined, this.skills, undefined, {
         approvalPolicy: this.approvalPolicy,
         allowUnreviewedCommit: this.allowUnreviewedCommit,
       });
-      const r = await agent.respond(req, this.verifyOpts(req, control));
+      const r = await agent.respond(routedReq, this.verifyOpts(routedReq, adapter, control));
       control.signal?.throwIfAborted();
       if (r.kind === 'changeset') {
+        assertAdapterValid(adapter, r.changeSet, 'propose');
         this.emit({ type: 'propose:done', changeSetId: r.changeSet.id, editCount: r.changeSet.edits.length, ...(r.changeSet.meta.planSummary ? { planSummary: r.changeSet.meta.planSummary } : {}) });
       }
       return r;
@@ -225,6 +210,7 @@ export class OtterPatchRuntime {
       this.emit({ type: 'error', stage: 'propose', message: errMsg(err) });
       throw err;
     } finally {
+      adapter?.dispose();
       release();
     }
   }
@@ -234,15 +220,19 @@ export class OtterPatchRuntime {
     assertProposeRequestBudget(req);
     control.signal?.throwIfAborted();
     const release = this.acquireModelSlot();
+    let adapter: HostAdapter | undefined;
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
+      adapter = this.adapters.create(req.format, req.hostId);
+      const routedReq = routeRequest(req, adapter);
       const agent = new Agent(model, undefined, this.skills, undefined, {
         approvalPolicy: this.approvalPolicy,
         allowUnreviewedCommit: this.allowUnreviewedCommit,
       });
-      const r = await agent.respondStream(req, onEvent, this.verifyOpts(req, control));
+      const r = await agent.respondStream(routedReq, onEvent, this.verifyOpts(routedReq, adapter, control));
       control.signal?.throwIfAborted();
       if (r.kind === 'changeset') {
+        assertAdapterValid(adapter, r.changeSet, 'propose');
         this.emit({ type: 'propose:done', changeSetId: r.changeSet.id, editCount: r.changeSet.edits.length, ...(r.changeSet.meta.planSummary ? { planSummary: r.changeSet.meta.planSummary } : {}) });
       }
       return r;
@@ -250,6 +240,7 @@ export class OtterPatchRuntime {
       this.emit({ type: 'error', stage: 'propose', message: errMsg(err) });
       throw err;
     } finally {
+      adapter?.dispose();
       release();
     }
   }
@@ -257,27 +248,47 @@ export class OtterPatchRuntime {
   /** ChangeSet → reviewable diff. */
   async diff(cs: ChangeSet, input: DiffInput = {}): Promise<OtterPatchDiff> {
     assertChangeSet(cs);
+    let adapter: HostAdapter | undefined;
     try {
-      if (input.sheet) {
-        assertJsonBudget(input.sheet, 'sheet_snapshot');
-        assertSheetSnapshotBudget(input.sheet);
-      }
       const format = (input.format ?? inferFormat(cs)).toLowerCase();
-      const observation = await buildDiffObservation(cs, format, input.sheet, input.riskContext);
-      const diff = buildDiff(cs, observation);
+      const snapshot = {
+        ...(input.sheet ? { sheet: input.sheet } : {}),
+        ...(input.board ? { board: input.board } : {}),
+        ...(input.doc ? { doc: input.doc } : {}),
+        ...(input.ppt ? { ppt: input.ppt } : {}),
+      };
+      assertJsonBudget(snapshot, 'adapter_preview_input');
+      adapter = this.adapters.create(format, cs.hostId);
+      const preview = await adapter.preview(cs, { snapshot });
+      const diff = buildDiff(cs, {
+        format,
+        supportByEdit: preview.supportByEdit,
+        expectedTouchedPartsByEdit: preview.expectedTouchedPartsByEdit,
+        ...(preview.shadow ? { shadow: preview.shadow } : {}),
+        ...(preview.indirectEffects ? { indirectEffects: preview.indirectEffects } : {}),
+        ...(preview.unavailableReason ? { unavailableReason: preview.unavailableReason } : {}),
+        ...(input.riskContext ? { riskContext: input.riskContext } : {}),
+      });
       this.emit({ type: 'diff:done', diff });
       return diff;
     } catch (err) {
       this.emit({ type: 'error', stage: 'diff', message: errMsg(err) });
       throw err;
+    } finally {
+      adapter?.dispose();
     }
   }
 
   /** Sign a model proposal before it is shown for review. The source file is bound when review completes. */
   createProposal(cs: ChangeSet, format: string, documentId = cs.hostId): ProposalEnvelope {
-    if (!this.backends[format]) throw new Error(`OtterPatchRuntime: no writeback backend for format "${format}"`);
-    assertFormatCapabilities(format, cs, 'propose');
-    return this.reviewAuthority.createProposal(cs, format, documentId);
+    const adapter = this.adapters.create(format, cs.hostId);
+    try {
+      if (!adapter.writebacks().length) throw new Error(`OtterPatchRuntime: no writeback backend for format "${format}"`);
+      assertAdapterValid(adapter, cs, 'propose');
+      return this.reviewAuthority.createProposal(cs, format, documentId);
+    } finally {
+      adapter.dispose();
+    }
   }
 
   /** Bind the reviewed proposal to exact source bytes and accepted edit IDs. */
@@ -294,10 +305,23 @@ export class OtterPatchRuntime {
   /** Accepted subset → surgical writeback → new bytes + fidelity report. */
   async commit(input: CommitInput): Promise<WritebackResult> {
     assertChangeSet(input.changeSet);
-    assertFormatCapabilities(input.format, input.changeSet, 'writeback');
-    const make = this.backends[input.format];
-    if (!make) throw new Error(`OtterPatchRuntime: no writeback backend for format "${input.format}"`);
-    const backends = [make(), ...(this.fallbackBackends[input.format] ?? []).map((factory) => factory())];
+    let adapter: HostAdapter;
+    try {
+      adapter = this.adapters.create(input.format, input.changeSet.hostId);
+    } catch {
+      throw new Error(`OtterPatchRuntime: no writeback backend for format "${input.format}"`);
+    }
+    try {
+      return await this.commitUsingAdapter(input, adapter);
+    } finally {
+      adapter.dispose();
+    }
+  }
+
+  private async commitUsingAdapter(input: CommitInput, adapter: HostAdapter): Promise<WritebackResult> {
+    assertAdapterValid(adapter, input.changeSet, 'writeback');
+    const backends = [...adapter.writebacks()];
+    if (!backends.length) throw new Error(`OtterPatchRuntime: no writeback backend for format "${input.format}"`);
     if (input.currentRev !== undefined && input.currentRev !== input.changeSet.baseRev) {
       throw new Error('changeset is stale: baseRev ' + input.changeSet.baseRev + ' != currentRev ' + input.currentRev);
     }
@@ -482,166 +506,23 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function assertAdapterValid(adapter: HostAdapter, cs: ChangeSet, stage: CapabilityStage): void {
+  const validation = adapter.validate(cs, stage);
+  if (validation.ok) return;
+  const details = validation.issues.map((issue) => `${issue.editId || 'changeset'}: ${issue.message ?? issue.code}`).join('; ');
+  throw new Error(`${adapter.meta.format} adapter rejected ${stage}: ${details}`);
+}
+
+function routeRequest(req: ProposeRequest, adapter: HostAdapter): ProposeRequest {
+  return req.format === adapter.meta.format ? req : { ...req, format: adapter.meta.format };
+}
+
 function inferFormat(cs: ChangeSet): string {
   const kinds = new Set(Object.values(cs.anchors).map((anchor) => anchor.portable.kind));
   if (kinds.size === 1 && kinds.has('grid')) return 'excel';
   if (kinds.size === 1 && kinds.has('flow')) return 'word';
   if (kinds.size === 1 && kinds.has('object')) return 'drawio';
   return 'unknown';
-}
-
-async function buildDiffObservation(
-  cs: ChangeSet,
-  format: string,
-  sheet: SheetSnapshot | undefined,
-  riskContext: ChangeSetRiskContext | undefined,
-): Promise<DiffObservation> {
-  const base: DiffObservation = {
-    format,
-    ...(riskContext ? { riskContext } : {}),
-  };
-  if (format !== 'excel' && format !== 'xlsx') {
-    return { ...base, unavailableReason: `No ${format} preview simulation is registered.` };
-  }
-  if (!sheet) {
-    return { ...base, unavailableReason: 'Excel diff requires a read-only sheet snapshot.' };
-  }
-
-  const supportByEdit: Record<string, DiffSupport> = {};
-  for (const edit of cs.edits) {
-    const anchor = cs.anchors[edit.target];
-    const gridAnchor = anchor?.portable.kind === 'grid' ? anchor.portable : undefined;
-    let refs: string[] = [];
-    if (gridAnchor) {
-      try {
-        refs = expandGridRange(gridAnchor.a1);
-      } catch {
-        refs = [];
-      }
-    }
-    const snapshotCoversTargets = Boolean(gridAnchor
-      && refs.length > 0
-      && refs.every((ref) => sheetSnapshotContains(sheet, ref, gridAnchor.sheet)));
-    const needsStyleSnapshot = edit.op.kind === 'setStyle' || edit.op.kind === 'setNumberFormat';
-    const needsFormulaSnapshot = edit.op.kind === 'setValue' || edit.op.kind === 'setFormula' || edit.op.kind === 'deleteRange';
-    const snapshotCoversStyles = !needsStyleSnapshot || (
-      gridAnchor
-      && refs.every((ref) => sheetSnapshotHasStyleAt(sheet, ref, gridAnchor.sheet))
-    );
-    const snapshotCoversFormulas = !needsFormulaSnapshot || sheetSnapshotHasCompleteFormulaState(sheet);
-    if (!supportsFormatOperation(format, edit.op.kind, 'preview') || !supportsFormatOperation(format, edit.op.kind, 'writeback')) {
-      supportByEdit[edit.id] = 'unsupported';
-    } else if (
-      gridEngineSupports(edit.op.kind)
-      && snapshotCoversTargets
-      && snapshotCoversStyles
-      && snapshotCoversFormulas
-    ) {
-      supportByEdit[edit.id] = 'verified';
-    } else {
-      supportByEdit[edit.id] = 'partial';
-    }
-  }
-
-  const executable = cs.edits.filter((edit) => supportByEdit[edit.id] === 'verified');
-  if (!executable.length) {
-    return {
-      ...base,
-      supportByEdit,
-      unavailableReason: 'The Excel simulation engine did not simulate any proposed operations.',
-    };
-  }
-
-  try {
-    const beforeGrid = gridShadowFromSnapshot(sheet);
-    const afterGrid = gridShadowFromSnapshot(sheet);
-    const engine = new GridChangeSetEngine();
-    const beforeResult = await engine.shadowApply({ ...cs, edits: [] }, beforeGrid);
-    const shadow = await engine.shadowApply({ ...cs, edits: executable }, afterGrid);
-    const indirectEffects = formulaEffects(
-      cs,
-      executable.map((edit) => edit.id),
-      sheet,
-      beforeGrid,
-      afterGrid,
-      beforeResult.effects.recalculated ?? [],
-      shadow.effects.recalculated ?? [],
-    );
-    const partialCount = Object.values(supportByEdit).filter((support) => support !== 'verified').length;
-    return {
-      ...base,
-      shadow,
-      supportByEdit,
-      indirectEffects,
-      ...(partialCount ? { unavailableReason: `${partialCount} operation(s) were not fully simulated.` } : {}),
-    };
-  } catch (error) {
-    for (const editId of Object.keys(supportByEdit)) {
-      if (supportByEdit[editId] === 'verified') supportByEdit[editId] = 'partial';
-    }
-    return {
-      ...base,
-      supportByEdit,
-      unavailableReason: `Excel simulation failed: ${error instanceof GridSimulationError ? error.code + ': ' : ''}${errMsg(error)}`,
-    };
-  }
-}
-
-function bareGridRef(value: string): string {
-  return value.replace(/^.*!/, '').replace(/\$/g, '').toUpperCase();
-}
-
-function formulaEffects(
-  cs: ChangeSet,
-  editIds: string[],
-  sheet: SheetSnapshot,
-  beforeGrid: GridShadow,
-  afterGrid: GridShadow,
-  beforeRows: CellValue[][],
-  afterRows: CellValue[][],
-): OtterPatchDiffEffect[] {
-  const directTargets = new Set(
-    cs.edits
-      .filter((edit) => editIds.includes(edit.id)
-        && (edit.op.kind === 'setValue' || edit.op.kind === 'setFormula' || edit.op.kind === 'deleteRange'))
-      .map((edit) => cs.anchors[edit.target])
-      .filter((anchor) => anchor?.portable.kind === 'grid')
-      .flatMap((anchor) => anchor?.portable.kind === 'grid' ? expandGridRange(anchor.portable.a1).map(bareGridRef) : []),
-  );
-  const before = recalculatedMap(beforeRows);
-  const after = recalculatedMap(afterRows);
-  const refs = new Set([...before.keys(), ...after.keys()]);
-  const sheetName = sheet.name ?? (/^(.*?)!/.exec(sheet.a1)?.[1]?.replace(/^'|'$/g, ''));
-  const effects: OtterPatchDiffEffect[] = [];
-  for (const ref of refs) {
-    if (directTargets.has(ref)) continue;
-    const beforeValue = before.get(ref);
-    const afterValue = after.get(ref);
-    const beforeFormula = beforeGrid.get(ref)?.formula;
-    const afterFormula = afterGrid.get(ref)?.formula;
-    if (Object.is(beforeValue, afterValue) && beforeFormula === afterFormula) continue;
-    const target = sheetName ? `${sheetName}!${ref}` : ref;
-    const effect: OtterPatchDiffEffect = {
-      target,
-      kind: 'formula-recalculation',
-      summary: `formula recalculated at ${target}`,
-      editIds: [...editIds],
-    };
-    if (before.has(ref)) effect.before = { kind: 'cell', value: beforeValue ?? null, ...(beforeFormula ? { formula: beforeFormula } : {}) };
-    if (after.has(ref)) effect.after = { kind: 'cell', value: afterValue ?? null, ...(afterFormula ? { formula: afterFormula } : {}) };
-    effects.push(effect);
-  }
-  return effects;
-}
-
-function recalculatedMap(rows: CellValue[][]): Map<string, CellValue> {
-  const result = new Map<string, CellValue>();
-  for (const row of rows) {
-    const ref = row[0];
-    if (typeof ref !== 'string') continue;
-    result.set(ref.toUpperCase(), row[1] ?? null);
-  }
-  return result;
 }
 
 /**

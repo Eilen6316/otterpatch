@@ -17,8 +17,12 @@ import type {
   EditId,
   EditOpKind,
   ShadowDoc,
+  ShadowResult,
+  ValidationReport,
+  VerifyReport,
 } from './changeset.js';
-import type { DiffLevel } from './diff.js';
+import type { DiffLevel, PreviewValue } from './diff.js';
+import type { CapabilityStage, FormatCapabilityManifest } from './capabilities.js';
 import type { WritebackBackend } from './writeback.js';
 
 export interface HostMeta {
@@ -65,7 +69,7 @@ export type CapabilityVerdict =
 export interface CapabilitySet {
   readonly anchorKinds: readonly AnchorKind[];
   readonly diffGranularity: readonly DiffLevel[];
-  readonly ops: Readonly<Record<EditOpKind, OpCapability>>;
+  readonly ops: Readonly<Partial<Record<EditOpKind, OpCapability>>>;
   readonly features: {
     shadowApply: boolean; // Univer headless: true; OnlyOffice free tier: false
     nativeUndo: boolean;
@@ -88,23 +92,103 @@ export interface CapabilityNegotiator {
   };
 }
 
+export interface CapabilitySetOptions {
+  anchorKinds: readonly AnchorKind[];
+  diffGranularity?: readonly DiffLevel[];
+  features?: Partial<CapabilitySet['features']>;
+}
+
+/** Build the legacy query surface from the same manifest consumed by the runtime control plane. */
+export function capabilitySetFromManifest(manifest: FormatCapabilityManifest, options: CapabilitySetOptions): CapabilitySet {
+  const features: CapabilitySet['features'] = {
+    shadowApply: false,
+    nativeUndo: false,
+    antiDrift: 'none',
+    formulaRecalc: false,
+    headless: true,
+    ...(options.features ?? {}),
+  };
+  const ops = Object.fromEntries(manifest.operations.map((operation) => [
+    operation.op,
+    { level: operation.propose || operation.writeback ? 'native' as const : 'unsupported' as const },
+  ])) as Readonly<Partial<Record<EditOpKind, OpCapability>>>;
+  return {
+    anchorKinds: options.anchorKinds,
+    diffGranularity: options.diffGranularity ?? ['batch', 'block', 'leaf'],
+    ops,
+    features,
+    supports: (query) => {
+      if ('op' in query) {
+        const capability = manifest.operations.find((candidate) => candidate.op === query.op);
+        return capability && (capability.propose || capability.writeback)
+          ? { ok: true }
+          : { ok: false, reason: `${manifest.format} does not support ${query.op}` };
+      }
+      if ('anchorKind' in query) {
+        return options.anchorKinds.includes(query.anchorKind)
+          ? { ok: true }
+          : { ok: false, reason: `${manifest.format} does not support ${query.anchorKind} anchors` };
+      }
+      const value = features[query.feature];
+      const supported = typeof value === 'boolean' ? value : value !== 'none';
+      return supported
+        ? { ok: true }
+        : { ok: false, reason: `${manifest.format} does not support ${query.feature}` };
+    },
+  };
+}
+
+export type AdapterPreviewSupport = 'verified' | 'partial' | 'unsupported';
+
+/** Opaque envelope: each adapter validates and narrows `snapshot` to its own request/diff input. */
+export interface AdapterExecutionInput {
+  context?: string;
+  snapshot?: unknown;
+}
+
+export interface AdapterPreviewEffect {
+  target: string;
+  kind: 'direct' | 'formula-recalculation' | 'reflow';
+  summary: string;
+  before?: PreviewValue;
+  after?: PreviewValue;
+  editIds?: string[];
+}
+
+export interface AdapterPreviewResult {
+  shadow?: ShadowResult;
+  supportByEdit: Readonly<Record<EditId, AdapterPreviewSupport>>;
+  indirectEffects?: readonly AdapterPreviewEffect[];
+  unavailableReason?: string;
+  expectedTouchedPartsByEdit: Readonly<Record<EditId, readonly string[]>>;
+}
+
+export type AdapterProposalVerifier = (cs: ChangeSet) => VerifyReport | Promise<VerifyReport>;
+
 /**
- * Adapter tiers — honest contract instead of one heavyweight interface:
- *  - `HostAdapter` (required core): identity + capability negotiation + anchors + edit engine
- *    + write-back. This is what the propose→diff→commit pipeline actually exercises.
- *  - Optional capability interfaces below: implement only what the host really supports,
- *    discover at runtime via the `has*` guards. A format may also ship as a bare
- *    `WritebackBackend` only (pdf/pptx today) and skip HostAdapter entirely — that tier is
- *    registered on the runtime's backend table, not in the adapter registry.
+ * Required adapter control plane. Live-document anchors and generic change engines are optional
+ * capabilities below; headless/writeback-only formats must not ship throwing placeholder methods.
  */
 export interface HostAdapter {
   readonly hostId: string;
   readonly meta: HostMeta;
+  manifest(): FormatCapabilityManifest | undefined;
   capabilities(): CapabilitySet;
-  anchors(): AnchorService;
-  changes(): ChangeSetEngine;
+  validate(cs: ChangeSet, stage: CapabilityStage): ValidationReport;
+  proposalVerifier(input: AdapterExecutionInput): AdapterProposalVerifier | undefined;
+  preview(cs: ChangeSet, input: AdapterExecutionInput): Promise<AdapterPreviewResult>;
   writebacks(): readonly WritebackBackend[];
   dispose(): void;
+}
+
+/** Optional: live selection/anchor lifecycle integration. */
+export interface AnchorCapability {
+  anchors(): AnchorService;
+}
+
+/** Optional: reusable format change engine for callers that own a compatible shadow snapshot. */
+export interface ChangeEngineCapability {
+  changes(): ChangeSetEngine;
 }
 
 /** Optional: read-only structured projections of the document (outlines, style usage, windows). */
@@ -126,6 +210,8 @@ export interface OverlayCapability {
   overlay(): OverlayPort;
 }
 
+export const hasAnchors = (a: HostAdapter): a is HostAdapter & AnchorCapability => 'anchors' in a;
+export const hasChangeEngine = (a: HostAdapter): a is HostAdapter & ChangeEngineCapability => 'changes' in a;
 export const hasProjection = (a: HostAdapter): a is HostAdapter & ProjectionCapability => 'project' in a;
 export const hasShadow = (a: HostAdapter): a is HostAdapter & ShadowCapability => 'createShadow' in a;
 export const hasLiveDoc = (a: HostAdapter): a is HostAdapter & LiveDocCapability => 'observeMutations' in a;

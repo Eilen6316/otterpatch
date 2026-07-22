@@ -41,10 +41,10 @@ test('capability manifest exposes only verified Excel writeback operations', () 
   }
 });
 
-test('capability manifest does not advertise writeback-only formats as preview or verification', () => {
+test('capability manifest advertises only previews backed by adapter shadows', () => {
   assert.ok(capabilityManifestFor('excel')?.operations.every((operation) => operation.preview && operation.verify));
   assert.ok(capabilityManifestFor('word')?.operations.every((operation) => !operation.preview && !operation.verify));
-  assert.ok(capabilityManifestFor('drawio')?.operations.every((operation) => !operation.preview && operation.verify));
+  assert.ok(capabilityManifestFor('drawio')?.operations.every((operation) => operation.preview && operation.verify));
   assert.ok(capabilityManifestFor('pdf')?.operations.every((operation) => !operation.preview && !operation.verify));
   assert.ok(capabilityManifestFor('pptx')?.operations.every((operation) => !operation.preview && !operation.verify));
   assert.equal(capabilityManifestFor('drawio')?.features?.compressed, 'unsupported');

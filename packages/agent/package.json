@@ -7,10 +7,12 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
-    "test": "node --import tsx --test src/agent.test.ts src/provider-control.test.ts src/sheet-tools.test.ts src/json-salvage.test.ts src/word-verify.test.ts src/doc-tools.test.ts src/drawio-verify.test.ts"
+    "test": "node --import tsx --test src/agent.test.ts src/provider-control.test.ts src/sheet-tools.test.ts src/json-salvage.test.ts src/word-verify.test.ts src/doc-tools.test.ts src/drawio-verify.test.ts src/drawio-pipeline.test.ts"
   },
   "dependencies": {
     "@otterpatch/core": "0.0.1",
+    "@otterpatch/adapter-drawio": "0.0.1",
+    "@otterpatch/adapter-word": "0.0.1",
     "@otterpatch/skills": "0.0.1",
     "@anthropic-ai/sdk": "latest",
     "openai": "latest"

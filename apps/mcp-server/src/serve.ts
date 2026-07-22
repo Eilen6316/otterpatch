@@ -5,13 +5,14 @@ import type { ChangeSet, DocRev } from '@otterpatch/core';
 import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, isResourceLimitError } from '@otterpatch/core';
 import { ProviderCallError, createModelClient, sanitizeStreamStatus, type AgentResponse, type ProposeRequest, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
-import { OtterPatchRuntime, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
+import { OtterPatchRuntime, type DiffInput, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
 import { decodeDocumentBase64 } from './document-input.js';
 import { observeClientAbort } from './client-abort.js';
 
 const rt = new OtterPatchRuntime();
 type SheetInput = NonNullable<ProposeRequest['sheet']>;
 type BoardInput = NonNullable<ProposeRequest['board']>;
+type DocInput = NonNullable<ProposeRequest['doc']>;
 type PptInput = NonNullable<ProposeRequest['ppt']>;
 const PORT = Number(process.env.OtterPatch_PORT ?? 4319);
 const HOST = '127.0.0.1';
@@ -117,6 +118,16 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
 
 const emsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+function diffInput(body: Record<string, unknown>): DiffInput {
+  return {
+    format: String(body.format),
+    ...(body.sheet ? { sheet: body.sheet as SheetInput } : {}),
+    ...(body.board ? { board: body.board as BoardInput } : {}),
+    ...(body.doc ? { doc: body.doc as DocInput } : {}),
+    ...(body.ppt ? { ppt: body.ppt as PptInput } : {}),
+  };
+}
+
 function providerHttpStatus(error: ProviderCallError): number {
   if (error.kind === 'authentication') return 401;
   if (error.kind === 'permission') return 403;
@@ -183,7 +194,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         else if (r.kind === 'clarify') send(req, res, 200, { questions: r.questions });
         else send(req, res, 200, {
           changeSet: r.changeSet,
-          diff: await rt.diff(r.changeSet, { format: String(a.format), ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}) }),
+          diff: await rt.diff(r.changeSet, diffInput(a)),
           proposal: rt.createProposal(r.changeSet, String(a.format), String(a.documentId ?? r.changeSet.hostId)),
         });
         return;
@@ -232,7 +243,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               type: 'done',
               kind: 'changeset',
               changeSet: result.changeSet,
-              diff: await rt.diff(result.changeSet, { format: String(a.format), ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}) }),
+              diff: await rt.diff(result.changeSet, diffInput(a)),
               proposal: rt.createProposal(result.changeSet, String(a.format), String(a.documentId ?? result.changeSet.hostId)),
             });
           } else if (result.kind === 'clarify') {

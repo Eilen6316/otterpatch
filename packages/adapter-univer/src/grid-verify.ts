@@ -1,5 +1,5 @@
 /** Excel simulation verifier backed by GridChangeSetEngine. */
-import { isSheetScalar, sheetScalarToCellValue, type AbstractStyle, type CellValue, type ChangeSet, type SheetCellValue, type VerifyReport } from '@otterpatch/core';
+import { RESOURCE_LIMITS, ResourceLimitError, isSheetScalar, sheetScalarToCellValue, type AbstractStyle, type CellValue, type ChangeSet, type SheetCellValue, type VerifyReport } from '@otterpatch/core';
 import {
   GridChangeSetEngine,
   GridSimulationError,
@@ -50,6 +50,20 @@ export interface SheetSnapshot {
   names?: string[];
 }
 
+export function assertGridSnapshotBudget(sheet: SheetSnapshot): void {
+  const rows = Math.max(sheet.values.length, sheet.formulas?.length ?? 0, sheet.styles?.length ?? 0);
+  if (rows > RESOURCE_LIMITS.totalTouchedCells) {
+    throw new ResourceLimitError('sheet_snapshot_rows', RESOURCE_LIMITS.totalTouchedCells, rows);
+  }
+  let cells = 0;
+  for (let index = 0; index < rows; index++) {
+    cells += Math.max(sheet.values[index]?.length ?? 0, sheet.formulas?.[index]?.length ?? 0, sheet.styles?.[index]?.length ?? 0);
+    if (cells > RESOURCE_LIMITS.totalTouchedCells) {
+      throw new ResourceLimitError('sheet_snapshot_cells', RESOURCE_LIMITS.totalTouchedCells, cells);
+    }
+  }
+}
+
 const SNAPSHOT_STYLE_KEYS = new Set(['bold', 'italic', 'underline', 'color', 'bgColor', 'font', 'size', 'align', 'numberFormat']);
 
 function snapshotStyle(value: AbstractStyle | null | undefined, ref: string): AbstractStyle | undefined {
@@ -75,6 +89,7 @@ function snapshotStyle(value: AbstractStyle | null | undefined, ref: string): Ab
 
 /** Convert a host sheet snapshot into the typed grid used by shadow apply. */
 export function gridShadowFromSnapshot(sheet: SheetSnapshot): GridShadow {
+  assertGridSnapshotBudget(sheet);
   const origin = topLeft(sheet.a1);
   if (origin.c < 0 || origin.r < 0) throw new Error(`invalid sheet snapshot range ${sheet.a1}`);
   const shadow = gridShadow({}, true);

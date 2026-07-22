@@ -53,7 +53,6 @@ const writebackOnly = (input: CapabilityInput): OperationCapability => verified(
 });
 
 const topologyChecked = (input: CapabilityInput): OperationCapability => verified({
-  preview: false,
   verify: true,
   maturity: 'preview',
   ...input,
@@ -175,9 +174,15 @@ export function assertFormatCapabilities(format: string, changeSet: ChangeSet, s
   const manifest = capabilityManifestFor(format);
   // Extension backends registered by an embedding host retain their own canHandle/supports contract.
   if (!manifest) return;
+  assertManifestCapabilities(manifest, changeSet, stage);
+}
+
+/** Validate against the manifest selected by an AdapterRegistry entry. */
+export function assertManifestCapabilities(manifest: FormatCapabilityManifest, changeSet: ChangeSet, stage: CapabilityStage): void {
   for (const edit of changeSet.edits) {
-    if (!supportsFormatOperation(format, edit.op.kind, stage)) {
-      throw new Error(`${format} capability manifest does not allow ${stage} for op ${edit.op.kind}`);
+    const capability = manifest.operations.find((candidate) => candidate.op === edit.op.kind);
+    if (capability?.[stage] !== true) {
+      throw new Error(`${manifest.format} capability manifest does not allow ${stage} for op ${edit.op.kind}`);
     }
     assertFormatSpecificPayload(manifest.format, changeSet, edit);
   }

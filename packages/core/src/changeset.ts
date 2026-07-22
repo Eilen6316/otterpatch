@@ -124,6 +124,7 @@ export interface ValidationReport {
   issues: Array<{
     editId: EditId;
     code: 'schema' | 'unsupported' | 'anchor-broken';
+    message?: string;
     downgrade?: EditOp;
   }>;
 }

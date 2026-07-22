@@ -82,6 +82,7 @@ export interface DiffObservation {
   format: string;
   shadow?: ShadowResult;
   supportByEdit?: Readonly<Record<string, DiffSupport>>;
+  expectedTouchedPartsByEdit?: Readonly<Record<string, readonly string[]>>;
   indirectEffects?: readonly OtterPatchDiffEffect[];
   unavailableReason?: string;
   riskContext?: ChangeSetRiskContext;
@@ -258,21 +259,6 @@ function affectedCountOf(edit: Edit, anchor: LogicalAnchor | undefined): number 
   return 1;
 }
 
-function touchedPartsFor(format: string, edit: Edit, anchor: LogicalAnchor | undefined): string[] {
-  const normalized = format.toLowerCase();
-  if (normalized === 'excel' || normalized === 'xlsx') {
-    const sheet = anchor?.portable.kind === 'grid' ? anchor.portable.sheet : 'unknown';
-    const parts = [`worksheet[${sheet}]`];
-    if (edit.op.kind === 'setStyle' || edit.op.kind === 'setNumberFormat') parts.push('xl/styles.xml');
-    return parts;
-  }
-  if (normalized === 'word' || normalized === 'docx') return ['word/document.xml'];
-  if (normalized === 'drawio') return ['drawio/diagram'];
-  if (normalized === 'pdf') return ['pdf/AcroForm'];
-  if (normalized === 'ppt' || normalized === 'pptx') return ['ppt/slides'];
-  return ['unknown'];
-}
-
 function defaultSupport(format: string, edit: Edit, hasObservedNode: boolean): DiffSupport {
   const preview = supportsFormatOperation(format, edit.op.kind, 'preview');
   const writeback = supportsFormatOperation(format, edit.op.kind, 'writeback');
@@ -346,7 +332,7 @@ export function buildDiff(cs: ChangeSet, observation: DiffObservation): OtterPat
     const itemIndirect = indirectEffects.filter((effect) => effect.editIds?.includes(edit.id));
     const conflicts = shadowConflicts.filter((conflict) => conflict.anchor === edit.target);
     const affectedCount = affectedCountOf(edit, anchor);
-    const expectedTouchedParts = touchedPartsFor(observation.format, edit, anchor);
+    const expectedTouchedParts = [...(observation.expectedTouchedPartsByEdit?.[edit.id] ?? ['unknown'])];
     const risk = riskByEdit.get(edit.id) ?? { level: 'caution' as const, reasons: ['risk assessment unavailable'] };
     const sample = [...directEffects, ...itemIndirect].slice(0, 12);
     const item: OtterPatchDiffItem = {

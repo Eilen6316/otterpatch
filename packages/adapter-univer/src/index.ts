@@ -1,49 +1,77 @@
 /**
- * UniverAdapter — Excel adapter (stub). Foundation for the MVP launch.
+ * UniverAdapter — Excel control-plane adapter.
  *
- * Implementation mapping (to be built):
- *  - anchors():  Univer SelectionService yields {unitId, sheetId, A1} → LogicalAnchor;
- *                register ranges with RefRangeService so row/column insert/delete auto-shifts them → the 'tracked' rebase state.
- *  - changes():  Facade getRange().setValue/setFormula; the Command/Mutation system provides undo/redo;
- *                a Node isomorphic headless instance performs shadowApply (fork snapshot → apply → compute before/after).
- *  - overlay():  mount a custom absolutely-positioned SVG overlay on top of the Univer canvas (lasso selection / red-pen / diff highlight).
- *  - writebacks(): delegated to @otterpatch/writeback-surgical (surgical patching).
+ * Owns the Excel capability manifest, deterministic grid validation/shadow preview, proposal
+ * verifier, and surgical writeback candidates. Live Univer selection/overlay integration is a
+ * separate optional capability and is intentionally absent from this headless adapter.
  *
  * See .work/abstraction-layer.md §5 and §9 (MVP minimal subset).
  */
-import type {
-  AdapterRegistration,
-  AnchorService,
-  ChangeSetEngine,
-  CapabilitySet,
-  HostAdapter,
-  HostMeta,
-  WritebackBackend,
+import {
+  assertChangeSet,
+  assertManifestCapabilities,
+  capabilityManifestFor,
+  capabilitySetFromManifest,
+  type AdapterExecutionInput,
+  type AdapterPreviewResult,
+  type AdapterRegistration,
+  type CapabilitySet,
+  type CapabilityStage,
+  type ChangeSet,
+  type ChangeSetEngine,
+  type FormatCapabilityManifest,
+  type HostAdapter,
+  type HostMeta,
+  type ValidationReport,
+  type WritebackBackend,
 } from '@otterpatch/core';
 import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
 import { buildXlsxCompiler } from './xlsx-patch.js';
 import { GridChangeSetEngine } from './grid-engine.js';
+import { buildGridVerifier } from './grid-verify.js';
+import { buildExcelAdapterPreview, sheetSnapshotFromAdapterInput } from './adapter-preview.js';
 
-const TODO = (what: string): never => {
-  throw new Error(`UniverAdapter: ${what}() not implemented yet`);
+const manifest = (): FormatCapabilityManifest => {
+  const value = capabilityManifestFor('excel');
+  if (!value) throw new Error('Excel capability manifest is not registered');
+  return value;
 };
 
 export class UniverAdapter implements HostAdapter {
   readonly hostId: string;
-  readonly meta: HostMeta = { format: 'excel', engine: 'univer', headless: false };
+  readonly meta: HostMeta = { format: 'excel', engine: 'univer', headless: true };
 
   constructor(hostId: string) {
     this.hostId = hostId;
   }
 
-  capabilities(): CapabilitySet {
-    return TODO('capabilities');
+  manifest(): FormatCapabilityManifest {
+    return manifest();
   }
-  anchors(): AnchorService {
-    return TODO('anchors');
+  capabilities(): CapabilitySet {
+    return capabilitySetFromManifest(this.manifest(), {
+      anchorKinds: ['grid'],
+      features: { shadowApply: true, formulaRecalc: true, headless: true },
+    });
   }
   changes(): ChangeSetEngine {
     return new GridChangeSetEngine();
+  }
+  validate(cs: ChangeSet, stage: CapabilityStage): ValidationReport {
+    try {
+      assertChangeSet(cs);
+      assertManifestCapabilities(this.manifest(), cs, stage);
+    } catch (error) {
+      return invalid(cs, error);
+    }
+    return this.changes().validate(cs, this.capabilities());
+  }
+  proposalVerifier(input: AdapterExecutionInput): ReturnType<typeof buildGridVerifier> | undefined {
+    const sheet = sheetSnapshotFromAdapterInput(input);
+    return sheet ? buildGridVerifier(sheet) : undefined;
+  }
+  preview(cs: ChangeSet, input: AdapterExecutionInput): Promise<AdapterPreviewResult> {
+    return buildExcelAdapterPreview(cs, input);
   }
   writebacks(): readonly WritebackBackend[] {
     // Real write-back: surgical OOXML patch + the xlsx ChangeSet→part compiler.
@@ -52,15 +80,15 @@ export class UniverAdapter implements HostAdapter {
   dispose(): void {
     /* no-op */
   }
-  // Optional capabilities (ProjectionCapability / ShadowCapability / LiveDocCapability /
-  // OverlayCapability) are intentionally NOT declared: throwing TODO stubs would advertise
-  // support the adapter doesn't have. Implement the interface when the feature lands.
+  // Optional live-host capabilities are intentionally absent rather than represented by throw-only methods.
 }
 
 /** Registration entry: plugs Excel (Univer) into the AdapterRegistry. Call registry.register(univerAdapterRegistration) at app startup. */
 export const univerAdapterRegistration: AdapterRegistration = {
   format: 'excel',
+  aliases: ['xlsx'],
   engines: ['univer'],
+  manifest: manifest(),
   create: (hostId) => new UniverAdapter(hostId),
 };
 
@@ -77,9 +105,19 @@ export {
 } from './grid-engine.js';
 export {
   buildGridVerifier,
+  assertGridSnapshotBudget,
   gridShadowFromSnapshot,
   sheetSnapshotContains,
   sheetSnapshotHasCompleteFormulaState,
   sheetSnapshotHasStyleAt,
   type SheetSnapshot,
 } from './grid-verify.js';
+export { buildExcelAdapterPreview, sheetSnapshotFromAdapterInput } from './adapter-preview.js';
+
+function invalid(cs: ChangeSet, error: unknown): ValidationReport {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    ok: false,
+    issues: [{ editId: cs.edits[0]?.id ?? '', code: /capability|support/i.test(message) ? 'unsupported' : 'schema', message }],
+  };
+}
