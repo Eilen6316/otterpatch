@@ -98,7 +98,10 @@ export class MockModelClient implements ModelClient {
     assertChangeSet(cs);
     if (opts?.verify) {
       const v = await opts.verify(cs);
-      if (!v.ok) return { kind: 'answer', text: 'Proposal verification failed.\\n' + v.report };
+      if (!v.ok) {
+        const stage = v.level === 'model_review' ? 'model review requested' : 'verification failed';
+        return { kind: 'answer', text: `Proposal ${stage}.\\n${v.report}` };
+      }
     }
     return { kind: 'changeset', changeSet: cs };
   }

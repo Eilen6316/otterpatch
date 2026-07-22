@@ -106,7 +106,7 @@ npm test -w @otterpatch/writeback-surgical
 - [x] Word: full Office-style six-tab ribbon + **inline tracked-change review** — per-change hover cards, 4-state view toggle (original/markup/clean/final), flatten-on-accept (accepting physically finalizes; no markup pollution)
 - [x] Agent read tools — Excel `read_range`/`aggregate`; Word `read_blocks`/`find_text`/`get_outline`/`get_style_usage` (full-doc snapshot, both model channels)
 - [x] Domain playbooks with progressive disclosure (`load_skill`): GB/T 9704 official-document layout, financial-sheet rules, chart selection
-- [x] Shadow-verification registry (Excel recompute · Word anchor landability · drawio topology) with in-turn repair + final semantic self-check; prompt caching on the Anthropic channel
+- [x] Deterministic check registry (Excel recompute · Word anchor landability · drawio topology) with in-turn repair + a separately labeled non-deterministic final model review; prompt caching on the Anthropic channel
 - [x] Page-level layout ops (columns/margins/orientation — two-column IEEE layouts) + doc-level change chips with true before/after toggling
 - [x] Batch continuation ("next batch" button + opt-in auto-continue, serial & re-anchored); per-edit acceptance telemetry; key-gated capability bench (`test/expert-bench.mjs`)
 - [x] Unified review UX across all three workspaces (shared **DiffToggle**): Excel original/compare/final tri-state with change coloring, Word 4-state incl. whole-paragraph deletion redlines, drawio per-hunk review with board highlighting; single ReviewBox interaction surface + re-review of uncommitted past turns

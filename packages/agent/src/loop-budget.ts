@@ -119,7 +119,8 @@ export class AgentLoopBudget {
 
 export function verificationFailureText(report: VerifyReport): string {
   const code = report.code ? ` (${report.code})` : '';
-  return `Proposal verification failed${code}; repair budget exhausted.\n${report.report}`;
+  const stage = report.level === 'model_review' ? 'model review' : 'verification';
+  return `Proposal ${stage} did not complete${code}; repair budget exhausted.\n${report.report}`;
 }
 
 export function readToolLimitText(): string {

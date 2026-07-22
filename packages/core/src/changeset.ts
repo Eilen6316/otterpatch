@@ -128,13 +128,13 @@ export interface ValidationReport {
   }>;
 }
 
-/** Result from a declared lint, simulation, or output-verification pass. The report can
- * be fed back to the model in a propose→observe→repair loop. */
+/** Result from a declared deterministic check or an explicitly non-deterministic model review.
+ * The report can be fed back to the model in a propose→observe→repair loop. */
 export interface VerifyReport {
   ok: boolean;
   report: string;
   /** What was actually performed; callers must not present lint as simulation or verification. */
-  level?: 'lint' | 'simulation' | 'verification';
+  level?: 'lint' | 'simulation' | 'verification' | 'model_review';
   /** Stable machine-readable failure category for repair loops and clients. */
   code?: string;
   details?: unknown;

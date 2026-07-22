@@ -196,7 +196,7 @@ export class OtterPatchRuntime {
   private verifyOpts(req: ProposeRequest): RespondOptions | undefined {
     const structural = this.verifiers[req.format]?.(req);
     if (!structural) return undefined;
-    return { verify: withFinalSelfCheck(structural), maxRepairs: 2 };
+    return { verify: withFinalModelReview(structural), maxRepairs: 2 };
   }
 
   /** Smart routing: the model decides on its own whether to answer a question or propose changes. */
@@ -636,26 +636,26 @@ function recalculatedMap(rows: CellValue[][]): Map<string, CellValue> {
 }
 
 /**
- * Final semantic self-check: for large changesets (≥ minEdits edits) that pass structural
- * verification, have the model review the whole edit group as a unit (completeness / conflicts /
- * better alternatives) — resubmit unchanged if satisfied, or submit a corrected version.
+ * Final model review: for large changesets (≥ minEdits edits) that pass structural checks, ask
+ * the model to review the whole edit group (completeness / conflicts / better alternatives).
  * Costs one extra round only for large proposals; targets the failure mode where each edit is
- * individually correct but the set as a whole misses the intent. Fires at most once per request
- * (tracked via closure state).
+ * individually correct but the set as a whole misses the intent. This is deliberately labeled
+ * non-deterministic and must never be presented as semantic verification.
  */
-export function withFinalSelfCheck(structural: ChangeSetVerifier, minEdits = 5): ChangeSetVerifier {
-  let selfChecked = false;
+export function withFinalModelReview(structural: ChangeSetVerifier, minEdits = 5): ChangeSetVerifier {
+  let reviewRequested = false;
   return async (cs) => {
     const v = await structural(cs);
     if (!v.ok) return v;
-    if (!selfChecked && cs.edits.length >= minEdits) {
-      selfChecked = true;
+    if (!reviewRequested && cs.edits.length >= minEdits) {
+      reviewRequested = true;
       return {
         ok: false,
-        level: 'lint',
-        code: 'FINAL_SEMANTIC_SELF_CHECK_REQUIRED',
-        report: '结构自检通过。收尾自检(最后一步):请把这组改动作为【整体】复盘 —— ①是否完整达成用户意图,有没有漏掉同类问题;②各条改动之间是否冲突/重复命中同一处;③有没有专业上更优的做法。' +
-          '全部满意就【原样重新提交同一组改动】;发现问题就提交修正版。这是收尾确认,不要因此缩减本来正确的改动。',
+        level: 'model_review',
+        code: 'FINAL_MODEL_REVIEW_REQUIRED',
+        details: { kind: 'model_review', deterministic: false },
+        report: '确定性结构检查已通过。现在进行一次非确定性的模型整体复盘:①是否完整达成用户意图,有没有漏掉同类问题;②各条改动之间是否冲突或重复命中;③有没有专业上更优的做法。' +
+          '全部满意就原样重新提交同一组改动;发现问题就提交修正版。模型复盘不是 semantic verification,不要因此缩减本来正确的改动。',
       };
     }
     return v;
