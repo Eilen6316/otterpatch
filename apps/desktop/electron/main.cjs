@@ -4,18 +4,37 @@
  * 开发:OTTERPATCH_DEV=1 时加载 Vite dev server(http://localhost:5173)并开 DevTools。
  * 安全:contextIsolation 开、nodeIntegration 关;外链走系统浏览器。
  */
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { pathToFileURL } = require('node:url');
 const { spawn } = require('node:child_process');
-const { randomBytes } = require('node:crypto');
+const { randomBytes, randomUUID } = require('node:crypto');
+const {
+  MAX_IPC_BODY_BYTES,
+  validateCommitInvocation,
+  validateCommitResult,
+  validateProposeInvocation,
+  validateRequestId,
+  validateStreamEventEnvelope,
+} = require('./ipc-contract.cjs');
 
 const isDev = !!process.env.OTTERPATCH_DEV;
 const appDistDir = path.resolve(__dirname, '..', 'dist');
+const appIndexUrl = pathToFileURL(path.join(appDistDir, 'index.html')).href;
 const serveToken = process.env.OtterPatch_TOKEN || randomBytes(24).toString('base64url');
 const reviewToken = process.env.OtterPatch_REVIEW_TOKEN || randomBytes(24).toString('base64url');
-process.env.OtterPatch_TOKEN = serveToken;
-process.env.OtterPatch_REVIEW_TOKEN = reviewToken;
+const parsedServePort = Number(process.env.OtterPatch_PORT || 4319);
+const servePort = Number.isSafeInteger(parsedServePort) && parsedServePort > 0 && parsedServePort <= 65_535 ? parsedServePort : 4319;
+const serveEndpoint = `http://127.0.0.1:${servePort}`;
+const CHANNELS = Object.freeze({
+  propose: 'otterpatch:propose-stream',
+  proposeCancel: 'otterpatch:propose-cancel',
+  proposeEvent: 'otterpatch:propose-event',
+  commit: 'otterpatch:commit-writeback',
+});
+const activeProposals = new Map();
+const MAX_SSE_BUFFER_BYTES = 2 * 1024 * 1024;
 
 function isSafeExternalUrl(rawUrl) {
   try {
@@ -30,11 +49,159 @@ function isAllowedAppNavigation(rawUrl) {
   try {
     const u = new URL(rawUrl);
     if (isDev) return u.origin === 'http://localhost:5173';
-    return u.protocol === 'file:';
+    u.hash = '';
+    u.search = '';
+    return u.href === appIndexUrl;
   } catch {
     return false;
   }
 }
+
+function assertTrustedSender(event) {
+  const senderUrl = event.senderFrame && event.senderFrame.url;
+  if (!senderUrl || event.senderFrame !== event.sender.mainFrame || !isAllowedAppNavigation(senderUrl)) {
+    throw new Error('untrusted IPC sender');
+  }
+}
+
+function proposalKey(senderId, requestId) {
+  return `${senderId}:${requestId}`;
+}
+
+function safeServiceMessage(value, fallback) {
+  const message = typeof value === 'string' && value ? value.slice(0, 1_000) : fallback;
+  return message.split(serveToken).join('[REDACTED]').split(reviewToken).join('[REDACTED]');
+}
+
+async function responseObject(response) {
+  const text = await response.text();
+  if (Buffer.byteLength(text, 'utf8') > MAX_IPC_BODY_BYTES) throw new Error('local service response exceeds IPC limit');
+  try {
+    const value = text ? JSON.parse(text) : {};
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('response is not an object');
+    return value;
+  } catch {
+    throw new Error('local service returned invalid JSON');
+  }
+}
+
+async function localJson(pathname, body, includeReviewToken = false) {
+  const response = await fetch(serveEndpoint + pathname, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-OtterPatch-Token': serveToken,
+      ...(includeReviewToken ? { 'X-OtterPatch-Review-Token': reviewToken } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await responseObject(response);
+  if (!response.ok) throw new Error(safeServiceMessage(data.error, `local service request failed (${response.status})`));
+  return data;
+}
+
+function sendProposalEvent(sender, envelope) {
+  if (sender.isDestroyed()) throw new Error('renderer was closed');
+  sender.send(CHANNELS.proposeEvent, validateStreamEventEnvelope(envelope));
+}
+
+async function forwardProposalStream(event, invocation) {
+  assertTrustedSender(event);
+  const validated = validateProposeInvocation(invocation);
+  const key = proposalKey(event.sender.id, validated.requestId);
+  if (activeProposals.has(key)) throw new Error('proposal request id is already active');
+  const controller = new AbortController();
+  let eventCount = 0;
+  activeProposals.set(key, { controller, senderId: event.sender.id });
+  try {
+    const response = await fetch(serveEndpoint + '/propose-stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-OtterPatch-Token': serveToken },
+      body: validated.body,
+      signal: controller.signal,
+    });
+    if (!response.ok || !response.body) {
+      const data = await responseObject(response);
+      throw new Error(safeServiceMessage(data.error, `proposal request failed (${response.status})`));
+    }
+    sendProposalEvent(event.sender, { requestId: validated.requestId, kind: 'open' });
+    eventCount += 1;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        if (Buffer.byteLength(buffer, 'utf8') > MAX_SSE_BUFFER_BYTES) throw new Error('local service stream frame exceeds IPC limit');
+        const frames = buffer.split('\n\n');
+        buffer = frames.pop() || '';
+        for (const frame of frames) {
+          const line = frame.split('\n').find((candidate) => candidate.startsWith('data: '));
+          if (!line) continue;
+          let streamEvent;
+          try {
+            streamEvent = JSON.parse(line.slice(6));
+          } catch {
+            throw new Error('local service returned malformed stream data');
+          }
+          sendProposalEvent(event.sender, { requestId: validated.requestId, kind: 'event', event: streamEvent });
+          eventCount += 1;
+        }
+      }
+    } finally {
+      if (controller.signal.aborted) await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+    return { ok: true, eventCount };
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('proposal request cancelled');
+    throw new Error(safeServiceMessage(error instanceof Error ? error.message : String(error), 'proposal request failed'));
+  } finally {
+    activeProposals.delete(key);
+  }
+}
+
+async function reviewAndCommit(event, invocation) {
+  assertTrustedSender(event);
+  const input = validateCommitInvocation(invocation);
+  const reviewed = await localJson('/review', {
+    fileBase64: input.fileBase64,
+    changeSet: input.changeSet,
+    proposal: input.proposal,
+    acceptedEditIds: input.acceptedEditIds,
+    reviewerSessionId: `desktop-main:${randomUUID()}`,
+  }, true);
+  if (!reviewed.proposal || !reviewed.reviewReceipt) throw new Error('local service did not issue a review receipt');
+  const result = await localJson('/commit', {
+    format: input.format,
+    fileBase64: input.fileBase64,
+    changeSet: input.changeSet,
+    proposal: reviewed.proposal,
+    reviewReceipt: reviewed.reviewReceipt,
+    currentRev: Number.isSafeInteger(input.changeSet.baseRev) ? input.changeSet.baseRev : 0,
+  });
+  return validateCommitResult(result);
+}
+
+function abortProposalsForSender(senderId) {
+  for (const active of activeProposals.values()) {
+    if (active.senderId === senderId) active.controller.abort();
+  }
+}
+
+ipcMain.handle(CHANNELS.propose, forwardProposalStream);
+ipcMain.on(CHANNELS.proposeCancel, (event, requestId) => {
+  try {
+    assertTrustedSender(event);
+    const id = validateRequestId(requestId);
+    activeProposals.get(proposalKey(event.sender.id, id))?.controller.abort();
+  } catch {
+    // Invalid cancellation messages have no authority and are ignored.
+  }
+});
+ipcMain.handle(CHANNELS.commit, reviewAndCommit);
 
 // 自动启动本机 Agent 服务(otterpatch-serve),让非技术用户开箱即用、无需手动跑命令。
 let serveProc = null;
@@ -47,7 +214,13 @@ function startServe() {
     const servePath = candidates.find((p) => p && fs.existsSync(p));
     if (!servePath) return;
     serveProc = spawn(process.execPath, [servePath], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', OtterPatch_TOKEN: serveToken, OtterPatch_REVIEW_TOKEN: reviewToken },
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        OtterPatch_PORT: String(servePort),
+        OtterPatch_TOKEN: serveToken,
+        OtterPatch_REVIEW_TOKEN: reviewToken,
+      },
       stdio: 'ignore',
       windowsHide: true,
     });
@@ -76,6 +249,8 @@ function createWindow() {
       sandbox: true,
     },
   });
+  const senderId = win.webContents.id;
+  win.webContents.once('destroyed', () => abortProposalsForSender(senderId));
 
   if (isDev) {
     void win.loadURL('http://localhost:5173');

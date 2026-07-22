@@ -60,6 +60,8 @@ OtterPatch 是位于 LLM Agent 与你的 Office 文档之间的**安全提交层
   因此审阅是就地进行的。拒绝时回放捕获的前值状态；接受时才物理落定。
 - **服务端提交是独立的**：ChangeSet 中被接受的子集由外科手术式回写应用到上传的原始文件上——
   应用内预览永远不会碰你的文件。
+- **桌面端凭据只留在主进程。** Preload 只暴露有界的提案、取消和审阅提交 IPC，不暴露本地
+  服务令牌或通用 fetch；每个 IPC payload 都会先做 schema 与大小校验，再由主进程添加鉴权头。
 - **格式路由只有一个所有者。** Runtime 不再维护 backend 或 verifier 格式表；内置及宿主扩展
   Adapter 都由 `AdapterRegistry` 选择，`xlsx`、`docx`、`pptx` 等别名解析到同一份 manifest
   和 Adapter 实现。

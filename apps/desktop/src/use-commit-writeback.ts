@@ -20,8 +20,6 @@ export interface UseCommitWritebackOptions {
   notify: (message: string) => void;
   t: (key: string) => string;
   setBusy: (busy: boolean) => void;
-  localServeToken: () => string;
-  localReviewToken: () => string;
   normalizeLocalEndpoint: (raw: string) => string | null;
 }
 
@@ -56,8 +54,6 @@ export function useCommitWriteback({
   notify,
   t,
   setBusy,
-  localServeToken,
-  localReviewToken,
   normalizeLocalEndpoint,
 }: UseCommitWritebackOptions): UseCommitWritebackResult {
   const ensureCommitFile = (turn: CommitTurn): boolean => {
@@ -101,8 +97,6 @@ export function useCommitWriteback({
     try {
       const data = await commitWriteback({
         endpoint,
-        token: localServeToken(),
-        reviewToken: localReviewToken(),
         format: turn.format,
         fileBase64,
         changeSet,

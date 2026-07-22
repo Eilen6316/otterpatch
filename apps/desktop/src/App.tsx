@@ -440,24 +440,6 @@ interface CellFmt {
 const FMT_BIU: Record<string, 'bold' | 'italic' | 'underline'> = { B: 'bold', I: 'italic', U: 'underline' };
 const FMT_ALIGN: Record<string, 'left' | 'center' | 'right'> = { 左对齐: 'left', 居中: 'center', 右对齐: 'right' };
 
-function localServeToken(): string {
-  try {
-    const w = window as unknown as { otterpatch?: { serveToken?: string } };
-    return String(w.otterpatch?.serveToken || localStorage.getItem('oa.serveToken') || '');
-  } catch {
-    return '';
-  }
-}
-
-function localReviewToken(): string {
-  try {
-    const w = window as unknown as { otterpatch?: { reviewToken?: string } };
-    return String(w.otterpatch?.reviewToken || localStorage.getItem('oa.reviewToken') || '');
-  } catch {
-    return '';
-  }
-}
-
 function normalizeLocalEndpoint(raw: string): string | null {
   try {
     const u = new URL(raw.trim());
@@ -566,8 +548,6 @@ export function App() {
     notify,
     t,
     setBusy,
-    localServeToken,
-    localReviewToken,
     normalizeLocalEndpoint,
   });
   const [sel, setSel] = useState<Sel>({ ar: 1, ac: 2, br: 5, bc: 5 });
@@ -892,7 +872,6 @@ export function App() {
               }
             }
           },
-          localServeToken(),
           requestController.signal,
         );
       } catch (e) {

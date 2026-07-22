@@ -3,6 +3,7 @@
  * Owns fetch + stream reading + `data:` frame parsing; the caller owns event semantics.
  * Extracted from App.tsx (decomposition phase 6).
  */
+import { browserLocalCredential, desktopLocalServiceBridge, type DesktopProposeEnvelope } from './electron-bridge.js';
 
 /** POST `${endpoint}/propose-stream` and dispatch each parsed SSE `data:` JSON event.
  *  `onOpen` fires once after the HTTP response is OK, before the first event (optimistic UI).
@@ -12,9 +13,67 @@ export async function streamPropose<E>(
   payload: unknown,
   onOpen: () => void,
   onEvent: (e: E) => void | Promise<void>,
-  token = '',
   signal?: AbortSignal,
 ): Promise<void> {
+  const bridge = desktopLocalServiceBridge();
+  if (bridge) {
+    const requestId = globalThis.crypto?.randomUUID?.()
+      ?? `request_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    let queue = Promise.resolve();
+    let eventFailure: unknown;
+    let receivedEvents = 0;
+    let checkDrain: (() => void) | undefined;
+    const listener = (envelope: DesktopProposeEnvelope): void => {
+      if (envelope.requestId !== requestId || eventFailure) return;
+      receivedEvents += 1;
+      checkDrain?.();
+      queue = queue.then(async () => {
+        if (envelope.kind === 'open') onOpen();
+        else await onEvent(envelope.event as E);
+      }).catch((error: unknown) => {
+        eventFailure = error;
+        bridge.cancelPropose(requestId);
+      });
+    };
+    const cancel = (): void => bridge.cancelPropose(requestId);
+    bridge.onProposeEvent(listener);
+    signal?.addEventListener('abort', cancel, { once: true });
+    try {
+      signal?.throwIfAborted();
+      let invokeError: unknown;
+      let expectedEvents = 0;
+      try {
+        expectedEvents = (await bridge.streamPropose({ requestId, payload })).eventCount;
+      } catch (error) {
+        invokeError = error;
+      }
+      if (!invokeError && receivedEvents < expectedEvents) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            checkDrain = undefined;
+            reject(new Error('desktop stream events did not arrive before completion'));
+          }, 1_000);
+          checkDrain = () => {
+            if (receivedEvents < expectedEvents) return;
+            checkDrain = undefined;
+            clearTimeout(timer);
+            resolve();
+          };
+          checkDrain();
+        });
+      }
+      await queue;
+      if (eventFailure) throw eventFailure;
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (invokeError) throw invokeError;
+      return;
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+      bridge.offProposeEvent(listener);
+    }
+  }
+
+  const token = browserLocalCredential('oa.serveToken');
   const resp = await fetch(endpoint + '/propose-stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(token ? { 'X-OtterPatch-Token': token } : {}) },

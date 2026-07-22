@@ -62,6 +62,10 @@ as opening a pull request against an `.xlsx` / `.docx` / `.drawio` file.
   before-state; acceptance physically finalizes.
 - **Server-side commit is independent**: the accepted subset of the ChangeSet is applied to the
   uploaded original file by the surgical write-back — the in-app preview never touches your file.
+- **Desktop credentials stay in the main process.** The preload exposes bounded proposal,
+  cancellation, and reviewed-commit IPC methods only. It never exposes local-service tokens or a
+  generic fetch primitive; every IPC payload is schema- and size-checked before the main process
+  adds authentication headers.
 - **Format routing has one owner.** Runtime does not maintain backend or verifier maps. Built-in and
   host-provided adapters are selected by `AdapterRegistry`; aliases such as `xlsx`, `docx`, and
   `pptx` resolve to the same manifest and adapter implementation.

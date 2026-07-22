@@ -1,4 +1,5 @@
 import type { WorkspaceFormat } from './workspace-format.js';
+import { browserLocalCredential, desktopLocalServiceBridge } from './electron-bridge.js';
 
 export interface CommitWritebackResult {
   ok?: boolean;
@@ -18,16 +19,27 @@ interface ReviewResult {
 
 export async function commitWriteback(input: {
   endpoint: string;
-  token?: string;
-  reviewToken?: string;
   format: WorkspaceFormat;
   fileBase64: string;
   changeSet: unknown;
   proposal: unknown;
   acceptedEditIds: string[];
 }): Promise<CommitWritebackResult> {
-  const headers = { 'Content-Type': 'application/json', ...(input.token ? { 'X-OtterPatch-Token': input.token } : {}) };
-  const reviewHeaders = { ...headers, ...(input.reviewToken ? { 'X-OtterPatch-Review-Token': input.reviewToken } : {}) };
+  const bridge = desktopLocalServiceBridge();
+  if (bridge) {
+    return await bridge.commitWriteback({
+      format: input.format,
+      fileBase64: input.fileBase64,
+      changeSet: input.changeSet,
+      proposal: input.proposal,
+      acceptedEditIds: input.acceptedEditIds,
+    }) as CommitWritebackResult;
+  }
+
+  const token = browserLocalCredential('oa.serveToken');
+  const reviewToken = browserLocalCredential('oa.reviewToken');
+  const headers = { 'Content-Type': 'application/json', ...(token ? { 'X-OtterPatch-Token': token } : {}) };
+  const reviewHeaders = { ...headers, ...(reviewToken ? { 'X-OtterPatch-Review-Token': reviewToken } : {}) };
   const reviewResponse = await fetch(input.endpoint + '/review', {
     method: 'POST',
     headers: reviewHeaders,
