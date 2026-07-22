@@ -45,15 +45,14 @@ test('captureGridOpBeforeState snapshots value and cell state without mutating o
   assert.notEqual(captured[0], ops[0]);
 });
 
-test('makeWorkspaceDiffTurn preserves streamed text and reasoning from answer turn', () => {
+test('makeWorkspaceDiffTurn preserves answer text without transient stream status', () => {
   const turn = makeWorkspaceDiffTurn(
-    { role: 'assistant', kind: 'answer', text: 'draft answer', reasoning: 'thinking' },
+    { role: 'assistant', kind: 'answer', text: 'draft answer' },
     { format: 'excel', changeSet: { edits: [] }, proposal: { proposalId: 'p1' }, diff, ops: [{ a1: 'A1', note: 'noop' }] },
   );
 
   assert.equal(turn.kind, 'diff');
   assert.equal(turn.text, 'draft answer');
-  assert.equal(turn.reasoning, 'thinking');
   assert.deepEqual(turn.ops, [{ a1: 'A1', note: 'noop' }]);
   assert.deepEqual(turn.proposal, { proposalId: 'p1' });
 });

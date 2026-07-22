@@ -101,15 +101,37 @@ test('Word 结构化快照:para 必须真实存在且 quote 必须属于该段',
 // ── End-to-end: actually run AnthropicModelClient.respondStream's repair loop (SDK stubbed, no real key needed) ──
 // The desktop /propose-stream endpoint goes through respondStream; its verify/repair path is isomorphic to respond.
 /** Build a fake SDK stream that emits a single propose_changeset tool_use. */
-function fakeToolStream(id: string, input: unknown): AsyncIterable<unknown> {
+function fakeToolStream(id: string, input: unknown, thinking?: string, toolPreamble?: string): AsyncIterable<unknown> {
   const json = JSON.stringify(input);
   return {
     async *[Symbol.asyncIterator]() {
+      if (thinking) yield { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking } };
+      if (toolPreamble) yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: toolPreamble } };
       yield { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id, name: 'propose_changeset' } };
       yield { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: json } };
     },
   };
 }
+
+test('Anthropic stream never exposes provider thinking_delta', async () => {
+  const client = new AnthropicModelClient({ apiKey: 'test-not-used' });
+  const secret = 'PRIVATE_ANTHROPIC_CHAIN_OF_THOUGHT';
+  const preamble = 'PRIVATE_ANTHROPIC_TOOL_PREAMBLE';
+  (client as unknown as { client: { messages: { create: () => Promise<AsyncIterable<unknown>> } } }).client = {
+    messages: { create: async () => fakeToolStream('t1', { plan: '改写', edits: [{ quote: '增速略有放缓', replacement: '增速有所回落' }] }, secret, preamble) },
+  };
+  const events: StreamEvent[] = [];
+
+  const result = await client.respondStream(reqFor(), wordDialect, (event) => events.push(event));
+
+  assert.equal(result.kind, 'changeset');
+  assert.doesNotMatch(JSON.stringify(events), new RegExp(secret));
+  assert.doesNotMatch(JSON.stringify(events), new RegExp(preamble));
+  assert.deepEqual(
+    events.filter((event) => event.type === 'status').map((event) => event.status.phase),
+    ['generating', 'ready'],
+  );
+});
 
 test('Word 端到端:编造 quote → 校验失败回喂 → 同回合改对(真跑 respondStream 修复闭环)', async () => {
   const client = new AnthropicModelClient({ apiKey: 'test-not-used' });
@@ -136,7 +158,8 @@ test('Word 端到端:编造 quote → 校验失败回喂 → 同回合改对(真
   );
 
   assert.equal(calls, 2, '修复闭环应触发第二次调用');
-  assert.ok(events.some((e) => e.type === 'tool' && e.name === 'verify'), '应发 verify 事件');
+  assert.ok(events.some((e) => e.type === 'status' && e.status.phase === 'checking'), '应发 checking 状态');
+  assert.ok(events.some((e) => e.type === 'status' && e.status.phase === 'repairing' && e.status.reason === 'check_failed'), '应发 repair 状态');
   assert.equal(result.kind, 'changeset');
   if (result.kind !== 'changeset') return;
   // The finally adopted quote is the corrected one

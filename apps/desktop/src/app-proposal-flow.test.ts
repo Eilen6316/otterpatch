@@ -2,13 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   appendAnswerDelta,
-  appendReasoningDelta,
   appendStreamingAnswerTurn,
-  appendToolReasoning,
   appendUserTurn,
   finalizeLastAnswer,
   interruptLastStreamingAnswer,
   replaceLastWithClarify,
+  setStreamStatus,
   type ProposalThreadTurn,
 } from './app-proposal-flow.js';
 
@@ -19,33 +18,33 @@ test('proposal flow appends user and streaming assistant turns', () => {
 
   assert.deepEqual(thread, [
     { role: 'user', text: 'update totals' },
-    { role: 'assistant', kind: 'answer', text: '', reasoning: '', streaming: true },
+    { role: 'assistant', kind: 'answer', text: '', status: { phase: 'generating' }, streaming: true },
   ]);
 });
 
-test('proposal flow accumulates reasoning, tool markers, and answer text on the last assistant turn', () => {
+test('proposal flow accepts only bounded statuses and answer text', () => {
   let thread = appendStreamingAnswerTurn<ProposalThreadTurn>([]);
-  thread = appendReasoningDelta(thread, 'thinking');
-  thread = appendToolReasoning(thread, 'read_range');
+  thread = setStreamStatus(thread, { phase: 'reading', source: 'spreadsheet', operation: 'read_range', raw: 'private reasoning' });
   thread = appendAnswerDelta(thread, 'done');
 
   assert.equal(thread[0]?.role, 'assistant');
   assert.equal(thread[0]?.kind, 'answer');
-  assert.equal(thread[0]?.reasoning, 'thinking\n〔查表 read_range〕\n');
+  assert.deepEqual(thread[0]?.status, { phase: 'reading', source: 'spreadsheet' });
+  assert.doesNotMatch(JSON.stringify(thread), /private reasoning/);
   assert.equal(thread[0]?.text, 'done');
 });
 
-test('proposal flow preserves reasoning when a stream becomes clarify', () => {
+test('proposal flow rejects unknown statuses and clears progress when stream becomes clarify', () => {
   let thread = appendStreamingAnswerTurn<ProposalThreadTurn>([]);
-  thread = appendReasoningDelta(thread, 'need context');
+  thread = setStreamStatus(thread, { phase: 'provider_reasoning', text: 'need context' });
   thread = replaceLastWithClarify(thread, [{ question: 'Which sheet?', options: [] }]);
 
   assert.deepEqual(thread, [{
     role: 'assistant',
     kind: 'clarify',
     questions: [{ question: 'Which sheet?', options: [] }],
-    reasoning: 'need context',
   }]);
+  assert.doesNotMatch(JSON.stringify(thread), /need context/);
 });
 
 test('proposal flow finalizes or interrupts only the active streaming answer', () => {

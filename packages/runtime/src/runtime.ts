@@ -222,7 +222,7 @@ export class OtterPatchRuntime {
     }
   }
 
-  /** Streaming routing: emits reasoning/answer deltas via onEvent. */
+  /** Streaming routing: emits bounded status and answer deltas via onEvent. */
   async respondStream(req: ProposeRequest, model: ModelClient, onEvent: (e: StreamEvent) => void): Promise<AgentResponse> {
     assertProposeRequestBudget(req);
     const release = this.acquireModelSlot();

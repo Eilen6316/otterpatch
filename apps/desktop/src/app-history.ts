@@ -7,7 +7,6 @@ interface AnswerTurn {
   role: 'assistant';
   kind: 'answer';
   text?: string;
-  reasoning?: string;
   streaming?: boolean;
 }
 
@@ -15,7 +14,6 @@ interface ClarifyTurn {
   role: 'assistant';
   kind: 'clarify';
   questions: Array<{ question: string; options: Array<{ label: string }> }>;
-  reasoning?: string;
   answered?: boolean;
 }
 
@@ -60,6 +58,13 @@ export function buildHistory(thread: readonly HistoryTurn[]): ModelHistoryMessag
 /** Remove refresh-time streaming residue before restoring persisted UI state. */
 export function sanitizeThread<Turn extends HistoryTurn>(thread: readonly Turn[]): Turn[] {
   return thread
-    .map((turn) => (turn.role === 'assistant' && turn.kind === 'answer' && turn.streaming ? { ...turn, streaming: false } : turn) as Turn)
-    .filter((turn) => !(turn.role === 'assistant' && turn.kind === 'answer' && !turn.text?.trim() && !turn.reasoning?.trim()));
+    .map((turn) => {
+      if (turn.role !== 'assistant') return turn;
+      const safe = { ...turn } as Turn & { reasoning?: unknown; status?: unknown; streaming?: boolean };
+      delete safe.reasoning;
+      delete safe.status;
+      if (turn.kind === 'answer' && safe.streaming) safe.streaming = false;
+      return safe as Turn;
+    })
+    .filter((turn) => !(turn.role === 'assistant' && turn.kind === 'answer' && !turn.text?.trim()));
 }

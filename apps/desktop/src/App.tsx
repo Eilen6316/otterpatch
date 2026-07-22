@@ -46,7 +46,7 @@ import { Composer } from './Composer.js';
 import { TopBar } from './TopBar.js';
 import { DrawioBoard, DrawioToolbar, DrawioPalette, extractDrawioOps, makeRawBoardConv } from './DrawioBoard.js';
 import type { BNode, BEdge, BoardSel, BoardHandle } from './DrawioBoard.js';
-import { ThinkingPanel, ClarifyCard } from './ThreadCards.js';
+import { AgentStatusLine, ClarifyCard } from './ThreadCards.js';
 import { Markdown } from './Markdown.js';
 import { chartToPngDataUrl } from './chart.js';
 import { applyExcelStructure, type ChartPlacement } from './excel-structure-adapter.js';
@@ -62,13 +62,12 @@ import {
 import { buildHistory as buildAppHistory, sanitizeThread as sanitizeAppThread } from './app-history.js';
 import {
   appendAnswerDelta,
-  appendReasoningDelta,
   appendStreamingAnswerTurn,
-  appendToolReasoning,
   appendUserTurn,
   finalizeLastAnswer,
   interruptLastStreamingAnswer,
   replaceLastWithClarify,
+  setStreamStatus,
   updateLastAssistantTurn,
 } from './app-proposal-flow.js';
 import {
@@ -78,7 +77,7 @@ import {
 } from './app-workspace-proposals.js';
 
 // Shared review ids and batch guards live in ./review-shared.ts (god-file decomposition).
-// ThinkingPanel / ClarifyCard moved to ./ThreadCards.tsx (decomposition phase 5).
+// AgentStatusLine / ClarifyCard moved to ./ThreadCards.tsx (decomposition phase 5).
 
 /** 真 Univer 表格(体积大 → 懒加载,仅 Excel 用)。 */
 const UniverSheet = lazy(() => import('./UniverSheet.js'));
@@ -779,24 +778,22 @@ export function App() {
         streamObjsRef.current = [];
         streamByEditRef.current = {};
         staleStreamRef.current = false;
-        type StreamEvt = { type: string; delta?: string; name?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; proposal?: unknown; questions?: ClarifyQuestion[]; message?: string };
+        type StreamEvt = { type: string; status?: unknown; delta?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; proposal?: unknown; questions?: ClarifyQuestion[]; message?: string };
         await streamPropose<StreamEvt>(
           ep,
           { format: fmt, intent: theIntent, context: ctx, baseRev: 0, provider, model, apiKey, ...(proposalFile ? { documentId: `${proposalFile.format}:${proposalFile.name}:${proposalFile.byteLength}:${proposalFile.hash}` } : {}), ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(proposalBoard ? { board: proposalBoard } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildAppHistory(thread) } : {}) },
           () => {
             if (theIntent.trim()) setRecent((rr) => [{ t: theIntent.trim(), time: t('刚刚') }, ...rr.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
             setSent(true);
-            // Optimistic streaming bubble (reasoning + body render live).
+            // Optimistic streaming bubble; progress is a bounded status object, never provider reasoning.
             setThread((th) => appendStreamingAnswerTurn(th));
           },
           (e) => {
-            if (e.type === 'reasoning') setThread((th) => appendReasoningDelta(th, e.delta));
-            else if (e.type === 'answer') setThread((th) => appendAnswerDelta(th, e.delta));
-            else if (e.type === 'tool') {
-              setThread((th) => appendToolReasoning(th, e.name));
-              // 提案后又有动作(verify/截断重提):标记流式画作可能作废——若随后真有新 draft 到达,先清旧画再画新的
+            if (e.type === 'status') {
+              setThread((th) => setStreamStatus(th, e.status));
               if (fmt === 'drawio' && streamObjsRef.current.length) staleStreamRef.current = true;
             }
+            else if (e.type === 'answer') setThread((th) => appendAnswerDelta(th, e.delta));
             else if (e.type === 'draft' && fmt === 'drawio') {
               if (staleStreamRef.current) {
                 // 上一轮提案被回炉(截断/verify 失败),它流式画的是废案:清掉,否则残节点与重提的整图叠加
@@ -871,7 +868,7 @@ export function App() {
                 }
               } else if (e.kind === 'clarify' && e.questions?.length) {
                 const qs = e.questions;
-                // 把流式占位气泡替换成"引导选择"卡片(保留刚才的思考过程)
+                // 把流式占位气泡替换成"引导选择"卡片。
                 setThread((th) => replaceLastWithClarify(th, qs));
               } else {
                 setThread((th) => finalizeLastAnswer(th, e.text));
@@ -1272,9 +1269,9 @@ export function App() {
                         <div key={i} className="ai-msg">
                           <img className="ai-av" src="/favicon.png" alt="" />
                           <div className="ai-stack">
-                            {turn.reasoning ? <ThinkingPanel reasoning={turn.reasoning} streaming={turn.streaming} /> : null}
+                            {turn.streaming && turn.status ? <AgentStatusLine status={turn.status} /> : null}
                             {(turn.text || !turn.streaming) && <div className="answer-bubble md">{turn.text ? <Markdown text={turn.text} /> : <span className="dim">{t('(无内容)')}</span>}</div>}
-                            {turn.streaming && !turn.text && !turn.reasoning && <div className="thinking"><span className="spin" /> {t('Agent 正在分析…')}</div>}
+                            {turn.streaming && !turn.text && !turn.status && <div className="thinking"><span className="spin" /> {t('正在生成回复')}</div>}
                           </div>
                         </div>
                       );
@@ -1283,7 +1280,6 @@ export function App() {
                         <div key={i} className="ai-msg">
                           <img className="ai-av" src="/favicon.png" alt="" />
                           <div className="ai-stack">
-                            {turn.reasoning ? <ThinkingPanel reasoning={turn.reasoning} /> : null}
                             <ClarifyCard questions={turn.questions} answered={turn.answered} answerText={turn.answerText} onSubmit={(text) => submitClarify(i, text)} />
                           </div>
                         </div>
@@ -1293,7 +1289,6 @@ export function App() {
                       <div key={i} className="ai-msg">
                         <img className="ai-av" src="/favicon.png" alt="" />
                         <div className="ai-stack">
-                          {turn.reasoning ? <ThinkingPanel reasoning={turn.reasoning} /> : null}
                           {turn.text?.trim() ? <div className="answer-bubble md"><Markdown text={turn.text} /></div> : null}
                           <ReviewBox
                             turn={turn}

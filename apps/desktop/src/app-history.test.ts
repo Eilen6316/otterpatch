@@ -3,16 +3,18 @@ import { test } from 'node:test';
 import { buildHistory, sanitizeThread, type HistoryTurn } from './app-history.js';
 
 test('sanitizeThread clears refresh-time streaming residue and drops empty placeholders', () => {
-  const result = sanitizeThread([
-    { role: 'assistant', kind: 'answer', text: 'partial', streaming: true },
-    { role: 'assistant', kind: 'answer', text: '', reasoning: '', streaming: true },
+  const persisted = [
+    { role: 'assistant', kind: 'answer', text: 'partial', reasoning: 'legacy private reasoning', status: { phase: 'reading' }, streaming: true },
+    { role: 'assistant', kind: 'answer', text: '', reasoning: 'legacy only', streaming: true },
     { role: 'user', text: 'keep me' },
-  ]);
+  ] as unknown as HistoryTurn[];
+  const result = sanitizeThread(persisted);
 
   assert.deepEqual(result, [
     { role: 'assistant', kind: 'answer', text: 'partial', streaming: false },
     { role: 'user', text: 'keep me' },
   ]);
+  assert.doesNotMatch(JSON.stringify(result), /legacy|reasoning|status/);
 });
 
 test('buildHistory summarizes diff turns and preserves old outcomes in compacted history', () => {

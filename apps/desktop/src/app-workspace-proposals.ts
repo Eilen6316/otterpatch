@@ -12,7 +12,6 @@ type AssistantTurn = {
   role: 'assistant';
   kind: string;
   text?: string;
-  reasoning?: string;
 };
 
 type ThreadTurn = AssistantTurn | { role: string };
@@ -62,7 +61,6 @@ export function makeWorkspaceDiffTurn<FileSnapshot>(
   board?: BoardPatch;
   word?: WordEdit[];
   text?: string;
-  reasoning?: string;
 } {
   return {
     role: 'assistant',
@@ -76,7 +74,6 @@ export function makeWorkspaceDiffTurn<FileSnapshot>(
     ...(input.board ? { board: input.board } : {}),
     ...(input.word ? { word: input.word } : {}),
     text: previous.kind === 'answer' ? previous.text : undefined,
-    reasoning: previous.kind === 'answer' ? previous.reasoning : undefined,
   };
 }
 

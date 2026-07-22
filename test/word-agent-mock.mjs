@@ -27,7 +27,7 @@ const changeSet = {
     a1: { portable: { kind: 'flow', quote: { text: '下周计划' } } },
   },
 };
-const sse = `data: ${JSON.stringify({ type: 'reasoning', delta: '分析文档…' })}\n\n` + `data: ${JSON.stringify({ type: 'done', kind: 'changeset', diff, changeSet })}\n\n`;
+const sse = `data: ${JSON.stringify({ type: 'status', status: { phase: 'reading', source: 'document', operation: 'read_blocks' } })}\n\n` + `data: ${JSON.stringify({ type: 'done', kind: 'changeset', diff, changeSet })}\n\n`;
 
 let reqBody = '';
 try {

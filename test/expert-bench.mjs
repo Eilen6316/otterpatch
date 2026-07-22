@@ -203,7 +203,9 @@ for (const task of TASKS) {
       { hostId: 'bench', format: task.format, intent: task.intent, baseRev: 0, anchors: [], context: task.context,
         ...(task.sheet ? { sheet: task.sheet } : {}), ...(task.doc ? { doc: task.doc } : {}), ...(task.history ? { history: task.history } : {}) },
       model,
-      (e) => { if (e.type === 'tool') tools.push(e.name); },
+      (e) => {
+        if (e.type === 'status' && e.status?.phase === 'reading' && e.status.operation !== 'other') tools.push(e.status.operation);
+      },
     );
   } catch (e) {
     console.log(`  ✗ ${task.id} 请求失败: ${e.message}`); fails++; continue;

@@ -14,6 +14,7 @@ import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, exe
 import { NUDGE_DIRECT, NUDGE_TOOLIFY, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
 import { salvageProposalArgs, salvageText, salvagedProposalPayload } from './json-salvage.js';
 import { AgentLoopBudget, readToolLimitText, verificationFailureText } from './loop-budget.js';
+import { readingStatus } from './stream-status.js';
 
 const safeJson = (s?: string): Record<string, unknown> => { try { return s ? (JSON.parse(s) as Record<string, unknown>) : {}; } catch { return {}; } };
 
@@ -166,13 +167,20 @@ export class AnthropicModelClient implements ModelClient {
     return { kind: 'answer', text: TOO_MANY_STEPS_MSG };
   }
 
-  /** Streaming variant of respond: emits answer deltas for text (and reasoning deltas when extended thinking is on). Multi-step loop + pre-commit checks same as respond. */
+  /** Streaming variant of respond: suppresses provider thinking and emits bounded public status events. */
   async respondStream(req: ProposeRequest, dialect: HostDialect, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
     const system = this.systemBlocks(dialect);
     const tools = this.toolset(req, dialect, opts);
     const messages = this.initMessages(req);
     const budget = new AgentLoopBudget(opts?.maxRepairs ?? 1);
     let nudged = false;
+    let repairAttempt = 0;
+    onEvent({ type: 'status', status: { phase: 'generating' } });
+    const complete = (result: AgentResponse): AgentResponse => {
+      if (result.kind === 'answer' && result.text) onEvent({ type: 'answer', delta: result.text });
+      onEvent({ type: 'done', result });
+      return result;
+    };
 
     for (let step = 0; step < STEP_LIMIT; step++) {
       const stream = await this.client.messages.create(
@@ -198,7 +206,6 @@ export class AnthropicModelClient implements ModelClient {
             assertModelOutputChars(outputChars);
             budget.recordOutput(d.text);
             text += d.text;
-            onEvent({ type: 'answer', delta: d.text });
           } else if (d.type === 'input_json_delta') {
             const a = acc[ev.index];
             if (a) {
@@ -212,7 +219,6 @@ export class AnthropicModelClient implements ModelClient {
             outputChars += d.thinking.length;
             assertModelOutputChars(outputChars);
             budget.recordOutput(d.thinking);
-            onEvent({ type: 'reasoning', delta: d.thinking });
           }
         }
       }
@@ -223,8 +229,7 @@ export class AnthropicModelClient implements ModelClient {
         // Same guard as respond(): toolify prose finals once, nudge empty finals once.
         if (!nudged) { nudged = true; messages.push({ role: 'assistant', content: text.trim() || '(已完成思考)' }); messages.push({ role: 'user', content: text.trim() ? NUDGE_TOOLIFY : NUDGE_DIRECT }); continue; }
         const result: AgentResponse = { kind: 'answer', text: text.trim() || EMPTY_RESULT_FALLBACK };
-        onEvent({ type: 'done', result });
-        return result;
+        return complete(result);
       }
       const propose = toolUses.find((b) => b.name === dialect.toolName);
       if (propose) {
@@ -232,9 +237,10 @@ export class AnthropicModelClient implements ModelClient {
         if (parsed.truncated) {
           if (!budget.tryTruncationRepair()) {
             const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK };
-            onEvent({ type: 'done', result });
-            return result;
+            return complete(result);
           }
+          repairAttempt++;
+          onEvent({ type: 'status', status: { phase: 'repairing', attempt: repairAttempt, reason: 'truncated_output' } });
           messages.push({ role: 'assistant', content: assistantBlocks(text, [propose]) });
           messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: propose.id, content: TRUNCATED_FALLBACK }] });
           continue;
@@ -242,56 +248,53 @@ export class AnthropicModelClient implements ModelClient {
         const cs = dialect.buildChangeSet(req, salvagedProposalPayload(parsed));
         assertChangeSet(cs);
         if (opts?.verify) {
-          onEvent({ type: 'tool', name: 'verify' });
+          onEvent({ type: 'status', status: { phase: 'checking' } });
           const v = await opts.verify(cs);
           budget.finishStep();
           if (!v.ok) {
             if (!budget.tryProposalRepair()) {
               const result: AgentResponse = { kind: 'answer', text: verificationFailureText(v) };
-              onEvent({ type: 'done', result });
-              return result;
+              return complete(result);
             }
+            repairAttempt++;
+            onEvent({ type: 'status', status: { phase: 'repairing', attempt: repairAttempt, reason: 'check_failed' } });
             messages.push({ role: 'assistant', content: assistantBlocks(text, [propose]) });
             messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: propose.id, content: v.report }] });
             continue;
           }
         }
+        onEvent({ type: 'status', status: { phase: 'ready', editCount: cs.edits.length } });
         const result: AgentResponse = { kind: 'changeset', changeSet: cs };
-        onEvent({ type: 'done', result });
-        return result;
+        return complete(result);
       }
       const ans = toolUses.find((b) => b.name === 'answer_user');
       if (ans) {
         const result: AgentResponse = { kind: 'answer', text: salvageText(ans.json) || text.trim() };
-        onEvent({ type: 'done', result });
-        return result;
+        return complete(result);
       }
       const ask = toolUses.find((b) => b.name === 'ask_user');
       if (ask) {
         const questions = parseClarify(ask.input);
         const result: AgentResponse = questions.length ? { kind: 'clarify', questions } : { kind: 'answer', text: text.trim() || EMPTY_RESULT_FALLBACK };
-        onEvent({ type: 'done', result });
-        return result;
+        return complete(result);
       }
 
       if (!budget.tryReadTools(toolUses.length)) {
         const result: AgentResponse = { kind: 'answer', text: readToolLimitText() };
-        onEvent({ type: 'done', result });
-        return result;
+        return complete(result);
       }
       messages.push({ role: 'assistant', content: assistantBlocks(text, toolUses) });
       messages.push({
         role: 'user',
         content: toolUses.map((b) => {
-          onEvent({ type: 'tool', name: b.name });
+          onEvent({ type: 'status', status: readingStatus(b.name) });
           return { type: 'tool_result' as const, tool_use_id: b.id, content: this.execTool(b.name, b.input, req, opts) };
         }),
       });
       budget.finishStep();
     }
     const result: AgentResponse = { kind: 'answer', text: TOO_MANY_STEPS_MSG };
-    onEvent({ type: 'done', result });
-    return result;
+    return complete(result);
   }
 }
 

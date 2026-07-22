@@ -1,32 +1,40 @@
 /**
  * ThreadCards — self-contained cards used inside the agent conversation thread:
- * ThinkingPanel (collapsible reasoning stream) and ClarifyCard (guided-choice clarify form).
+ * AgentStatusLine (bounded public progress) and ClarifyCard (guided-choice clarify form).
  * Extracted from App.tsx (decomposition phase 5); each owns only its local UI state.
  */
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { ClarifyQuestion } from './app-thread-types.js';
+import type { AgentStreamStatus, ClarifyQuestion } from './app-thread-types.js';
 import { useT } from './i18n.js';
 import { IconSelect } from './icons.js';
 
 export type { ClarifyOption, ClarifyQuestion } from './app-thread-types.js';
 
-/** DeepSeek-style collapsible "thinking" panel: expanded while streaming, collapsible after. */
-export function ThinkingPanel({ reasoning, streaming }: { reasoning: string; streaming?: boolean }): ReactNode {
+/** Render only locally-authored labels for the bounded status protocol. */
+export function AgentStatusLine({ status }: { status: AgentStreamStatus }): ReactNode {
   const t = useT();
-  const [open, setOpen] = useState<boolean | null>(null);
-  const expanded = open ?? !!streaming;
+  const label = statusLabel(status, t);
   return (
-    <div className={'thinking-panel' + (streaming ? ' live' : '')}>
-      <button className="tp-head" onClick={() => setOpen(!expanded)}>
-        <span className="tp-ico">{streaming ? <span className="spin sm" /> : '💭'}</span>
-        <span>{streaming ? t('正在思考…') : t('思考过程')}</span>
-        <span className="grow" />
-        <span className="tp-chev">{expanded ? '▾' : '▸'}</span>
-      </button>
-      {expanded && <div className="tp-body">{reasoning || t('(无)')}</div>}
+    <div className="agent-status" role="status" aria-live="polite">
+      <span className="spin sm" />
+      <span>{label}</span>
     </div>
   );
+}
+
+function statusLabel(status: AgentStreamStatus, t: ReturnType<typeof useT>): string {
+  if (status.phase === 'generating') return t('正在生成回复');
+  if (status.phase === 'checking') return t('正在检查提案');
+  if (status.phase === 'ready') return `${t('已生成可审阅改动')}: ${status.editCount}`;
+  if (status.phase === 'repairing') {
+    const action = status.reason === 'truncated_output' ? t('正在重新生成截断的提案') : t('正在修复未通过检查的提案');
+    return `${action} (${status.attempt})`;
+  }
+  if (status.source === 'spreadsheet') return t('正在读取数据范围');
+  if (status.source === 'document') return t('正在读取文档内容');
+  if (status.source === 'guidance') return t('正在读取任务规范');
+  return t('正在读取所需上下文');
 }
 
 /** The agent's reverse-clarify card (Claude Code style): options per question (single/multi)

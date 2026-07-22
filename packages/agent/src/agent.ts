@@ -178,7 +178,7 @@ export class Agent {
     return { kind: 'changeset', changeSet: cs };
   }
 
-  /** Streaming routing: pass through if respondStream exists; otherwise fall back to a one-shot result and emit delta/done events. */
+  /** Streaming routing: pass through structured public events, or synthesize them for one-shot clients. */
   async respondStream(req: ProposeRequest, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
     assertProposeRequestBudget(req);
     const d = this.dialectFor(req);
@@ -187,6 +187,7 @@ export class Agent {
       if (response.kind === 'changeset') assertChangeSet(response.changeSet);
       return response;
     }
+    onEvent({ type: 'status', status: { phase: 'generating' } });
     let r: AgentResponse;
     if (this.model.respond) {
       r = await this.model.respond(req, d, this.withSkillTools(req, opts));
@@ -201,6 +202,7 @@ export class Agent {
       }
     }
     if (r.kind === 'changeset') assertChangeSet(r.changeSet);
+    if (r.kind === 'changeset') onEvent({ type: 'status', status: { phase: 'ready', editCount: r.changeSet.edits.length } });
     if (r.kind === 'answer') onEvent({ type: 'answer', delta: r.text });
     onEvent({ type: 'done', result: r });
     return r;

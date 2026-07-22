@@ -1,10 +1,12 @@
+import type { AgentStreamStatus } from './app-thread-types.js';
+
 type UserTurn = { role: 'user'; text: string };
 
 type AssistantTurn = {
   role: 'assistant';
   kind: string;
   text?: string;
-  reasoning?: string;
+  status?: AgentStreamStatus;
   streaming?: boolean;
   questions?: unknown[];
 };
@@ -20,7 +22,7 @@ export function appendUserTurn<Turn extends ProposalThreadTurn>(thread: readonly
 }
 
 export function appendStreamingAnswerTurn<Turn extends ProposalThreadTurn>(thread: readonly Turn[]): Turn[] {
-  return [...thread, { role: 'assistant', kind: 'answer', text: '', reasoning: '', streaming: true } as Turn];
+  return [...thread, { role: 'assistant', kind: 'answer', text: '', status: { phase: 'generating' }, streaming: true } as Turn];
 }
 
 export function updateLastAssistantTurn<Turn extends ProposalThreadTurn>(
@@ -34,9 +36,11 @@ export function updateLastAssistantTurn<Turn extends ProposalThreadTurn>(
   );
 }
 
-export function appendReasoningDelta<Turn extends ProposalThreadTurn>(thread: readonly Turn[], delta = ''): Turn[] {
+export function setStreamStatus<Turn extends ProposalThreadTurn>(thread: readonly Turn[], value: unknown): Turn[] {
+  const status = parseStreamStatus(value);
+  if (!status) return [...thread];
   return updateLastAssistantTurn(thread, (turn) =>
-    isAnswerTurn(turn) ? ({ ...turn, reasoning: (turn.reasoning ?? '') + delta } as Turn) : turn,
+    isAnswerTurn(turn) ? ({ ...turn, status } as Turn) : turn,
   );
 }
 
@@ -44,10 +48,6 @@ export function appendAnswerDelta<Turn extends ProposalThreadTurn>(thread: reado
   return updateLastAssistantTurn(thread, (turn) =>
     isAnswerTurn(turn) ? ({ ...turn, text: (turn.text ?? '') + delta } as Turn) : turn,
   );
-}
-
-export function appendToolReasoning<Turn extends ProposalThreadTurn>(thread: readonly Turn[], name?: string): Turn[] {
-  return appendReasoningDelta(thread, `\n〔查表 ${name ?? ''}〕\n`);
 }
 
 export function replaceLastWithClarify<Turn extends ProposalThreadTurn, Question>(
@@ -58,13 +58,12 @@ export function replaceLastWithClarify<Turn extends ProposalThreadTurn, Question
     role: 'assistant',
     kind: 'clarify',
     questions: [...questions],
-    reasoning: isAnswerTurn(turn) ? turn.reasoning : undefined,
   } as Turn));
 }
 
 export function finalizeLastAnswer<Turn extends ProposalThreadTurn>(thread: readonly Turn[], text?: string): Turn[] {
   return updateLastAssistantTurn(thread, (turn) =>
-    isAnswerTurn(turn) ? ({ ...turn, text: text ?? turn.text, streaming: false } as Turn) : turn,
+    isAnswerTurn(turn) ? ({ ...turn, text: text ?? turn.text, status: undefined, streaming: false } as Turn) : turn,
   );
 }
 
@@ -77,6 +76,24 @@ export function interruptLastStreamingAnswer<Turn extends ProposalThreadTurn>(
   return updateLastAssistantTurn(thread, (turn) => {
     if (!isAnswerTurn(turn)) return turn;
     const prefix = turn.text?.trim() ? `${turn.text}\n\n` : '';
-    return { ...turn, streaming: false, text: prefix + message } as Turn;
+    return { ...turn, status: undefined, streaming: false, text: prefix + message } as Turn;
   });
+}
+
+function parseStreamStatus(value: unknown): AgentStreamStatus | null {
+  if (!value || typeof value !== 'object') return null;
+  const status = value as Record<string, unknown>;
+  if (status.phase === 'generating' || status.phase === 'checking') return { phase: status.phase };
+  if (status.phase === 'reading' && (status.source === 'spreadsheet' || status.source === 'document' || status.source === 'guidance' || status.source === 'context')) {
+    return { phase: 'reading', source: status.source };
+  }
+  if (status.phase === 'repairing'
+    && Number.isSafeInteger(status.attempt) && Number(status.attempt) > 0 && Number(status.attempt) <= 100
+    && (status.reason === 'truncated_output' || status.reason === 'check_failed')) {
+    return { phase: 'repairing', attempt: Number(status.attempt), reason: status.reason };
+  }
+  if (status.phase === 'ready' && Number.isSafeInteger(status.editCount) && Number(status.editCount) >= 0 && Number(status.editCount) <= 100_000) {
+    return { phase: 'ready', editCount: Number(status.editCount) };
+  }
+  return null;
 }

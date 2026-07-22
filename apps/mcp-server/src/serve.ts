@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomBytes } from 'node:crypto';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
 import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, isResourceLimitError } from '@otterpatch/core';
-import { createModelClient, type ProposeRequest, type Provider } from '@otterpatch/agent';
+import { createModelClient, sanitizeStreamStatus, type ProposeRequest, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
 import { OtterPatchRuntime, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
 import { decodeDocumentBase64 } from './document-input.js';
@@ -194,7 +194,14 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               ...(Array.isArray(a.history) ? { history: a.history as Array<{ role: 'user' | 'assistant'; content: string }> } : {}),
             },
             model,
-            (e) => { if (e.type !== 'done') sse(e); },
+            (e) => {
+              if (e.type === 'status') {
+                const status = sanitizeStreamStatus(e.status);
+                if (status) sse({ type: 'status', status });
+              } else if (e.type === 'answer' || e.type === 'draft') {
+                sse(e);
+              }
+            },
           );
           if (result.kind === 'changeset') {
             sse({

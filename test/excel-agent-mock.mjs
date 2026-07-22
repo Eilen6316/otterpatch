@@ -23,7 +23,7 @@ const changeSet = {
   ],
   anchors: { a0: { portable: { kind: 'grid', ref: 'Sheet1!C2' } }, a1: { portable: { kind: 'grid', ref: 'Sheet1!C2' } } },
 };
-const sse = `data: ${JSON.stringify({ type: 'reasoning', delta: '定位异常…' })}\n\n` + `data: ${JSON.stringify({ type: 'done', kind: 'changeset', diff, changeSet })}\n\n`;
+const sse = `data: ${JSON.stringify({ type: 'status', status: { phase: 'reading', source: 'spreadsheet', operation: 'read_range' } })}\n\n` + `data: ${JSON.stringify({ type: 'done', kind: 'changeset', diff, changeSet })}\n\n`;
 
 try {
   await page.route('**/propose-stream', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: sse }));

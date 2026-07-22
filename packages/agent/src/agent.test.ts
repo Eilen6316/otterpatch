@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RESOURCE_LIMITS, ResourceLimitError, STRICT_POLICY, type DocRev } from '@otterpatch/core';
-import { Agent, AnthropicModelClient, ConventionStack, EXCEL_OPS, MockModelClient, OpenAICompatModelClient, conventionFromMarkdown, createModelClient, excelDialect, normalizeMessages, PROVIDERS, wordDialect, type ModelClient, type Provider } from './index.js';
+import { Agent, AnthropicModelClient, ConventionStack, EXCEL_OPS, MockModelClient, OpenAICompatModelClient, conventionFromMarkdown, createModelClient, excelDialect, normalizeMessages, PROVIDERS, wordDialect, type ModelClient, type Provider, type StreamEvent } from './index.js';
 import { defaultLibrary } from '@otterpatch/skills';
 import { AgentLoopBudget, validProposalRepairs } from './loop-budget.js';
+import { readingStatus, sanitizeStreamStatus } from './stream-status.js';
 
 test('Agent excel: 意图 + Mock → grid setValue ChangeSet', async () => {
   const mock = new MockModelClient(() => ({ plan: '补 B1', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] }));
@@ -372,13 +373,71 @@ function openAiToolResponse(name: string, args: string, id: string, completionTo
   };
 }
 
-function openAiToolStream(name: string, args: string, id: string): AsyncIterable<unknown> {
+function openAiToolStream(name: string, args: string, id: string, reasoningContent?: string, toolPreamble?: string): AsyncIterable<unknown> {
   return {
     async *[Symbol.asyncIterator]() {
+      if (reasoningContent) yield { choices: [{ delta: { reasoning_content: reasoningContent } }] };
+      if (toolPreamble) yield { choices: [{ delta: { content: toolPreamble } }] };
       yield { choices: [{ delta: { tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: args } }] } }] };
     },
   };
 }
+
+function openAiTextStream(content: string): AsyncIterable<unknown> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield { choices: [{ delta: { content } }] };
+    },
+  };
+}
+
+test('OpenAI stream never exposes provider reasoning_content', async () => {
+  const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'test-model' });
+  const secret = 'PRIVATE_OPENAI_CHAIN_OF_THOUGHT';
+  const preamble = 'PRIVATE_OPENAI_TOOL_PREAMBLE';
+  (client as unknown as { client: { chat: { completions: { create: () => Promise<AsyncIterable<unknown>> } } } }).client = {
+    chat: { completions: { create: async () => openAiToolStream('propose_changeset', JSON.stringify(VALID_EXCEL_PROPOSAL), 't1', secret, preamble) } },
+  };
+  const events: StreamEvent[] = [];
+
+  const result = await client.respondStream(LOOP_REQ, excelDialect, (event) => events.push(event));
+
+  assert.equal(result.kind, 'changeset');
+  assert.doesNotMatch(JSON.stringify(events), new RegExp(secret));
+  assert.doesNotMatch(JSON.stringify(events), new RegExp(preamble));
+  assert.deepEqual(
+    events.filter((event) => event.type === 'status').map((event) => event.status.phase),
+    ['generating', 'ready'],
+  );
+});
+
+test('public read status maps unknown tool names to a fixed category', () => {
+  assert.deepEqual(readingStatus('provider_supplied_private_tool_name'), {
+    phase: 'reading',
+    source: 'context',
+    operation: 'other',
+  });
+  assert.doesNotMatch(JSON.stringify(readingStatus('provider_supplied_private_tool_name')), /private_tool_name/);
+  const sanitized = sanitizeStreamStatus({ phase: 'reading', source: 'spreadsheet', operation: 'read_range', raw: 'private status text' });
+  assert.deepEqual(sanitized, { phase: 'reading', source: 'spreadsheet', operation: 'read_range' });
+  assert.doesNotMatch(JSON.stringify(sanitized), /private status text/);
+  assert.equal(sanitizeStreamStatus({ phase: 'reading', source: 'document', operation: 'read_range' }), null);
+});
+
+test('OpenAI stream releases text only after it is classified as the final answer', async () => {
+  const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'test-model' });
+  let calls = 0;
+  (client as unknown as { client: { chat: { completions: { create: () => Promise<AsyncIterable<unknown>> } } } }).client = {
+    chat: { completions: { create: async () => openAiTextStream(++calls === 1 ? 'unclassified tool preamble' : 'final answer') } },
+  };
+  const events: StreamEvent[] = [];
+
+  const result = await client.respondStream(LOOP_REQ, excelDialect, (event) => events.push(event));
+
+  assert.deepEqual(result, { kind: 'answer', text: 'final answer' });
+  assert.deepEqual(events.filter((event) => event.type === 'answer'), [{ type: 'answer', delta: 'final answer' }]);
+  assert.doesNotMatch(JSON.stringify(events), /unclassified tool preamble/);
+});
 
 test('agent loop budget tracks model/read/repair/output/time limits independently', () => {
   assert.throws(

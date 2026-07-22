@@ -21,11 +21,18 @@ export interface UserTurn {
   text: string;
 }
 
+export type AgentStreamStatus =
+  | { phase: 'generating' }
+  | { phase: 'reading'; source: 'spreadsheet' | 'document' | 'guidance' | 'context' }
+  | { phase: 'checking' }
+  | { phase: 'repairing'; attempt: number; reason: 'truncated_output' | 'check_failed' }
+  | { phase: 'ready'; editCount: number };
+
 export interface AnswerTurn {
   role: 'assistant';
   kind: 'answer';
   text: string;
-  reasoning?: string;
+  status?: AgentStreamStatus;
   streaming?: boolean;
 }
 
@@ -33,7 +40,6 @@ export interface ClarifyTurn {
   role: 'assistant';
   kind: 'clarify';
   questions: ClarifyQuestion[];
-  reasoning?: string;
   answered?: boolean;
   answerText?: string;
 }
@@ -50,7 +56,6 @@ export interface DiffTurn {
   board?: BoardPatch;
   word?: WordEdit[];
   text?: string;
-  reasoning?: string;
   reverted?: boolean;
   committed?: boolean;
   committedCount?: number;

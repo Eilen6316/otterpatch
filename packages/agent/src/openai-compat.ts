@@ -14,6 +14,7 @@ import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, exe
 import { NUDGE_DIRECT, NUDGE_TOOLIFY, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
 import { salvageProposalArgs, salvageText, safeParse, salvagedProposalPayload } from './json-salvage.js';
 import { AgentLoopBudget, readToolLimitText, verificationFailureText } from './loop-budget.js';
+import { readingStatus } from './stream-status.js';
 
 export interface OpenAICompatOptions {
   apiKey?: string;
@@ -227,11 +228,18 @@ export class OpenAICompatModelClient implements ModelClient {
     return { kind: 'answer', text: TOO_MANY_STEPS_MSG };
   }
 
-  /** Streaming variant of respond: emits reasoning/answer deltas while enforcing the same independent loop budgets as respond. */
+  /** Streaming variant of respond: suppresses provider reasoning and emits bounded public status events. */
   async respondStream(req: ProposeRequest, dialect: HostDialect, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
     const { messages, tools } = this.buildCtx(req, dialect, opts);
     const budget = new AgentLoopBudget(opts?.maxRepairs ?? 1);
     let nudged = false;
+    let repairAttempt = 0;
+    onEvent({ type: 'status', status: { phase: 'generating' } });
+    const complete = (result: AgentResponse): AgentResponse => {
+      if (result.kind === 'answer' && result.text) onEvent({ type: 'answer', delta: result.text });
+      onEvent({ type: 'done', result });
+      return result;
+    };
 
     for (let step = 0; step < STEP_LIMIT; step++) {
       const stream = await this.client.chat.completions.create(
@@ -244,19 +252,17 @@ export class OpenAICompatModelClient implements ModelClient {
       for await (const chunk of stream) {
         const d = chunk.choices[0]?.delta;
         if (!d) continue;
-        const rc = (d as { reasoning_content?: string }).reasoning_content; // chain-of-thought deltas from reasoning models such as DeepSeek
+        const rc = (d as { reasoning_content?: string }).reasoning_content;
         if (rc) {
           outputChars += rc.length;
           assertModelOutputChars(outputChars);
           budget.recordOutput(rc);
-          onEvent({ type: 'reasoning', delta: rc });
         }
         if (d.content) {
           outputChars += d.content.length;
           assertModelOutputChars(outputChars);
           budget.recordOutput(d.content);
           content += d.content;
-          onEvent({ type: 'answer', delta: d.content });
         }
         for (const tc of d.tool_calls ?? []) {
           const idx = tc.index ?? 0;
@@ -292,10 +298,10 @@ export class OpenAICompatModelClient implements ModelClient {
         if (parsed.truncated) {
           if (!budget.tryTruncationRepair()) {
             const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK };
-            onEvent({ type: 'done', result });
-            return result;
+            return complete(result);
           }
-          onEvent({ type: 'tool', name: 'retry:truncated' });
+          repairAttempt++;
+          onEvent({ type: 'status', status: { phase: 'repairing', attempt: repairAttempt, reason: 'truncated_output' } });
           const got = (parsed.ops?.length ?? parsed.edits?.length ?? 0);
           messages.push({ role: 'assistant', content: content || null, tool_calls: [{ id: propose.id, type: 'function' as const, function: { name: propose.name, arguments: propose.args } }] });
           messages.push({ role: 'tool', tool_call_id: propose.id, content: `你的 ${dialect.toolName} 输出在中途被截断,只完整收到前 ${got} 条,其余全部丢失(且截断处的值可能已损坏)。请立即重新提出,并【控制单次输出体积】:本批只输出前 ~8 条完整内容(style/字段只留必要项),plan 里说明"先做第一批,继续说'下一批'"。` });
@@ -304,60 +310,56 @@ export class OpenAICompatModelClient implements ModelClient {
         const cs = dialect.buildChangeSet(req, salvagedProposalPayload(parsed));
         assertChangeSet(cs);
         if (opts?.verify) {
-          onEvent({ type: 'tool', name: 'verify' });
+          onEvent({ type: 'status', status: { phase: 'checking' } });
           const v = await opts.verify(cs);
           budget.finishStep();
           if (!v.ok) {
             if (!budget.tryProposalRepair()) {
               const result: AgentResponse = { kind: 'answer', text: verificationFailureText(v) };
-              onEvent({ type: 'done', result });
-              return result;
+              return complete(result);
             }
+            repairAttempt++;
+            onEvent({ type: 'status', status: { phase: 'repairing', attempt: repairAttempt, reason: 'check_failed' } });
             messages.push({ role: 'assistant', content: content || null, tool_calls: [{ id: propose.id, type: 'function' as const, function: { name: propose.name, arguments: propose.args } }] });
             messages.push({ role: 'tool', tool_call_id: propose.id, content: v.report });
             continue;
           }
         }
+        onEvent({ type: 'status', status: { phase: 'ready', editCount: cs.edits.length } });
         const result: AgentResponse = { kind: 'changeset', changeSet: cs };
-        onEvent({ type: 'done', result });
-        return result;
+        return complete(result);
       }
       const ans = calls.find((c) => c.name === 'answer_user');
       if (ans) {
         const result: AgentResponse = { kind: 'answer', text: salvageText(ans.args) || content.trim() };
-        onEvent({ type: 'done', result });
-        return result;
+        return complete(result);
       }
       const ask = calls.find((c) => c.name === 'ask_user');
       if (ask) {
         const questions = parseClarify(ask.args);
         const result: AgentResponse = questions.length ? { kind: 'clarify', questions } : { kind: 'answer', text: content.trim() || EMPTY_RESULT_FALLBACK };
-        onEvent({ type: 'done', result });
-        return result;
+        return complete(result);
       }
       if (!calls.length) {
         // Same guard as respond(): toolify prose finals once, nudge empty finals once.
         if (!nudged) { nudged = true; messages.push({ role: 'assistant', content: content.trim() || '(已完成思考)' }); messages.push({ role: 'user', content: content.trim() ? NUDGE_TOOLIFY : NUDGE_DIRECT }); continue; }
         const result: AgentResponse = { kind: 'answer', text: content.trim() || EMPTY_RESULT_FALLBACK };
-        onEvent({ type: 'done', result });
-        return result;
+        return complete(result);
       }
 
       // Read-only tools: execute + feed back, continue the loop
       if (!budget.tryReadTools(calls.length)) {
         const result: AgentResponse = { kind: 'answer', text: readToolLimitText() };
-        onEvent({ type: 'done', result });
-        return result;
+        return complete(result);
       }
       messages.push({ role: 'assistant', content: content || null, tool_calls: calls.map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.args } })) });
       for (const c of calls) {
-        onEvent({ type: 'tool', name: c.name });
+        onEvent({ type: 'status', status: readingStatus(c.name) });
         messages.push({ role: 'tool', tool_call_id: c.id, content: this.execTool(c.name, safeParse(c.args || '{}'), req, opts) });
       }
       budget.finishStep();
     }
     const result: AgentResponse = { kind: 'answer', text: TOO_MANY_STEPS_MSG };
-    onEvent({ type: 'done', result });
-    return result;
+    return complete(result);
   }
 }
