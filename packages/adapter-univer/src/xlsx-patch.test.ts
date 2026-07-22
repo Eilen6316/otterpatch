@@ -110,6 +110,35 @@ test('setValue 字符串:走 inlineStr,不触碰 sharedStrings', async () => {
   assert.match(sheet, /<c r="B1" s="2" t="inlineStr"><is><t>利润<\/t><\/is><\/c>/);
 });
 
+test('xlsx worksheet tokenizer handles attribute order, prefixes, quotes, and extension nodes', async () => {
+  const worksheet = '<?xml version="1.0"?>' +
+    '<x:worksheet xmlns:x="urn:sheet" xmlns:m="urn:extension"><x:sheetData>' +
+    '<x:row custom="keep" r=\'1\'><x:c s=\'2\' r=\'B1\'><x:v>20</x:v></x:c>' +
+    '<x:extLst><x:ext uri="keep"><m:c r="B1"/></x:ext></x:extLst></x:row>' +
+    '</x:sheetData></x:worksheet>';
+  const original = repackOoxml(makeXlsx(), { 'xl/worksheets/sheet1.xml': enc(worksheet) });
+  const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
+  const res = await wb.commit(setB1To(99), { hostId: 'h1', bytes: original, rev: 0 as DocRev });
+
+  assert.equal(res.ok, true);
+  const sheet = dec.decode(readOoxmlParts(res.bytes)['xl/worksheets/sheet1.xml']!);
+  assert.equal((sheet.match(/<x:c\b/g) ?? []).length, 1, 'the existing cell is replaced instead of duplicated');
+  assert.match(sheet, /<x:c s='2' r='B1'><x:v>99<\/x:v><\/x:c>/);
+  assert.match(sheet, /<x:extLst><x:ext uri="keep"><m:c r="B1"\/><\/x:ext><\/x:extLst>/);
+  assert.match(sheet, /<x:row custom="keep" r='1'>/);
+});
+
+test('xlsx worksheet tokenizer expands prefixed self-closing containers', async () => {
+  const worksheet = '<?xml version="1.0"?><x:worksheet xmlns:x="urn:sheet"><x:sheetData /></x:worksheet>';
+  const original = repackOoxml(makeXlsx(), { 'xl/worksheets/sheet1.xml': enc(worksheet) });
+  const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
+  const res = await wb.commit(setB1To(99), { hostId: 'h1', bytes: original, rev: 0 as DocRev });
+
+  assert.equal(res.ok, true);
+  const sheet = dec.decode(readOoxmlParts(res.bytes)['xl/worksheets/sheet1.xml']!);
+  assert.match(sheet, /<x:sheetData ><x:row r="1"><x:c r="B1"><x:v>99<\/x:v><\/x:c><\/x:row><\/x:sheetData>/);
+});
+
 /** Single-edit ChangeSet: B1 (or the given a1) + an arbitrary EditOp. */
 function csOp(op: EditOp, a1 = 'Sheet1!B1', sheet = 'Sheet1'): ChangeSet {
   const aid = 'a1' as AnchorId;

@@ -12,6 +12,7 @@
 import { assertA1RangeBudget, supportsFormatOperation, type CellValue, type ChangeSet, type EditId, type LogicalAnchor } from '@otterpatch/core';
 import { readOoxmlParts, type OoxmlParts, type OoxmlPatchResult } from '@otterpatch/writeback-surgical';
 import { XlsxStyles, type AbstractCellStyle } from './xlsx-styles.js';
+import { setWorksheetCellFormula, setWorksheetCellStyle, setWorksheetCellValue, worksheetCellStyleIndex, worksheetHasCell } from './worksheet-xml.js';
 
 const dec = new TextDecoder();
 const encoder = new TextEncoder();
@@ -100,101 +101,6 @@ function normalizeWorksheetPartTarget(target: string): string {
   if (!/^xl\/worksheets\/[^/]+\.xml$/.test(raw)) throw new Error(`invalid worksheet relationship target '${target}'`);
   return raw;
 }
-function escapeXml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-interface CellHit {
-  index: number;
-  len: number;
-  sIdx?: number;
-  t?: string;
-  inner?: string; // undefined ⇒ self-closing <c .../>
-}
-function findCell(sheetXml: string, ref: string): CellHit | null {
-  const m = new RegExp(`<c r="${ref}"([^>]*?)(?:/>|>([\\s\\S]*?)</c>)`).exec(sheetXml);
-  if (!m) return null;
-  const attrs = m[1] ?? '';
-  const s = /\bs="(\d+)"/.exec(attrs)?.[1];
-  const t = /\bt="([^"]*)"/.exec(attrs)?.[1];
-  return {
-    index: m.index,
-    len: m[0].length,
-    ...(s != null ? { sIdx: parseInt(s, 10) } : {}),
-    ...(t != null ? { t } : {}),
-    ...(m[2] != null ? { inner: m[2] } : {}),
-  };
-}
-
-const sAttrOf = (sIdx?: number): string => (sIdx != null ? ` s="${sIdx}"` : '');
-
-/** Value-cell XML (preserves the given style index s). */
-function valueCellXml(ref: string, value: CellValue, sIdx?: number): string {
-  const s = sAttrOf(sIdx);
-  if (value === null) return `<c r="${ref}"${s}/>`;
-  if (typeof value === 'number') return `<c r="${ref}"${s}><v>${value}</v></c>`;
-  if (typeof value === 'boolean') return `<c r="${ref}"${s} t="b"><v>${value ? 1 : 0}</v></c>`;
-  const space = /^\s|\s$/.test(value) ? ' xml:space="preserve"' : '';
-  return `<c r="${ref}"${s} t="inlineStr"><is><t${space}>${escapeXml(value)}</t></is></c>`;
-}
-/** Formula-cell XML: writes <f> without a cached value (Excel/LibreOffice recalculates on open). */
-function formulaCellXml(ref: string, formula: string, sIdx?: number): string {
-  return `<c r="${ref}"${sAttrOf(sIdx)}><f>${escapeXml(formula.replace(/^=/, ''))}</f></c>`;
-}
-/** Cell XML that swaps only the style index s and keeps original content (setStyle/setNumberFormat). */
-function restyleCellXml(ref: string, newS: number, existing: CellHit | null): string {
-  const s = ` s="${newS}"`;
-  if (!existing) return `<c r="${ref}"${s}/>`;
-  const t = existing.t != null ? ` t="${existing.t}"` : '';
-  if (existing.inner == null) return `<c r="${ref}"${s}${t}/>`;
-  return `<c r="${ref}"${s}${t}>${existing.inner}</c>`;
-}
-
-/** Replace an existing <c>, or insert a new <c> in column/row order (creating a <row> if needed). */
-function upsertCell(sheetXml: string, ref: string, newCellXml: string, hit: CellHit | null): string {
-  if (hit) return sheetXml.slice(0, hit.index) + newCellXml + sheetXml.slice(hit.index + hit.len);
-  const { col, row } = parseRef(ref);
-
-  const rowOpen = new RegExp(`<row\\b[^>]*\\br="${row}"[^>]*?(/?)>`).exec(sheetXml);
-  if (rowOpen) {
-    if (rowOpen[1] === '/') {
-      const openTag = rowOpen[0].slice(0, -2) + '>';
-      return sheetXml.slice(0, rowOpen.index) + openTag + newCellXml + '</row>' + sheetXml.slice(rowOpen.index + rowOpen[0].length);
-    }
-    const start = rowOpen.index + rowOpen[0].length;
-    const end = sheetXml.indexOf('</row>', start);
-    const inner = sheetXml.slice(start, end);
-    let at = inner.length;
-    for (const m of inner.matchAll(/<c\b[^>]*\br="([A-Za-z]+)\d+"/g)) {
-      if (colToNum(m[1]!) > col) {
-        at = m.index!;
-        break;
-      }
-    }
-    return sheetXml.slice(0, start) + inner.slice(0, at) + newCellXml + inner.slice(at) + sheetXml.slice(end);
-  }
-
-  const sd = /<sheetData\b[^>]*?(\/?)>/.exec(sheetXml);
-  if (!sd) throw new Error('no <sheetData> in worksheet');
-  const rowXml = `<row r="${row}">${newCellXml}</row>`;
-  if (sd[1] === '/') {
-    return sheetXml.slice(0, sd.index) + '<sheetData>' + rowXml + '</sheetData>' + sheetXml.slice(sd.index + sd[0].length);
-  }
-  const sdStart = sd.index + sd[0].length;
-  let insAt = sheetXml.indexOf('</sheetData>', sdStart);
-  for (const m of sheetXml.slice(sdStart).matchAll(/<row\b[^>]*\br="(\d+)"/g)) {
-    if (parseInt(m[1]!, 10) > row) {
-      insAt = sdStart + m.index!;
-      break;
-    }
-  }
-  return sheetXml.slice(0, insAt) + rowXml + sheetXml.slice(insAt);
-}
-
 function unquoteSheetName(value: string): string {
   const trimmed = value.trim();
   return trimmed.startsWith("'") && trimmed.endsWith("'")
@@ -280,27 +186,23 @@ export function buildXlsxCompiler() {
               : ((edit.op as { style: AbstractCellStyle }).style ?? {});
           for (const ref of cells) {
             let xml = getSheet(path);
-            const hit = findCell(xml, ref);
-            const newS = ed.resolveXf(hit?.sIdx, style);
-            xml = upsertCell(xml, ref, restyleCellXml(ref, newS, hit), hit);
+            const newS = ed.resolveXf(worksheetCellStyleIndex(xml, ref), style);
+            xml = setWorksheetCellStyle(xml, ref, newS);
             sheetCache.set(path, xml);
           }
         } else {
           for (const ref of cells) {
             let xml = getSheet(path);
-            const hit = findCell(xml, ref);
-            let cellXml: string;
             if (kind === 'setFormula') {
-              cellXml = formulaCellXml(ref, (edit.op as { formula: string }).formula ?? '', hit?.sIdx);
+              xml = setWorksheetCellFormula(xml, ref, (edit.op as { formula: string }).formula ?? '');
             } else if (kind === 'deleteRange') {
-              if (!hit) continue; // target already empty; clearing is a no-op
-              cellXml = valueCellXml(ref, null, hit.sIdx);
+              if (!worksheetHasCell(xml, ref)) continue; // target already empty; clearing is a no-op
+              xml = setWorksheetCellValue(xml, ref, null);
             } else {
               const value = (edit.op as { value: CellValue }).value ?? null;
-              if (value === null && !hit) continue; // writing null to an empty cell; skip
-              cellXml = valueCellXml(ref, value, hit?.sIdx);
+              if (value === null && !worksheetHasCell(xml, ref)) continue; // writing null to an empty cell; skip
+              xml = setWorksheetCellValue(xml, ref, value);
             }
-            xml = upsertCell(xml, ref, cellXml, hit);
             sheetCache.set(path, xml);
           }
         }
