@@ -754,6 +754,9 @@ export function App() {
           : `\n[当前选区·用户此刻圈选了这段(${selDesc})]:"${wordSel.text}"\n若指令含"这段/这句/这里/选中的/选中/它",优先针对它;quote 用这段真实原文定位。`) : '\n[未圈选文字]:请基于整篇文档理解。')
       : selectionContext();
     const proposalFile = fileSnapshot?.format === fmt ? fileSnapshot : null;
+    const proposalBoard = fmt === 'drawio' && boardSel?.board
+      ? { ...boardSel.board, ...(proposalFile?.drawioSourceEncoding ? { sourceEncoding: proposalFile.drawioSourceEncoding } : {}) }
+      : undefined;
     setSendErr(null);
     const ep = normalizeLocalEndpoint(server);
     if (server.trim() && !ep) {
@@ -779,7 +782,7 @@ export function App() {
         type StreamEvt = { type: string; delta?: string; name?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; proposal?: unknown; questions?: ClarifyQuestion[]; message?: string };
         await streamPropose<StreamEvt>(
           ep,
-          { format: fmt, intent: theIntent, context: ctx, baseRev: 0, provider, model, apiKey, ...(proposalFile ? { documentId: `${proposalFile.format}:${proposalFile.name}:${proposalFile.byteLength}:${proposalFile.hash}` } : {}), ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(fmt === 'drawio' && boardSel?.board ? { board: boardSel.board } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildAppHistory(thread) } : {}) },
+          { format: fmt, intent: theIntent, context: ctx, baseRev: 0, provider, model, apiKey, ...(proposalFile ? { documentId: `${proposalFile.format}:${proposalFile.name}:${proposalFile.byteLength}:${proposalFile.hash}` } : {}), ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(proposalBoard ? { board: proposalBoard } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildAppHistory(thread) } : {}) },
           () => {
             if (theIntent.trim()) setRecent((rr) => [{ t: theIntent.trim(), time: t('刚刚') }, ...rr.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
             setSent(true);

@@ -29,10 +29,10 @@ export function useFileImport({ format, wordRef, boardRef, notify, t }: UseFileI
   const [fileSnapshot, setFileSnapshot] = useState<FileSnapshot | null>(null);
   const fileLoadSeqRef = useRef(0);
 
-  const setLoadedFile = (loadFormat: ImportFormat, name: string, b64: string): void => {
+  const setLoadedFile = (loadFormat: ImportFormat, name: string, b64: string, drawioSourceEncoding?: FileSnapshot['drawioSourceEncoding']): void => {
     setFileB64(b64);
     setFileName(name);
-    setFileSnapshot(makeFileSnapshot(loadFormat, name, b64));
+    setFileSnapshot(makeFileSnapshot(loadFormat, name, b64, drawioSourceEncoding));
   };
   const clearLoadedFile = (): void => {
     setFileB64('');
@@ -83,7 +83,7 @@ export function useFileImport({ format, wordRef, boardRef, notify, t }: UseFileI
               return;
             }
             boardRef.current?.loadPages(pages);
-            setLoadedFile(loadFormat, file.name, b64);
+            setLoadedFile(loadFormat, file.name, b64, parsed.sourceEncoding);
             const nodes = pages.reduce((sum, g) => sum + g.nodes.length, 0);
             const edges = pages.reduce((sum, g) => sum + g.edges.length, 0);
             notify(`导入 drawio: ${pages.length} 页 / ${nodes} 节点 / ${edges} 连线`);

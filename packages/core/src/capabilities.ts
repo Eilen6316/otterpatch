@@ -6,6 +6,7 @@ export const CAPABILITY_MANIFEST_VERSION = 'capabilities-v1';
 export type CapabilityScope = 'cell' | 'range' | 'sheet' | 'document' | 'object' | 'field' | 'slide';
 export type CapabilityMaturity = 'experimental' | 'preview' | 'verified';
 export type CapabilityStage = 'propose' | 'preview' | 'verify' | 'writeback';
+export type CapabilityFeatureSupport = 'supported' | 'unsupported';
 
 export interface OperationCapability {
   op: EditOpKind;
@@ -27,6 +28,7 @@ export interface FormatCapabilityManifest {
   format: string;
   aliases: readonly string[];
   operations: readonly OperationCapability[];
+  features?: Readonly<Record<string, CapabilityFeatureSupport>>;
 }
 
 type CapabilityInput = Omit<OperationCapability, 'propose' | 'preview' | 'verify' | 'writeback' | 'partialWriteback' | 'maturity'>
@@ -85,6 +87,7 @@ const manifests = [
     version: CAPABILITY_MANIFEST_VERSION,
     format: 'drawio',
     aliases: ['drawio'],
+    features: { compressed: 'unsupported' },
     operations: [
       topologyChecked({ op: 'setValue', maxScope: 'object', risk: 'safe', backend: ['drawio-surgical'] }),
       topologyChecked({ op: 'setObjectProps', maxScope: 'object', risk: 'caution', backend: ['drawio-surgical'] }),
@@ -132,6 +135,10 @@ export function capabilityManifestFor(format: string): FormatCapabilityManifest 
 
 export function operationCapabilitiesFor(format: string): readonly OperationCapability[] {
   return capabilityManifestFor(format)?.operations ?? [];
+}
+
+export function formatFeatureSupport(format: string, feature: string): CapabilityFeatureSupport | undefined {
+  return capabilityManifestFor(format)?.features?.[feature];
 }
 
 export function proposalOperationNamesFor(format: string): string[] {

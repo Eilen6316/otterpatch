@@ -5,7 +5,7 @@
  * Each channel only maps the logical tool defs / system prompt / fetch execution here onto its own SDK's message/tool format.
  */
 import type { ClarifyOption, ClarifyQuestion, HostDialect, ProposeRequest } from './model.js';
-import { RESOURCE_LIMITS, ResourceLimitError, assertA1RangeBudget, assertJsonBudget, assertTextResultBudget, isResourceLimitError, isSheetScalar, sheetScalarNumericValue, sheetScalarToCellValue, utf8ByteLength, type SheetCellValue, type SheetScalar } from '@otterpatch/core';
+import { RESOURCE_LIMITS, ResourceLimitError, assertA1RangeBudget, assertJsonBudget, assertTextResultBudget, formatFeatureSupport, isResourceLimitError, isSheetScalar, sheetScalarNumericValue, sheetScalarToCellValue, utf8ByteLength, type SheetCellValue, type SheetScalar } from '@otterpatch/core';
 import { safeParse } from './json-salvage.js';
 import { ROUTING_PREAMBLE, TOO_MANY_STEPS_MSG, ANSWER_USER_DESC, ASK_USER_DESC, READ_RANGE_DESC, AGGREGATE_DESC } from './prompts/index.js';
 import { DOC_TOOL_DEFS, execDocTool, type DocSnapshot } from './doc-tools.js';
@@ -77,7 +77,16 @@ export function assertProposeRequestBudget(req: ProposeRequest): void {
     assertSheetSnapshotBudget(req.sheet);
   }
   if (req.doc) assertJsonBudget(req.doc, 'document_snapshot');
-  if (req.board) assertJsonBudget(req.board, 'drawio_snapshot');
+  if (req.board) {
+    assertJsonBudget(req.board, 'drawio_snapshot');
+    const encoding = req.board.sourceEncoding;
+    if (encoding !== undefined && encoding !== 'uncompressed' && encoding !== 'compressed') {
+      throw new Error(`invalid drawio source encoding: ${String(encoding)}`);
+    }
+    if (encoding === 'compressed' && formatFeatureSupport(req.format, 'compressed') === 'unsupported') {
+      throw new Error('drawio capability does not support compressed source diagrams; export with compressed=false before proposing edits');
+    }
+  }
   const feedback = req.proposalFeedback?.length
     ? '\n\n受信任的提案校验反馈:\n' + req.proposalFeedback.map((e) => '- ' + e).join('\n')
     : '';

@@ -22,6 +22,8 @@ export interface ProposeRequest {
   board?: {
     nodes: Array<{ id: string; parent?: string; x?: number; y?: number; width?: number; height?: number }>;
     edges: Array<{ id: string; source: string; target: string; parent?: string }>;
+    /** Encoding of the source file, when this snapshot came from an imported drawio document. */
+    sourceEncoding?: 'uncompressed' | 'compressed';
   };
   /** Full Word document snapshot (per-paragraph text + styles; likewise not in the prompt, fetched on demand via read_blocks/find_text/get_outline/get_style_usage). */
   doc?: { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> };

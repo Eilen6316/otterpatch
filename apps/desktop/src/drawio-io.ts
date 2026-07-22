@@ -6,23 +6,26 @@ const unesc = (s: string): string => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>
 const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 interface DecodedPage { name: string; xml: string }
-export interface DrawioImportResult { pages: Array<{ name: string; nodes: BNode[]; edges: BEdge[] }>; skipped: Array<{ name: string; reason: string }>; total: number }
+export type DrawioSourceEncoding = 'uncompressed' | 'compressed';
+export interface DrawioImportResult { pages: Array<{ name: string; nodes: BNode[]; edges: BEdge[] }>; skipped: Array<{ name: string; reason: string }>; total: number; sourceEncoding: DrawioSourceEncoding }
 
 function decodeBase64(s: string): string {
   if (typeof atob === 'function') return atob(s);
   return Buffer.from(s, 'base64').toString('binary');
 }
 
-function diagramPages(text: string): { pages: DecodedPage[]; skipped: Array<{ name: string; reason: string }>; total: number } {
-  if (!/<diagram/i.test(text)) return { pages: [{ name: 'Page-1', xml: text }], skipped: [], total: 1 };
+function diagramPages(text: string): { pages: DecodedPage[]; skipped: Array<{ name: string; reason: string }>; total: number; sourceEncoding: DrawioSourceEncoding } {
+  if (!/<diagram/i.test(text)) return { pages: [{ name: 'Page-1', xml: text }], skipped: [], total: 1, sourceEncoding: 'uncompressed' };
   const pages: DecodedPage[] = [];
   const skipped: Array<{ name: string; reason: string }> = [];
   let total = 0;
+  let compressed = false;
   for (const m of text.matchAll(/<diagram\b([^>]*)>([\s\S]*?)<\/diagram>/gi)) {
     total++;
     const name = unesc(/name="([^"]*)"/.exec(m[1] ?? '')?.[1] ?? `Page-${total}`);
     const inner = m[2] ?? '';
     if (/<mxGraphModel/i.test(inner)) { pages.push({ name, xml: inner }); continue; }
+    compressed = true;
     try {
       const bin = decodeBase64(inner.trim());
       const bytes = new Uint8Array(bin.length);
@@ -32,7 +35,7 @@ function diagramPages(text: string): { pages: DecodedPage[]; skipped: Array<{ na
       skipped.push({ name, reason: err instanceof Error ? err.message : String(err) });
     }
   }
-  return { pages, skipped, total };
+  return { pages, skipped, total, sourceEncoding: compressed ? 'compressed' : 'uncompressed' };
 }
 
 interface RawCell { id: string; value: string; style: string; vertex: boolean; edge: boolean; parent: string; source: string; target: string; x: number; y: number; w: number; h: number; points: Array<{ x: number; y: number }> }
@@ -45,7 +48,7 @@ function attrs(tag: string): Record<string, string> {
 
 export function parseDrawioFile(text: string): DrawioImportResult {
   const decoded = diagramPages(text);
-  return { pages: decoded.pages.map((pg) => ({ name: pg.name, ...parseDrawio(pg.xml) })), skipped: decoded.skipped, total: decoded.total };
+  return { pages: decoded.pages.map((pg) => ({ name: pg.name, ...parseDrawio(pg.xml) })), skipped: decoded.skipped, total: decoded.total, sourceEncoding: decoded.sourceEncoding };
 }
 
 export function parseDrawioPages(text: string): Array<{ name: string; nodes: BNode[]; edges: BEdge[] }> {

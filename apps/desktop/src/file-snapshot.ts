@@ -5,19 +5,22 @@ export interface FileSnapshot {
   name: string;
   byteLength: number;
   hash: string;
+  drawioSourceEncoding?: 'uncompressed' | 'compressed';
 }
 
-export function makeFileSnapshot(format: WorkspaceFormat, name: string, fileBase64: string): FileSnapshot {
+export function makeFileSnapshot(format: WorkspaceFormat, name: string, fileBase64: string, drawioSourceEncoding?: FileSnapshot['drawioSourceEncoding']): FileSnapshot {
   return {
     format,
     name,
     byteLength: decodedBase64Length(fileBase64),
     hash: hashString(fileBase64),
+    ...(format === 'drawio' && drawioSourceEncoding ? { drawioSourceEncoding } : {}),
   };
 }
 
 export function sameFileSnapshot(a: FileSnapshot | null | undefined, b: FileSnapshot | null | undefined): boolean {
-  return !!a && !!b && a.format === b.format && a.name === b.name && a.byteLength === b.byteLength && a.hash === b.hash;
+  return !!a && !!b && a.format === b.format && a.name === b.name && a.byteLength === b.byteLength && a.hash === b.hash
+    && a.drawioSourceEncoding === b.drawioSourceEncoding;
 }
 
 function decodedBase64Length(value: string): number {

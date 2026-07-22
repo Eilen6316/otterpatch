@@ -73,6 +73,7 @@ const boardSchema = z.object({
     width: z.number().finite().optional(), height: z.number().finite().optional(),
   }).strict()),
   edges: z.array(z.object({ id: z.string(), source: z.string(), target: z.string(), parent: z.string().optional() }).strict()),
+  sourceEncoding: z.enum(['uncompressed', 'compressed']).optional(),
 }).strict();
 
 server.registerTool(

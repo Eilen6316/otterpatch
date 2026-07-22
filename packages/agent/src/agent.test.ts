@@ -40,6 +40,27 @@ test('Agent drawio: 意图 + Mock → object ChangeSet(按 mxCell id)', async ()
   assert.equal(anchor.portable.kind === 'object' && anchor.portable.elementId, '2');
 });
 
+test('Agent drawio rejects compressed source diagrams before calling the model', async () => {
+  let calls = 0;
+  const mock = new MockModelClient(() => {
+    calls++;
+    return { plan: 'must not run', ops: [] };
+  });
+  await assert.rejects(
+    () => new Agent(mock).propose({
+      hostId: 'h1',
+      format: 'drawio',
+      intent: 'change a node',
+      baseRev: 0 as DocRev,
+      anchors: [],
+      context: '',
+      board: { nodes: [{ id: '2' }], edges: [], sourceEncoding: 'compressed' },
+    }),
+    /does not support compressed source diagrams/,
+  );
+  assert.equal(calls, 0);
+});
+
 test('Agent capability surfaces expose only operations with verified writeback', () => {
   assert.deepEqual(EXCEL_OPS, ['setValue', 'setFormula', 'setStyle', 'setNumberFormat', 'clear']);
   const excelSurface = excelDialect.systemPrompt + JSON.stringify(excelDialect.parameters);

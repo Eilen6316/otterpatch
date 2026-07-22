@@ -46,6 +46,7 @@ test('capability manifest does not advertise writeback-only formats as preview o
   assert.ok(capabilityManifestFor('word')?.operations.every((operation) => !operation.preview && !operation.verify));
   assert.ok(capabilityManifestFor('drawio')?.operations.every((operation) => !operation.preview && operation.verify));
   assert.ok(capabilityManifestFor('pdf')?.operations.every((operation) => !operation.preview && !operation.verify));
+  assert.equal(capabilityManifestFor('drawio')?.features?.compressed, 'unsupported');
 });
 
 test('capability gate rejects unsupported Excel structure operations', () => {

@@ -11,9 +11,10 @@ test('makeFileSnapshot records stable file identity', () => {
 });
 
 test('sameFileSnapshot rejects renamed, reformatted, or changed files', () => {
-  const base = makeFileSnapshot('drawio', 'graph.drawio', 'PG14ZmlsZT4=');
+  const base = makeFileSnapshot('drawio', 'graph.drawio', 'PG14ZmlsZT4=', 'compressed');
   assert.equal(sameFileSnapshot(base, makeFileSnapshot('word', 'graph.drawio', 'PG14ZmlsZT4=')), false);
   assert.equal(sameFileSnapshot(base, makeFileSnapshot('drawio', 'other.drawio', 'PG14ZmlsZT4=')), false);
   assert.equal(sameFileSnapshot(base, makeFileSnapshot('drawio', 'graph.drawio', 'PG14ZmlsZTI+')), false);
+  assert.equal(sameFileSnapshot(base, makeFileSnapshot('drawio', 'graph.drawio', 'PG14ZmlsZT4=', 'uncompressed')), false);
   assert.equal(sameFileSnapshot(base, null), false);
 });
