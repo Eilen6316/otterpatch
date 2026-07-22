@@ -40,6 +40,32 @@ jobs:
             node "test/$t.mjs"
           done
 
+  packaged-desktop-smoke:
+    name: Packaged desktop smoke (${{ matrix.os }})
+    needs: build-test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install with Electron runtime
+        run: npm ci
+      - name: Build packaged local service
+        run: npm run build --workspace @otterpatch/mcp-server
+      - name: Package desktop application
+        run: npm run app:pack:dir --workspace @otterpatch/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Launch packaged application
+        run: npm run test:packaged --workspace @otterpatch/desktop
+
   real-model-smoke:
     # BYOK end-to-end smoke; runs only when the OtterPatch_API_KEY secret is configured.
     runs-on: ubuntu-latest

@@ -78,6 +78,6 @@ export interface WritebackRouter {
     cs: ChangeSet,
     backends: readonly WritebackBackend[],
   ): Array<{ editIds: EditId[]; backend: WritebackBackend }>;
-  /** route→commit; if verify falls short → automatically fall back to the next backend; if verification fails, the tx never enters committed. */
+  /** Fallback is allowed only before execution when a backend declines the ChangeSet. Once commit starts, failures are terminal to avoid replay after partial side effects. */
   commitWithFallback(cs: ChangeSet, doc: DocHandle): Promise<WritebackResult>;
 }

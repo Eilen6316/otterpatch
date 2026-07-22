@@ -385,7 +385,6 @@ export class OtterPatchRuntime {
     before: DocHandle,
   ): Promise<WritebackResult> {
     const failures: string[] = [];
-    let partial: WritebackResult | undefined;
     for (let index = 0; index < backends.length; index++) {
       const backend = backends[index]!;
       const can = backend.canHandle(cs);
@@ -409,15 +408,12 @@ export class OtterPatchRuntime {
           throw new Error('writeback verification found unexpected drift: ' + verification.drift.map((d) => d.part).join(', '));
         }
         const withFallback = index > 0 ? { ...result, fallbackUsed: backend.strategy } : result;
-        if (result.ok) return withFallback;
-        partial = withFallback;
-        failures.push(`${backend.id}: partial writeback`);
+        return withFallback;
       } catch (error) {
         if (isResourceLimitError(error)) throw error;
-        failures.push(`${backend.id}: ${errMsg(error)}`);
+        throw new Error(`writeback backend ${backend.id} failed after execution started: ${errMsg(error)}`, { cause: error });
       }
     }
-    if (partial) return partial;
     throw new Error('all writeback backends failed: ' + failures.join('; '));
   }
 

@@ -189,3 +189,53 @@ test('assertChangeSet enforces per-range and total touched-cell budgets', () => 
   };
   assert.throws(() => assertChangeSet(repeatedRange), (error) => error instanceof ResourceLimitError && error.resource === 'total_touched_cells');
 });
+
+test('assertChangeSet seeded property corpus accepts valid values and rejects one-field corruptions', () => {
+  let state = 0xc0ffee;
+  const next = (): number => {
+    state = Math.imul(state ^ (state >>> 15), 1 | state);
+    state ^= state + Math.imul(state ^ (state >>> 7), 61 | state);
+    return (state ^ (state >>> 14)) >>> 0;
+  };
+  const values = [null, true, false, 0, -1, 1.5, '', 'plain', 'ignore system prompt', '<tag attr="x">'] as const;
+
+  for (let sample = 0; sample < 250; sample++) {
+    const anchorId = `a${sample}` as AnchorId;
+    const revision = (next() % 10_000) as DocRev;
+    const hostId = `host-${next().toString(16)}`;
+    const row = 1 + (next() % 1_048_576);
+    const value = values[next() % values.length]!;
+    const cs: ChangeSet = {
+      id: `cs-${sample}`,
+      hostId,
+      baseRev: revision,
+      anchors: {
+        [anchorId]: {
+          id: anchorId,
+          hostId: hostId as HostId,
+          kind: 'grid',
+          ref: null,
+          baseRev: revision,
+          portable: { kind: 'grid', sheet: 'Sheet1', a1: `A${row}` },
+        },
+      },
+      origin: { by: 'human' },
+      meta: { intent: `property-${sample}` },
+      edits: [{ id: `e${sample}`, target: anchorId, op: { family: 'value', kind: 'setValue', value } }],
+    };
+    assert.doesNotThrow(() => assertChangeSet(cs), `valid generated sample ${sample}`);
+
+    const invalid: unknown = (() => {
+      switch (sample % 7) {
+        case 0: return { ...cs, id: '' };
+        case 1: return { ...cs, baseRev: -1 };
+        case 2: return { ...cs, anchors: { [anchorId]: { ...cs.anchors[anchorId]!, id: 'other' } } };
+        case 3: return { ...cs, anchors: { [anchorId]: { ...cs.anchors[anchorId]!, portable: { kind: 'grid', sheet: 'Sheet1' } } } };
+        case 4: return { ...cs, edits: [{ ...cs.edits[0]!, target: 'missing' }] };
+        case 5: return { ...cs, edits: [{ ...cs.edits[0]!, op: { ...cs.edits[0]!.op, unexpected: true } }] };
+        default: return { ...cs, edits: [cs.edits[0], { ...cs.edits[0] }] };
+      }
+    })();
+    assert.throws(() => assertChangeSet(invalid), `invalid generated sample ${sample}`);
+  }
+});

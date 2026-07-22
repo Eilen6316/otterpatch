@@ -20,6 +20,7 @@ const {
 } = require('./ipc-contract.cjs');
 
 const isDev = !!process.env.OTTERPATCH_DEV;
+const isPackagedSmoke = process.env.OTTERPATCH_PACKAGED_SMOKE === '1' && process.argv.includes('--ci-smoke-test');
 const appDistDir = path.resolve(__dirname, '..', 'dist');
 const appIndexUrl = pathToFileURL(path.join(appDistDir, 'index.html')).href;
 const serveToken = process.env.OtterPatch_TOKEN || randomBytes(24).toString('base64url');
@@ -240,6 +241,7 @@ function createWindow() {
     title: 'OtterPatch — safe-commit layer',
     icon: path.join(__dirname, 'icon.png'),
     backgroundColor: '#ffffff',
+    show: !isPackagedSmoke,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -250,6 +252,31 @@ function createWindow() {
   });
   const senderId = win.webContents.id;
   win.webContents.once('destroyed', () => abortProposalsForSender(senderId));
+
+  if (isPackagedSmoke) {
+    let settled = false;
+    const finish = (code, message) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      const stream = code === 0 ? process.stdout : process.stderr;
+      stream.write(`${message}\n`);
+      if (code === 0) app.quit();
+      else app.exit(code);
+    };
+    const timeout = setTimeout(() => finish(1, 'OTTERPATCH_PACKAGED_SMOKE_TIMEOUT'), 30_000);
+    win.webContents.once('did-finish-load', () => {
+      const loadedUrl = win.webContents.getURL();
+      if (!app.isPackaged || !isAllowedAppNavigation(loadedUrl)) {
+        finish(1, `OTTERPATCH_PACKAGED_SMOKE_INVALID_URL ${loadedUrl}`);
+        return;
+      }
+      finish(0, 'OTTERPATCH_PACKAGED_SMOKE_OK');
+    });
+    win.webContents.once('did-fail-load', (_event, code, description, url) => {
+      finish(1, `OTTERPATCH_PACKAGED_SMOKE_LOAD_FAILED ${code} ${description} ${url}`);
+    });
+  }
 
   if (isDev) {
     void win.loadURL('http://localhost:5173');
@@ -271,7 +298,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  startServe();
+  if (!isPackagedSmoke) startServe();
   createWindow();
 });
 
@@ -290,5 +317,5 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (!isPackagedSmoke && BrowserWindow.getAllWindows().length === 0) createWindow();
 });

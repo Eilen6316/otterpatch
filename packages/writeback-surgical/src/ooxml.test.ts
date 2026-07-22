@@ -96,3 +96,47 @@ test('OOXML preflight rejects oversized archives and unsafe input paths', () => 
   );
   assert.throws(() => readOoxmlParts(zipSync({ '../escape.xml': enc('<a/>') })), /unsafe OOXML part path/);
 });
+
+test('OOXML XML preflight rejects a deterministic malformed-input corpus', () => {
+  const malformed = [
+    '<root><child></root></child>',
+    '<root></other>',
+    '<root><child></root>',
+    '<root attr="unterminated></root>',
+    '<root><!-- unterminated</root>',
+    '<root><![CDATA[unterminated</root>',
+    '<root><?unterminated</root>',
+    '<!DOCTYPE root [<!ENTITY x "boom">]><root>&x;</root>',
+    '<root></root extra>',
+    '<root><1invalid/></root>',
+  ];
+
+  for (const [index, xml] of malformed.entries()) {
+    assert.throws(
+      () => readOoxmlParts(zipSync({ [`fuzz-${index}.xml`]: enc(xml) })),
+      `malformed XML corpus case ${index} was accepted`,
+    );
+  }
+});
+
+test('OOXML XML preflight accepts seeded valid nesting and rejects its mismatched mutation', () => {
+  let state = 0x5eed1234;
+  const next = (): number => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return state >>> 0;
+  };
+
+  for (let sample = 0; sample < 100; sample++) {
+    const depth = 1 + (next() % 12);
+    const names = Array.from({ length: depth }, (_, index) => `n${sample}_${index}_${next() % 97}`);
+    const open = names.map((name, index) => `<${name} data-v="${next() % 1000}">${index % 3 === 0 ? '<!--safe-->' : ''}`).join('');
+    const close = [...names].reverse().map((name) => `</${name}>`).join('');
+    const valid = `<?xml version="1.0"?>${open}payload${close}`;
+    assert.doesNotThrow(() => readOoxmlParts(zipSync({ [`valid-${sample}.xml`]: enc(valid) })));
+
+    const wrongClose = close.replace(`</${names.at(-1)}>`, '</mismatched>');
+    assert.throws(() => readOoxmlParts(zipSync({ [`invalid-${sample}.xml`]: enc(open + wrongClose) })), /mismatched XML closing tag/);
+  }
+});

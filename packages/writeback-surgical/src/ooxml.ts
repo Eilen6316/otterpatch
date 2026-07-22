@@ -7,6 +7,8 @@
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 import { RESOURCE_LIMITS, ResourceLimitError } from '@otterpatch/core';
 
+const XML_NAME_DECODER = new TextDecoder('utf-8', { fatal: true });
+
 export type OoxmlParts = Record<string, Uint8Array>;
 
 export interface OoxmlBudget {
@@ -172,7 +174,7 @@ function isXmlPart(path: string): boolean {
 }
 
 function assertXmlNestingDepth(bytes: Uint8Array, maxDepth: number, path: string): void {
-  let depth = 0;
+  const elements: string[] = [];
   let index = 0;
   while (index < bytes.length) {
     if (bytes[index] !== 0x3c) { index++; continue; }
@@ -191,7 +193,11 @@ function assertXmlNestingDepth(bytes: Uint8Array, maxDepth: number, path: string
     if (matches(bytes, index, '<!')) throw new Error(`unsupported XML declaration in ${path}`);
 
     const closing = bytes[index + 1] === 0x2f;
-    let cursor = index + (closing ? 2 : 1);
+    const nameStart = index + (closing ? 2 : 1);
+    const nameEnd = findXmlNameEnd(bytes, nameStart);
+    if (nameEnd === nameStart) throw new Error(`invalid XML tag name in ${path}`);
+    const name = xmlName(bytes, nameStart, nameEnd, path);
+    let cursor = nameEnd;
     let quote = 0;
     for (; cursor < bytes.length; cursor++) {
       const byte = bytes[cursor]!;
@@ -202,19 +208,54 @@ function assertXmlNestingDepth(bytes: Uint8Array, maxDepth: number, path: string
     }
     if (cursor >= bytes.length) throw new Error(`unterminated XML tag in ${path}`);
     if (closing) {
-      depth--;
-      if (depth < 0) throw new Error(`unbalanced XML closing tag in ${path}`);
+      for (let trailing = nameEnd; trailing < cursor; trailing++) {
+        if (!isXmlWhitespace(bytes[trailing]!)) throw new Error(`invalid XML closing tag in ${path}`);
+      }
+      const expected = elements.pop();
+      if (expected !== name) throw new Error(`mismatched XML closing tag in ${path}: expected ${expected ?? '(none)'}, got ${name}`);
     } else {
       let tail = cursor - 1;
-      while (tail > index && (bytes[tail] === 0x20 || bytes[tail] === 0x09 || bytes[tail] === 0x0a || bytes[tail] === 0x0d)) tail--;
+      while (tail > index && isXmlWhitespace(bytes[tail]!)) tail--;
       if (bytes[tail] !== 0x2f) {
-        depth++;
-        if (depth > maxDepth) throw new ResourceLimitError('xml_nesting_depth', maxDepth, depth);
+        elements.push(name);
+        if (elements.length > maxDepth) throw new ResourceLimitError('xml_nesting_depth', maxDepth, elements.length);
       }
     }
     index = cursor + 1;
   }
-  if (depth !== 0) throw new Error(`unbalanced XML nesting in ${path}`);
+  if (elements.length !== 0) throw new Error(`unbalanced XML nesting in ${path}`);
+}
+
+function findXmlNameEnd(bytes: Uint8Array, from: number): number {
+  let index = from;
+  while (index < bytes.length) {
+    const byte = bytes[index]!;
+    if (isXmlWhitespace(byte) || byte === 0x2f || byte === 0x3e) break;
+    index++;
+  }
+  return index;
+}
+
+function xmlName(bytes: Uint8Array, from: number, to: number, path: string): string {
+  for (let index = from; index < to; index++) {
+    const byte = bytes[index]!;
+    const valid = byte >= 0x80
+      || byte === 0x3a
+      || byte === 0x5f
+      || byte === 0x2d
+      || byte === 0x2e
+      || (byte >= 0x30 && byte <= 0x39)
+      || (byte >= 0x41 && byte <= 0x5a)
+      || (byte >= 0x61 && byte <= 0x7a);
+    const validFirst = index > from || byte >= 0x80 || byte === 0x3a || byte === 0x5f
+      || (byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a);
+    if (!valid || !validFirst) throw new Error(`invalid XML tag name in ${path}`);
+  }
+  return XML_NAME_DECODER.decode(bytes.subarray(from, to));
+}
+
+function isXmlWhitespace(byte: number): boolean {
+  return byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d;
 }
 
 function matches(bytes: Uint8Array, offset: number, text: string): boolean {

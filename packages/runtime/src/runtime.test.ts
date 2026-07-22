@@ -551,6 +551,64 @@ test('runtime: falls back when the primary backend cannot handle the reviewed ch
   assert.equal(fallbackVerified, true);
 });
 
+test('runtime: never cascades to a fallback after backend execution starts', async () => {
+  const rt = new OtterPatchRuntime({ reviewSecret: 'x'.repeat(32) });
+  const cs = singleCellChangeSet('partial-failure');
+  const bytes = new Uint8Array([7]);
+  let mode: 'throw' | 'partial' = 'throw';
+  let fallbackCalls = 0;
+  const primary: WritebackBackend = {
+    id: 'side-effecting-primary' as WritebackId,
+    strategy: 'native-command',
+    supports: () => true,
+    canHandle: () => ({ ok: true }),
+    commit: async () => {
+      if (mode === 'throw') throw new Error('partial side effect');
+      return {
+        ok: false,
+        bytes: new Uint8Array([8]),
+        touchedParts: ['partially-updated'],
+        fidelity: { score: 1, drift: [] },
+        appliedEditIds: [],
+        droppedEdits: [{ editId: 'e1', reason: 'native host rejected the edit' }],
+      };
+    },
+    verify: async () => ({ score: 1, drift: [] }),
+  };
+  const fallback: WritebackBackend = {
+    id: 'must-not-replay' as WritebackId,
+    strategy: 'model-roundtrip',
+    supports: () => true,
+    canHandle: () => ({ ok: true }),
+    commit: async () => {
+      fallbackCalls++;
+      return { ok: true, bytes: new Uint8Array([9]), touchedParts: ['fallback'], fidelity: { score: 1, drift: [] } };
+    },
+    verify: async () => ({ score: 1, drift: [] }),
+  };
+  rt.registerWriteback('partial-failure-test', () => primary);
+  rt.registerWritebackFallback('partial-failure-test', () => fallback);
+
+  const failedReview = rt.reviewProposal(
+    rt.createProposal(cs, 'partial-failure-test', 'throwing-doc'), cs, ['e1'], bytes, 'reviewer',
+  );
+  await assert.rejects(
+    () => rt.commit({ format: 'partial-failure-test', bytes, changeSet: cs, ...failedReview }),
+    /side-effecting-primary failed after execution started: partial side effect/,
+  );
+  assert.equal(fallbackCalls, 0);
+
+  mode = 'partial';
+  const partialReview = rt.reviewProposal(
+    rt.createProposal(cs, 'partial-failure-test', 'partial-doc'), cs, ['e1'], bytes, 'reviewer',
+  );
+  const partial = await rt.commit({ format: 'partial-failure-test', bytes, changeSet: cs, ...partialReview });
+  assert.equal(partial.ok, false);
+  assert.deepEqual(partial.touchedParts, ['partially-updated']);
+  assert.equal(partial.fallbackUsed, undefined);
+  assert.equal(fallbackCalls, 0);
+});
+
 test('runtime rejects verification metrics that report an invalid package', async () => {
   const rt = new OtterPatchRuntime({ reviewSecret: 'p'.repeat(32) });
   const cs = singleCellChangeSet('invalid-package');

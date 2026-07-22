@@ -2,6 +2,7 @@ node_modules/
 dist/
 build/
 out/
+apps/desktop/release/
 *.tsbuildinfo
 .env
 .env.*
@@ -21,3 +22,4 @@ experiments/surgical.*
 # local helper / smoke scripts (not committed)
 /_*.mjs
 /1.txt
+/word-gitdiff.png
