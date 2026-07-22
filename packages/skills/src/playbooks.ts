@@ -1,21 +1,13 @@
 /**
- * Domain playbook loader — the single source of truth is packages/skills/skills/<name>/SKILL.md
- * (Anthropic Agent Skills directory convention: one skill = one directory = one SKILL.md,
- * frontmatter + markdown body). This module only reads files on the Node side and parses them
- * into cards via parseSkillMd; to add/modify a playbook, edit the md file — no code changes
- * needed. Users' own industry playbooks use the same format via install().
+ * Domain playbook catalog. SKILL.md remains the source of truth, while the build-time generator
+ * produces a static manifest so importing this package never performs filesystem I/O.
  * L0 = frontmatter (goes into the system-prompt skill list); L1 = body (fetched on demand via
  * the load_skill tool once the model matches a skill).
  */
-import { readFileSync } from 'node:fs';
 import { parseBuiltinSkillMd, type SkillCard } from './parse.js';
+import { PLAYBOOK_MARKDOWN } from './playbooks.generated.js';
 
-const PLAYBOOK_NAMES = ['docx-gongwen', 'docx-conventions', 'docx-coauthoring', 'xlsx-financial', 'xlsx-authoring', 'chart-selection', 'pptx-design'] as const;
-
-function loadPlaybook(name: string): SkillCard {
-  // src/ and dist/ sit at the same depth, so ../skills resolves to the skills/ dir at the package root (shipped with the package) from either
-  const url = new URL(`../skills/${name}/SKILL.md`, import.meta.url);
-  return parseBuiltinSkillMd(readFileSync(url, 'utf8'), 'otterpatch/playbooks');
-}
-
-export const PLAYBOOK_SKILLS: readonly SkillCard[] = Object.freeze(PLAYBOOK_NAMES.map(loadPlaybook));
+export const PLAYBOOK_SKILLS: readonly SkillCard[] = Object.freeze(
+  Object.entries(PLAYBOOK_MARKDOWN).map(([name, markdown]) =>
+    parseBuiltinSkillMd(markdown, `otterpatch/playbooks/${name}@generated`)),
+);

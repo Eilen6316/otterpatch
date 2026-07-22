@@ -6,7 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
+    "generate:playbooks": "node scripts/generate-playbooks.mjs",
+    "prebuild": "npm run generate:playbooks",
     "build": "tsc -b",
+    "pretest": "npm run generate:playbooks",
     "test": "node --import tsx --test src/skills.test.ts src/playbooks.test.ts"
   },
   "dependencies": {

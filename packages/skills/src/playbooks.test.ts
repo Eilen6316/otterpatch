@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultLibrary } from './catalog.js';
 import { PLAYBOOK_SKILLS } from './playbooks.js';
+import { PLAYBOOK_MARKDOWN } from './playbooks.generated.js';
 
 test('playbook:全部打法手册都带 L1 正文', () => {
   assert.equal(PLAYBOOK_SKILLS.length, 7);
@@ -32,6 +33,14 @@ test('render:带手册的技能有【有打法手册】标注与 load_skill 指�
   const r = lib.render('word', '公文排版');
   assert.match(r, /otterpatch\/docx-gongwen@1\.0\.0【有打法手册】/);
   assert.match(r, /load_skill/);
+});
+
+test('playbook catalog is generated data with no runtime filesystem dependency', () => {
+  assert.deepEqual(Object.keys(PLAYBOOK_MARKDOWN).sort(), PLAYBOOK_SKILLS.map((card) => card.name).sort());
+  for (const markdown of Object.values(PLAYBOOK_MARKDOWN)) {
+    assert.match(markdown, /^---\n/);
+    assert.match(markdown, /\n---\n/);
+  }
 });
 
 test('playbook metadata is namespaced, versioned, checksummed, localized, and capability-bounded', () => {
