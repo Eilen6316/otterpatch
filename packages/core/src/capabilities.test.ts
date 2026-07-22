@@ -49,6 +49,16 @@ test('capability manifest does not advertise writeback-only formats as preview o
   assert.equal(capabilityManifestFor('drawio')?.features?.compressed, 'unsupported');
 });
 
+test('PDF capabilities disclose experimental form fill and verification limits', () => {
+  const pdf = capabilityManifestFor('pdf');
+  assert.equal(pdf?.operations[0]?.maturity, 'experimental');
+  assert.deepEqual(pdf?.features, {
+    acroFormTextFill: 'experimental',
+    semanticVerification: 'incomplete',
+    byteLocality: 'not-guaranteed',
+  });
+});
+
 test('capability gate rejects unsupported Excel structure operations', () => {
   const cs = flowChangeSet({ bold: true });
   const edit = { ...cs.edits[0]!, op: { family: 'structure' as const, kind: 'insertRows' as const, count: 1, before: true } };

@@ -7,6 +7,7 @@ export type CapabilityScope = 'cell' | 'range' | 'sheet' | 'document' | 'object'
 export type CapabilityMaturity = 'experimental' | 'preview' | 'verified';
 export type CapabilityStage = 'propose' | 'preview' | 'verify' | 'writeback';
 export type CapabilityFeatureSupport = 'supported' | 'unsupported';
+export type CapabilityFeatureStatus = CapabilityFeatureSupport | 'experimental' | 'incomplete' | 'not-guaranteed';
 
 export interface OperationCapability {
   op: EditOpKind;
@@ -28,7 +29,7 @@ export interface FormatCapabilityManifest {
   format: string;
   aliases: readonly string[];
   operations: readonly OperationCapability[];
-  features?: Readonly<Record<string, CapabilityFeatureSupport>>;
+  features?: Readonly<Record<string, CapabilityFeatureStatus>>;
 }
 
 type CapabilityInput = Omit<OperationCapability, 'propose' | 'preview' | 'verify' | 'writeback' | 'partialWriteback' | 'maturity'>
@@ -45,17 +46,17 @@ const verified = (input: CapabilityInput): OperationCapability => ({
 });
 
 const writebackOnly = (input: CapabilityInput): OperationCapability => verified({
-  ...input,
   preview: false,
   verify: false,
   maturity: 'preview',
+  ...input,
 });
 
 const topologyChecked = (input: CapabilityInput): OperationCapability => verified({
-  ...input,
   preview: false,
   verify: true,
   maturity: 'preview',
+  ...input,
 });
 
 const manifests = [
@@ -100,8 +101,13 @@ const manifests = [
     version: CAPABILITY_MANIFEST_VERSION,
     format: 'pdf',
     aliases: ['pdf'],
+    features: {
+      acroFormTextFill: 'experimental',
+      semanticVerification: 'incomplete',
+      byteLocality: 'not-guaranteed',
+    },
     operations: [
-      writebackOnly({ op: 'setValue', maxScope: 'field', risk: 'safe', backend: ['pdf-form'] }),
+      writebackOnly({ op: 'setValue', maxScope: 'field', risk: 'safe', backend: ['pdf-form'], maturity: 'experimental' }),
     ],
   },
   {
@@ -137,7 +143,7 @@ export function operationCapabilitiesFor(format: string): readonly OperationCapa
   return capabilityManifestFor(format)?.operations ?? [];
 }
 
-export function formatFeatureSupport(format: string, feature: string): CapabilityFeatureSupport | undefined {
+export function formatFeatureSupport(format: string, feature: string): CapabilityFeatureStatus | undefined {
   return capabilityManifestFor(format)?.features?.[feature];
 }
 
