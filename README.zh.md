@@ -53,7 +53,7 @@ apps/mcp-server/              OtterPatch 作为 MCP server(stdio)+ headless CLI 
 
 ```bash
 npm install
-npm run typecheck                  # 跨 packages/* 执行 tsc -b
+npm run typecheck                  # 跨 packages/* 与两个 apps 执行 tsc -b
 npm run dev                        # 驾驶舱 UI → http://localhost:5173
 npm run app -w @otterpatch/desktop       # 构建并启动 Electron 桌面窗口
 npm test -w @otterpatch/core             # 适配器注册表

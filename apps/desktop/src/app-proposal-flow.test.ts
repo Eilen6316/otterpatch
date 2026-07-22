@@ -52,8 +52,10 @@ test('proposal flow finalizes or interrupts only the active streaming answer', (
   thread = appendAnswerDelta(thread, 'partial');
   thread = interruptLastStreamingAnswer(thread, 'request failed');
 
-  assert.equal(thread[0]?.streaming, false);
-  assert.equal(thread[0]?.text, 'partial\n\nrequest failed');
+  const interrupted = thread[0];
+  assert.ok(interrupted?.role === 'assistant');
+  assert.equal(interrupted.streaming, false);
+  assert.equal(interrupted.text, 'partial\n\nrequest failed');
 
   const unchanged = finalizeLastAnswer([{ role: 'user', text: 'not assistant' }], 'ignored');
   assert.deepEqual(unchanged, [{ role: 'user', text: 'not assistant' }]);

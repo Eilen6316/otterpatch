@@ -46,10 +46,7 @@ export function captureGridOpBeforeState(ops: readonly GridOp[], api: GridStateR
   }));
 }
 
-export function makeWorkspaceDiffTurn<FileSnapshot>(
-  previous: AssistantTurn,
-  input: WorkspaceDiffTurnInput<FileSnapshot>,
-): {
+export interface WorkspaceDiffTurn<FileSnapshot> {
   role: 'assistant';
   kind: 'diff';
   format: WorkspaceFormat;
@@ -61,7 +58,12 @@ export function makeWorkspaceDiffTurn<FileSnapshot>(
   board?: BoardPatch;
   word?: WordEdit[];
   text?: string;
-} {
+}
+
+export function makeWorkspaceDiffTurn<FileSnapshot>(
+  previous: AssistantTurn,
+  input: WorkspaceDiffTurnInput<FileSnapshot>,
+): WorkspaceDiffTurn<FileSnapshot> {
   return {
     role: 'assistant',
     kind: 'diff',
@@ -80,10 +82,9 @@ export function makeWorkspaceDiffTurn<FileSnapshot>(
 export function replaceLastWithWorkspaceDiff<Turn extends ThreadTurn, FileSnapshot>(
   thread: readonly Turn[],
   input: WorkspaceDiffTurnInput<FileSnapshot>,
-): Turn[] {
-  return thread.map((turn, index) =>
-    index === thread.length - 1 && turn.role === 'assistant'
-      ? (makeWorkspaceDiffTurn(turn as AssistantTurn, input) as Turn)
-      : turn,
-  );
+): Array<Turn | WorkspaceDiffTurn<FileSnapshot>> {
+  return thread.map((turn, index): Turn | WorkspaceDiffTurn<FileSnapshot> => {
+    if (index !== thread.length - 1 || turn.role !== 'assistant' || !('kind' in turn)) return turn;
+    return makeWorkspaceDiffTurn(turn as AssistantTurn, input);
+  });
 }

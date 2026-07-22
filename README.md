@@ -88,7 +88,7 @@ tokens instead of generating them. Browser access defaults to the exact Vite ori
 
 ```bash
 npm install
-npm run typecheck                  # tsc -b across packages/*
+npm run typecheck                  # tsc -b across packages/* and both apps
 npm run dev                        # cockpit UI → http://localhost:5173
 npm run app -w @otterpatch/desktop       # build + launch the Electron desktop window
 npm run app:pack -w @otterpatch/desktop  # package installers (electron-builder → release/)

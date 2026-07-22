@@ -11,6 +11,7 @@
     { "path": "packages/adapter-pptx" },
     { "path": "packages/writeback-surgical" },
     { "path": "packages/runtime" },
-    { "path": "apps/mcp-server" }
+    { "path": "apps/mcp-server" },
+    { "path": "apps/desktop" }
   ]
 }

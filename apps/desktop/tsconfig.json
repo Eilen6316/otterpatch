@@ -1,9 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "composite": true,
     "jsx": "react-jsx",
     "moduleResolution": "Bundler",
-    "noEmit": true
+    "emitDeclarationOnly": true,
+    "outDir": "dist/types",
+    "rootDir": "."
   },
   "include": ["src", "vite.config.ts"]
 }

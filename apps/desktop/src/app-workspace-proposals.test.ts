@@ -13,7 +13,7 @@ const diff: AgentDiff = { changeSetId: 'cs', hostId: 'host', intent: 'test', ite
 test('orderWordEditsForApply keeps text/style first, tables next, and removals last descending by block', () => {
   const edits: WordEdit[] = [
     { editId: 'remove-low', domId: 'd1', quote: 'a', remove: true, blockIdx: 2 },
-    { editId: 'table', domId: 'd2', quote: '', table: { rows: [['A']], at: 'end' } },
+    { editId: 'table', domId: 'd2', quote: '', table: { rows: [['A']], headerRows: 0, at: 'end' } },
     { editId: 'style', domId: 'd3', quote: 'b', style: { bold: true } },
     { editId: 'remove-high', domId: 'd4', quote: 'c', remove: true, blockIdx: 9 },
   ];
@@ -67,8 +67,10 @@ test('replaceLastWithWorkspaceDiff only replaces the final assistant turn', () =
   );
 
   assert.equal(thread[0]!.role, 'user');
-  assert.equal(thread[1]!.role, 'assistant');
-  assert.equal(thread[1]!.kind, 'diff');
-  assert.equal(thread[1]!.format, 'word');
-  assert.equal(thread[1]!.word?.[0]?.editId, 'w1');
+  const proposal = thread[1];
+  assert.ok(proposal && 'format' in proposal);
+  assert.equal(proposal.role, 'assistant');
+  assert.equal(proposal.kind, 'diff');
+  assert.equal(proposal.format, 'word');
+  assert.equal(proposal.word?.[0]?.editId, 'w1');
 });

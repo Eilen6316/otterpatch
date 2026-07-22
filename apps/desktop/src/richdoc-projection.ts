@@ -31,7 +31,7 @@ export function sanitizeHtml(html: string, ownerDocument: Document = document): 
   const template = ownerDocument.createElement('template');
   template.innerHTML = html;
   const sanitizeNode = (node: Node): void => {
-    if (node.nodeType === 8) { node.remove(); return; }
+    if (node.nodeType === 8) { node.parentNode?.removeChild(node); return; }
     if (node.nodeType !== 1) return;
     const element = node as Element;
     if (!SAFE_HTML_TAGS.has(element.tagName)) {
