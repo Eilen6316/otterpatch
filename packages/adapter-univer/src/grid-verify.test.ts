@@ -45,6 +45,19 @@ test('grid-verify: 同一格被多条改动重复命中 ok=false', async () => {
   assert.equal(r.code, 'VERIFIER_OVERLAPPING_EDITS');
 });
 
+test('grid-verify: typed percent snapshots retain their decimal value', async () => {
+  const snapshot: SheetSnapshot = {
+    a1: 'A1:C1',
+    values: [[{ kind: 'percent', value: 0.5, display: '50%' }, { kind: 'number', value: 1 }, { kind: 'blank' }]],
+    formulas: [[null, null, null]],
+  };
+  const result = await buildGridVerifier(snapshot)(makeCs([
+    { a1: 'Sheet1!C1', op: { family: 'value', kind: 'setFormula', formula: '=A1+B1' } },
+  ]));
+  assert.equal(result.ok, true);
+  assert.match(result.report, /C1=1\.5/);
+});
+
 test('grid-verify: value and style edits may safely target the same cell', async () => {
   const snapshot: SheetSnapshot = { ...SHEET, styles: SHEET.values.map((row) => row.map(() => null)) };
   const result = await buildGridVerifier(snapshot)(makeCs([

@@ -1,5 +1,5 @@
 /** Excel simulation verifier backed by GridChangeSetEngine. */
-import type { AbstractStyle, CellValue, ChangeSet, VerifyReport } from '@otterpatch/core';
+import { isSheetScalar, sheetScalarToCellValue, type AbstractStyle, type CellValue, type ChangeSet, type SheetCellValue, type VerifyReport } from '@otterpatch/core';
 import {
   GridChangeSetEngine,
   GridSimulationError,
@@ -42,7 +42,7 @@ function topLeft(a1: string): { c: number; r: number } {
 
 export interface SheetSnapshot {
   a1: string;
-  values: unknown[][];
+  values: SheetCellValue[][];
   formulas?: Array<Array<string | null>>;
   /** Style matrix aligned with values. null means the host observed the default style. */
   styles?: Array<Array<AbstractStyle | null>>;
@@ -94,7 +94,7 @@ export function gridShadowFromSnapshot(sheet: SheetSnapshot): GridShadow {
     const styles = sheet.styles?.[rowIndex] ?? [];
     for (let columnIndex = 0; columnIndex < columns; columnIndex++) {
       const ref = colLetter(origin.c + columnIndex) + (origin.r + rowIndex + 1);
-      const value = values[columnIndex];
+      const value = snapshotCellValue(values[columnIndex], ref);
       const formula = formulas[columnIndex];
       const style = snapshotStyle(styles[columnIndex], ref);
       const cell: GridCell = {};
@@ -103,9 +103,8 @@ export function gridShadowFromSnapshot(sheet: SheetSnapshot): GridShadow {
       }
       if (typeof formula === 'string' && formula.length > 0) {
         cell.formula = formula;
-        if (isCellValue(value)) cell.value = value;
+        if (value !== undefined) cell.value = value;
       } else if (value != null && value !== '') {
-        if (!isCellValue(value)) throw new Error(`sheet snapshot contains an unsupported value at ${ref}`);
         cell.value = value;
       }
       if (style) cell.style = style;
@@ -122,6 +121,13 @@ function isCellValue(value: unknown): value is CellValue {
     || typeof value === 'string'
     || typeof value === 'boolean'
     || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function snapshotCellValue(value: unknown, ref: string): CellValue | undefined {
+  if (value === undefined) return undefined;
+  if (isSheetScalar(value)) return sheetScalarToCellValue(value);
+  if (isCellValue(value)) return value;
+  throw new Error(`sheet snapshot contains an unsupported value at ${ref}`);
 }
 
 /** True only when a single-cell reference is inside this exact sheet snapshot. */

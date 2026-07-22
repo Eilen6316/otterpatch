@@ -4,6 +4,7 @@
  * 让右侧 Agent 交互区感知选区,发送时把选区内容一并交给 Agent —— Agent 完全赋能 OtterPatch。
  */
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { isSheetScalar, sheetScalarNumericValue, type SheetScalar } from '@otterpatch/core';
 import { createUniver, defaultTheme, LocaleType, merge } from '@univerjs/presets';
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core';
 import sheetsZhCN from '@univerjs/preset-sheets-core/locales/zh-CN';
@@ -29,6 +30,7 @@ import '@univerjs/preset-sheets-data-validation/lib/index.css';
 import { UniverSheetsDrawingPreset } from '@univerjs/preset-sheets-drawing';
 import drawingZhCN from '@univerjs/preset-sheets-drawing/locales/zh-CN';
 import '@univerjs/preset-sheets-drawing/lib/index.css';
+import { buildSheetScalars, type SheetCellMetadata } from './sheet-scalars.js';
 
 // App 通过这个句柄"边画边改"地驱动 Univer 网格(Agent 操作可视化)。
 export interface SheetHandle {
@@ -137,7 +139,7 @@ export interface UniSel {
   rows: number;
   cols: number;
   text: string; // 喂给模型 prompt 的全局概览 + 选区焦点(廉价)
-  sheet?: { a1: string; values: unknown[][]; formulas?: Array<Array<string | null>>; styles?: Array<Array<SnapshotStyle | null>>; name?: string; names?: string[] }; // 整表全量(本地传给 serve,供 read_range/aggregate 按需取数)
+  sheet?: { a1: string; values: SheetScalar[][]; formulas?: Array<Array<string | null>>; styles?: Array<Array<SnapshotStyle | null>>; name?: string; names?: string[] }; // 整表全量(本地传给 serve,供 read_range/aggregate 按需取数)
 }
 
 const HEADERS = ['日期', '产品', '销量', '单价', '金额', '毛利率'];
@@ -183,6 +185,8 @@ type SnapshotStyle = { bold?: boolean; italic?: boolean; color?: string; bgColor
 interface FRangeLike {
   getA1Notation(): string;
   getValues(): unknown[][];
+  getDisplayValues?(): string[][];
+  getCellDatas?(): Array<Array<SheetCellMetadata | null>>;
   getCellStyles(): CellStyle[][];
   getFormulas?(): Array<Array<string | null>>;
   getNumberFormats?(): string[][];
@@ -193,17 +197,11 @@ interface FWorkbookLike {
   onSelectionChange(cb: (s: unknown) => void): { dispose?: () => void };
 }
 
-function toNum(v: unknown): number {
-  if (typeof v === 'number') return v;
-  const n = parseFloat(String(v).replace(/[,%¥$\s]/g, ''));
-  return Number.isFinite(n) ? n : NaN;
-}
-/** 一列(跳过表头)的类型与统计,作为"注意力概览"的一部分。 */
-function colStat(colVals: unknown[]): string {
-  const body = colVals.slice(1);
-  const nonEmpty = body.filter((v) => v != null && v !== '');
+/** 一列的类型与统计,作为"注意力概览"的一部分。 */
+function colStat(colVals: SheetScalar[]): string {
+  const nonEmpty = colVals.filter((value) => value.kind !== 'blank');
   if (!nonEmpty.length) return '空列';
-  const nums = nonEmpty.map(toNum).filter((n) => Number.isFinite(n));
+  const nums = nonEmpty.map(sheetScalarNumericValue).filter((value): value is number => value !== undefined);
   if (nums.length >= nonEmpty.length * 0.6) {
     const min = Math.min(...nums);
     const max = Math.max(...nums);
@@ -255,10 +253,12 @@ function snap(wb: FWorkbookLike | null | undefined): UniSel | null {
   try {
     const range = wb?.getActiveRange() ?? null;
     // 整张表(used range)—— 与选区无关,始终构建,这样没圈选也能"看全局"
-    const ws = (wb as unknown as { getActiveSheet?: () => { getName?: () => string; getDataRange?: () => { getA1Notation?: () => string; getValues?: () => unknown[][]; getFormulas?: () => Array<Array<string | null>>; getCellStyles?: () => CellStyle[][]; getNumberFormats?: () => string[][]; getHorizontalAlignments?: () => string[][] } } | null } | null)?.getActiveSheet?.();
+    const ws = (wb as unknown as { getActiveSheet?: () => { getName?: () => string; getDataRange?: () => { getA1Notation?: () => string; getValues?: () => unknown[][]; getDisplayValues?: () => string[][]; getCellDatas?: () => Array<Array<SheetCellMetadata | null>>; getFormulas?: () => Array<Array<string | null>>; getCellStyles?: () => CellStyle[][]; getNumberFormats?: () => string[][]; getHorizontalAlignments?: () => string[][] } } | null } | null)?.getActiveSheet?.();
     const dr = ws?.getDataRange?.();
     const sheetA1 = dr?.getA1Notation?.();
     const sheetVals = dr?.getValues?.() as unknown[][] | undefined;
+    const sheetDisplayValues = dr?.getDisplayValues?.();
+    const sheetCellData = dr?.getCellDatas?.();
     const sheetFormulas = dr?.getFormulas?.();
     const sheetCellStyles = dr?.getCellStyles?.();
     const sheetNumberFormats = dr?.getNumberFormats?.();
@@ -270,22 +270,40 @@ function snap(wb: FWorkbookLike | null | undefined): UniSel | null {
     const sFormulas = sheetFormulas?.length
       ? sheetFormulas
       : rangeMatchesSheet ? range?.getFormulas?.() : undefined;
+    const sDisplayValues = sheetDisplayValues?.length
+      ? sheetDisplayValues
+      : rangeMatchesSheet ? range?.getDisplayValues?.() : undefined;
+    const sCellData = sheetCellData?.length
+      ? sheetCellData
+      : rangeMatchesSheet ? range?.getCellDatas?.() : undefined;
+    const sNumberFormats = sheetNumberFormats?.length
+      ? sheetNumberFormats
+      : rangeMatchesSheet ? range?.getNumberFormats?.() : undefined;
     const R = sVals.length;
     const C = sVals[0]?.length ?? 0;
     const sStyles = snapshotStyles(
       sheetCellStyles?.length ? sheetCellStyles : rangeMatchesSheet ? range?.getCellStyles() : undefined,
-      sheetNumberFormats?.length ? sheetNumberFormats : rangeMatchesSheet ? range?.getNumberFormats?.() : undefined,
+      sNumberFormats,
       sheetAlignments?.length ? sheetAlignments : rangeMatchesSheet ? range?.getHorizontalAlignments?.() : undefined,
       R,
       C,
     );
+    const sScalars = buildSheetScalars(sVals, sDisplayValues, sNumberFormats, sCellData);
     const sStart = parseStart(sA1);
     const sCols = Array.from({ length: C }, (_, i) => colName(sStart.c + i));
     const header = (sVals[0] ?? []).map((v) => (v == null ? '' : String(v)));
-    const colLegend = sCols.map((L, i) => `${L}=${header[i] || '?'}(${colStat(sVals.map((row) => row[i]))})`).join(' | ');
+    const colLegend = sCols.map((L, i) => `${L}=${header[i] || '?'}(${colStat(sScalars.map((row) => row[i]!).filter(isSheetScalar))})`).join(' | ');
 
     const rowLine = (ri: number): string =>
-      `第${sStart.r + ri + 1}行: ` + (sVals[ri] ?? []).map((v, c) => `${sCols[c]}${sStart.r + ri + 1}=${v == null || v === '' ? '(空)' : String(v)}`).join('  ');
+      `第${sStart.r + ri + 1}行: ` + (sScalars[ri] ?? []).map((value, c) => {
+        const display = sDisplayValues?.[ri]?.[c];
+        const rendered = value.kind === 'blank' ? '(空)'
+          : value.kind === 'text' ? value.value
+            : value.kind === 'boolean' ? String(value.value)
+              : value.kind === 'error' ? value.code
+                : display || String(sheetScalarNumericValue(value));
+        return `${sCols[c]}${sStart.r + ri + 1}=${rendered}`;
+      }).join('  ');
     let dataBlock: string;
     if (R <= 40) {
       dataBlock = sVals.map((_, r) => rowLine(r)).join('\n'); // 小表:全量
@@ -328,7 +346,7 @@ function snap(wb: FWorkbookLike | null | undefined): UniSel | null {
       text,
       sheet: {
         a1: sA1,
-        values: sVals.slice(0, 3000),
+        values: sScalars.slice(0, 3000),
         ...(sFormulas?.length ? { formulas: sFormulas.slice(0, 3000) } : {}),
         ...(sStyles ? { styles: sStyles.slice(0, 3000) } : {}),
         ...(ws?.getName?.() ? { name: ws.getName() } : {}),

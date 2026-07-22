@@ -5,7 +5,7 @@
  * Each channel only maps the logical tool defs / system prompt / fetch execution here onto its own SDK's message/tool format.
  */
 import type { ClarifyOption, ClarifyQuestion, HostDialect, ProposeRequest } from './model.js';
-import { RESOURCE_LIMITS, ResourceLimitError, assertA1RangeBudget, assertJsonBudget, assertTextResultBudget, isResourceLimitError, utf8ByteLength } from '@otterpatch/core';
+import { RESOURCE_LIMITS, ResourceLimitError, assertA1RangeBudget, assertJsonBudget, assertTextResultBudget, isResourceLimitError, isSheetScalar, sheetScalarNumericValue, sheetScalarToCellValue, utf8ByteLength, type SheetCellValue, type SheetScalar } from '@otterpatch/core';
 import { safeParse } from './json-salvage.js';
 import { ROUTING_PREAMBLE, TOO_MANY_STEPS_MSG, ANSWER_USER_DESC, ASK_USER_DESC, READ_RANGE_DESC, AGGREGATE_DESC } from './prompts/index.js';
 import { DOC_TOOL_DEFS, execDocTool, type DocSnapshot } from './doc-tools.js';
@@ -157,6 +157,7 @@ export const AGGREGATE_DEF: ToolDef = {
     properties: {
       column: { type: 'string', description: '要聚合的列字母,如 C' },
       op: { type: 'string', enum: ['sum', 'avg', 'min', 'max', 'count'] },
+      headerRows: { type: 'integer', minimum: 0, description: '数据区域开头的表头行数;无表头必须传 0' },
       groupBy: { type: 'string', description: '(可选)按此列分组,做透视/分组汇总,如按产品列 B 汇总销量 C' },
       where: {
         type: 'object',
@@ -165,7 +166,7 @@ export const AGGREGATE_DEF: ToolDef = {
         required: ['col', 'op', 'value'],
       },
     },
-    required: ['column', 'op'],
+    required: ['column', 'op', 'headerRows'],
   },
 };
 export interface AggWhere { col: string; op: '=' | '!=' | '>' | '<' | 'contains'; value: string | number }
@@ -181,7 +182,7 @@ export function execReadTool(name: string, args: Record<string, unknown>, req: {
   try {
     const d = execDocTool(name, args as { from?: number; to?: number; pattern?: string }, req.doc);
     if (d !== null) return assertTextResultBudget(d);
-    return assertTextResultBudget(execSheetTool(name, args as { a1?: string; column?: string; op?: string; groupBy?: string; where?: AggWhere }, req.sheet));
+    return assertTextResultBudget(execSheetTool(name, args as { a1?: string; column?: string; op?: string; headerRows?: number; groupBy?: string; where?: AggWhere }, req.sheet));
   } catch (error) {
     if (!isResourceLimitError(error)) throw error;
     return JSON.stringify({ ok: false, error: error.toJSON() });
@@ -221,7 +222,7 @@ export function parseClarify(input: unknown): ClarifyQuestion[] {
 
 // ─────────────── Data-fetch execution (read_range / aggregate) ───────────────
 
-export type SheetData = { a1: string; values: unknown[][]; formulas?: Array<Array<string | null>>; styles?: Array<Array<unknown>>; name?: string; names?: string[] };
+export type SheetData = { a1: string; values: SheetCellValue[][]; formulas?: Array<Array<string | null>>; styles?: Array<Array<unknown>>; name?: string; names?: string[] };
 
 export function assertSheetSnapshotBudget(sheet: SheetData): void {
   const rows = Math.max(sheet.values.length, sheet.formulas?.length ?? 0, sheet.styles?.length ?? 0);
@@ -261,10 +262,23 @@ function startOf(a1: string): { c: number; r: number } {
  *  visibly different from the number 71 — Excel's SUM silently skips text, so hiding the type
  *  here caused real missed-anomaly failures in bench (x-sum). Numeric-looking strings get quoted
  *  and flagged. */
-function cellRepr(v: unknown): string {
+function cellRepr(v: SheetCellValue | undefined): string {
+  if (isSheetScalar(v)) {
+    switch (v.kind) {
+      case 'number': return String(v.value);
+      case 'percent': return `${v.display}(百分比原值=${v.value})`;
+      case 'currency': return `${v.value}${v.currency ? ` ${v.currency}` : ''}(货币)`;
+      case 'date': return `${v.iso ?? v.serial}(日期序列=${v.serial})`;
+      case 'text': return `${JSON.stringify(v.value)}(文本)`;
+      case 'boolean': return `${v.value}(布尔)`;
+      case 'blank': return '(空)';
+      case 'error': return `${v.code}(错误)`;
+    }
+  }
   if (v == null || v === '') return '(空)';
-  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return `"${v}"(文本数字⚠SUM会漏加)`;
-  return String(v);
+  if (typeof v === 'string') return `${JSON.stringify(v)}(文本)`;
+  if (typeof v === 'boolean') return `${v}(布尔)`;
+  return typeof v === 'number' && Number.isFinite(v) ? String(v) : '(无效单元格值)';
 }
 
 /** Read any A1 range from the full-sheet data; returns text with cell references. */
@@ -304,7 +318,32 @@ export function readRange(sheet: SheetData, query: string): string {
   return lines.join('\n') || '(空)';
 }
 
-const toNumber = (v: unknown): number => (typeof v === 'number' ? v : parseFloat(String(v).replace(/[,%¥$\s]/g, '')));
+function numericCellValue(value: SheetCellValue): number | undefined {
+  if (isSheetScalar(value)) return value.kind === 'date' ? undefined : sheetScalarNumericValue(value);
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function comparableCellValue(value: SheetCellValue): string | number | boolean | null {
+  return isSheetScalar(value) ? sheetScalarToCellValue(value) : value;
+}
+
+function displayCellValue(value: SheetCellValue): string {
+  if (isSheetScalar(value)) {
+    switch (value.kind) {
+      case 'percent': return value.display;
+      case 'currency': return `${value.value}${value.currency ? ` ${value.currency}` : ''}`;
+      case 'date': return value.iso ?? String(value.serial);
+      case 'blank': return '(空)';
+      case 'error': return value.code;
+      default: return String(value.value);
+    }
+  }
+  return value == null || value === '' ? '(空)' : String(value);
+}
+
+function aggregateError(code: string, message: string): string {
+  return JSON.stringify({ ok: false, error: { code, message } });
+}
 function aggOf(nums: number[], op: string): string {
   if (!nums.length) return '无数值';
   let sum = 0;
@@ -323,36 +362,43 @@ function aggOf(nums: number[], op: string): string {
   return `sum=${Math.round(sum * 1000) / 1000} avg=${Math.round((sum / nums.length) * 100) / 100} min=${min} max=${max} count=${nums.length}`;
 }
 
-/** Aggregate a column (skipping the header row); supports where pre-filtering and groupBy grouping (pivot/grouped summary). */
-export function aggregate(sheet: SheetData, column: string, op: string, groupBy?: string, where?: AggWhere): string {
+/** Aggregate a column using host-observed scalar types and an explicit header-row contract. */
+export function aggregate(sheet: SheetData, column: string, op: string, headerRows: number, groupBy?: string, where?: AggWhere): string {
   assertSheetSnapshotBudget(sheet);
+  if (!Number.isSafeInteger(headerRows) || headerRows < 0 || headerRows > sheet.values.length) {
+    return aggregateError('AGGREGATE_HEADER_ROWS_INVALID', `headerRows must be an integer from 0 to ${sheet.values.length}`);
+  }
   const s = startOf(sheet.a1);
   const ci = colIndex(column.replace(/[^A-Za-z]/g, '') || 'A') - s.c;
   const gi = groupBy ? colIndex(groupBy.replace(/[^A-Za-z]/g, '') || 'A') - s.c : -1;
   const wi = where ? colIndex(where.col.replace(/[^A-Za-z]/g, '') || 'A') - s.c : -1;
-  const pass = (row: unknown[]): boolean => {
+  const pass = (row: SheetCellValue[]): boolean => {
     if (wi < 0 || !where) return true;
     const cell = row[wi];
-    const a = toNumber(cell), b = toNumber(where.value);
-    const bothNum = Number.isFinite(a) && Number.isFinite(b);
+    if (cell === undefined) return false;
+    const comparable = comparableCellValue(cell);
+    const numeric = numericCellValue(cell);
+    const filterNumber = typeof where.value === 'number' && Number.isFinite(where.value) ? where.value : undefined;
     switch (where.op) {
-      case '=': return String(cell ?? '') === String(where.value);
-      case '!=': return String(cell ?? '') !== String(where.value);
-      case '>': return bothNum && a > b;
-      case '<': return bothNum && a < b;
-      case 'contains': return String(cell ?? '').includes(String(where.value));
+      case '=': return comparable === where.value;
+      case '!=': return comparable !== where.value;
+      case '>': return numeric !== undefined && filterNumber !== undefined && numeric > filterNumber;
+      case '<': return numeric !== undefined && filterNumber !== undefined && numeric < filterNumber;
+      case 'contains': return displayCellValue(cell).includes(String(where.value));
       default: return true;
     }
   };
   if (gi >= 0) {
     const groups = new Map<string, number[]>();
-    for (let i = 1; i < sheet.values.length; i++) {
+    for (let i = headerRows; i < sheet.values.length; i++) {
       const row = sheet.values[i] ?? [];
       if (!pass(row)) continue;
-      const g = String(row[gi] ?? '(空)');
-      const n = toNumber(row[ci]);
+      const groupCell = row[gi];
+      const g = groupCell === undefined ? '(空)' : displayCellValue(groupCell);
+      const target = row[ci];
+      const n = target === undefined ? undefined : numericCellValue(target);
       if (!groups.has(g)) groups.set(g, []);
-      if (Number.isFinite(n)) groups.get(g)!.push(n);
+      if (n !== undefined) groups.get(g)!.push(n);
     }
     if (!groups.size) return '无数据';
     const lines: string[] = [];
@@ -368,18 +414,19 @@ export function aggregate(sheet: SheetData, column: string, op: string, groupBy?
     return lines.join('\n');
   }
   const nums: number[] = [];
-  for (let i = 1; i < sheet.values.length; i++) {
+  for (let i = headerRows; i < sheet.values.length; i++) {
     const row = sheet.values[i] ?? [];
     if (!pass(row)) continue;
-    const n = toNumber(row[ci]);
-    if (Number.isFinite(n)) nums.push(n);
+    const target = row[ci];
+    const n = target === undefined ? undefined : numericCellValue(target);
+    if (n !== undefined) nums.push(n);
   }
   return nums.length ? aggOf(nums, op) : '该列无数值';
 }
 
 /** Execute a read-only fetch tool by name; returns text fed back to the model. */
-export function execSheetTool(name: string, args: { a1?: string; column?: string; op?: string; groupBy?: string; where?: AggWhere }, sheet?: SheetData): string {
+export function execSheetTool(name: string, args: { a1?: string; column?: string; op?: string; headerRows?: number; groupBy?: string; where?: AggWhere }, sheet?: SheetData): string {
   if (name === 'read_range' && sheet) return readRange(sheet, String(args.a1 ?? ''));
-  if (name === 'aggregate' && sheet) return aggregate(sheet, String(args.column ?? ''), String(args.op ?? ''), args.groupBy, args.where);
+  if (name === 'aggregate' && sheet) return aggregate(sheet, String(args.column ?? ''), String(args.op ?? ''), typeof args.headerRows === 'number' ? args.headerRows : Number.NaN, args.groupBy, args.where);
   return '(unknown tool)';
 }

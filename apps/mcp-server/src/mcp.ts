@@ -46,9 +46,21 @@ const sheetStyleSchema = z.object({
   numberFormat: z.string().optional(),
 }).strict();
 
+const sheetScalarSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('number'), value: z.number().finite() }).strict(),
+  z.object({ kind: z.literal('percent'), value: z.number().finite(), display: z.string() }).strict(),
+  z.object({ kind: z.literal('currency'), value: z.number().finite(), currency: z.string().optional() }).strict(),
+  z.object({ kind: z.literal('date'), serial: z.number().finite(), iso: z.string().optional() }).strict(),
+  z.object({ kind: z.literal('text'), value: z.string() }).strict(),
+  z.object({ kind: z.literal('boolean'), value: z.boolean() }).strict(),
+  z.object({ kind: z.literal('blank') }).strict(),
+  z.object({ kind: z.literal('error'), code: z.string().min(1) }).strict(),
+]);
+const sheetCellSchema = z.union([sheetScalarSchema, z.string(), z.number().finite(), z.boolean(), z.null()]);
+
 const sheetSchema = z.object({
   a1: z.string(),
-  values: z.array(z.array(z.unknown())),
+  values: z.array(z.array(sheetCellSchema)),
   formulas: z.array(z.array(z.string().nullable())).optional(),
   styles: z.array(z.array(sheetStyleSchema.nullable())).optional(),
   name: z.string().optional(),

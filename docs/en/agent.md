@@ -24,7 +24,7 @@ UTF-8 byte count. Exhausting one repair category never borrows from another.
 | Format | Tool | Purpose |
 |---|---|---|
 | Excel | `read_range` | exact cell values for any A1 range (never guess from samples) |
-| Excel | `aggregate` | column aggregation with `groupBy` / `where` — pivots, sums, anomaly stats |
+| Excel | `aggregate` | typed column aggregation with explicit `headerRows`, plus `groupBy` / `where` |
 | Word | `read_blocks` | full text of paragraph ranges (the prompt context truncates long paragraphs — quotes must come from real text) |
 | Word | `find_text` | all occurrences with block numbers — quote-uniqueness checks |
 | Word | `get_outline` | heading tree + level-skip diagnosis |
@@ -34,6 +34,9 @@ UTF-8 byte count. Exhausting one repair category never borrows from another.
 Snapshots ride along on the request (`ProposeRequest.sheet` / `.doc`) and are only visible to the
 tools — they are not pasted into the prompt. Word context/snapshots annotate images per paragraph
 (`[图片 alt 宽×高]`), so the agent knows where each image sits and how big it is.
+Sheet cells carry host-observed scalar kinds (number, percent, currency, date, text, blank, error,
+or boolean). Aggregation uses underlying numeric values and never converts display strings such as
+`"50%"`; callers must state how many leading rows are headers.
 
 ## Word structured ops: dual-channel anchoring / deletePara / images
 

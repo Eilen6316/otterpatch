@@ -10,10 +10,10 @@ import { RESOURCE_LIMITS, ResourceLimitError, type DocRev } from '@otterpatch/co
 const SHEET: SheetData = {
   a1: 'A1:C4',
   values: [
-    ['名称', '数量', '单价'],
-    ['甲', 2, 10],
-    ['乙', 3, 20],
-    ['丙', 5, 0],
+    [{ kind: 'text', value: '名称' }, { kind: 'text', value: '数量' }, { kind: 'text', value: '单价' }],
+    [{ kind: 'text', value: '甲' }, { kind: 'number', value: 2 }, { kind: 'currency', value: 10, currency: 'CNY' }],
+    [{ kind: 'text', value: '乙' }, { kind: 'number', value: 3 }, { kind: 'currency', value: 20, currency: 'CNY' }],
+    [{ kind: 'text', value: '丙' }, { kind: 'number', value: 5 }, { kind: 'currency', value: 0, currency: 'CNY' }],
   ],
 };
 
@@ -63,14 +63,37 @@ test('request context and history have fixed character budgets', () => {
 });
 
 test('aggregate:整列求和/计数跳过表头', () => {
-  assert.equal(aggregate(SHEET, 'B', 'sum'), '10'); // 2+3+5
-  assert.equal(aggregate(SHEET, 'B', 'count'), '3');
-  assert.equal(aggregate(SHEET, 'C', 'max'), '20');
+  assert.equal(aggregate(SHEET, 'B', 'sum', 1), '10'); // 2+3+5
+  assert.equal(aggregate(SHEET, 'B', 'count', 1), '3');
+  assert.equal(aggregate(SHEET, 'C', 'max', 1), '20');
+});
+
+test('aggregate:百分比使用底层小数,文本百分号不冒充数值', () => {
+  const sheet: SheetData = {
+    a1: 'A1:A4',
+    values: [[{ kind: 'text', value: '完成率' }], [{ kind: 'percent', value: 0.5, display: '50%' }], [{ kind: 'text', value: '25%' }], [{ kind: 'percent', value: 0.25, display: '25%' }]],
+  };
+  assert.equal(aggregate(sheet, 'A', 'sum', 1), '0.75');
+  assert.equal(aggregate(sheet, 'A', 'avg', 1), '0.375');
+  assert.match(readRange(sheet, 'A2:A3'), /A2=50%\(百分比原值=0\.5\)/);
+  assert.match(readRange(sheet, 'A2:A3'), /A3="25%"\(文本\)/);
+});
+
+test('aggregate:headerRows 显式控制是否跳过首行', () => {
+  const sheet: SheetData = { a1: 'A1:A2', values: [[{ kind: 'number', value: 4 }], [{ kind: 'number', value: 6 }]] };
+  assert.equal(aggregate(sheet, 'A', 'sum', 0), '10');
+  assert.equal(aggregate(sheet, 'A', 'sum', 1), '6');
+  assert.match(aggregate(sheet, 'A', 'sum', Number.NaN), /AGGREGATE_HEADER_ROWS_INVALID/);
+});
+
+test('aggregate:legacy display strings are never cleaned into numbers', () => {
+  const sheet: SheetData = { a1: 'A1:A3', values: [['rate'], ['50%'], [0.25]] };
+  assert.equal(aggregate(sheet, 'A', 'sum', 1), '0.25');
 });
 
 test('aggregate:groupBy 透视/分组汇总', () => {
   // Group by column A (名称), aggregate column B (数量) — names are all unique here, so each forms its own group
-  const g = aggregate(SHEET, 'B', 'sum', 'A');
+  const g = aggregate(SHEET, 'B', 'sum', 1, 'A');
   assert.match(g, /甲: 2/);
   assert.match(g, /乙: 3/);
   assert.match(g, /丙: 5/);
@@ -78,19 +101,21 @@ test('aggregate:groupBy 透视/分组汇总', () => {
 
 test('aggregate:where 先筛选再聚合', () => {
   // Sum 数量 (B) only for rows where 单价 (C) > 10: 乙 (3, price 20) + 丙 (5, price 0?) → only 乙 qualifies → 3
-  assert.equal(aggregate(SHEET, 'B', 'sum', undefined, { col: 'C', op: '>', value: 10 }), '3');
+  assert.equal(aggregate(SHEET, 'B', 'sum', 1, undefined, { col: 'C', op: '>', value: 10 }), '3');
 });
 
 test('execSheetTool:按工具名分发;无 sheet 或未知工具返回占位', () => {
   assert.match(execSheetTool('read_range', { a1: 'B2' }, SHEET), /B2=2/);
-  assert.equal(execSheetTool('aggregate', { column: 'B', op: 'sum' }, SHEET), '10');
+  assert.equal(execSheetTool('aggregate', { column: 'B', op: 'sum', headerRows: 1 }, SHEET), '10');
   assert.equal(execSheetTool('read_range', { a1: 'B2' }, undefined), '(unknown tool)');
   assert.equal(execSheetTool('nope', {}, SHEET), '(unknown tool)');
 });
 
 test('auxToolDefs:answer_user/ask_user 总在;有整表快照才挂 read_range/aggregate', () => {
   assert.deepEqual(auxToolDefs(false).map((d) => d.name), ['answer_user', 'ask_user']);
-  assert.deepEqual(auxToolDefs(true).map((d) => d.name), ['answer_user', 'ask_user', 'read_range', 'aggregate']);
+  const defs = auxToolDefs(true);
+  assert.deepEqual(defs.map((d) => d.name), ['answer_user', 'ask_user', 'read_range', 'aggregate']);
+  assert.deepEqual((defs.find((d) => d.name === 'aggregate')?.parameters.required as string[]), ['column', 'op', 'headerRows']);
 });
 
 test('parseClarify:解析问题(字符串/对象皆可)+ 规范化 + 上限', () => {

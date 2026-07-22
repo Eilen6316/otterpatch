@@ -4,7 +4,7 @@
  * selected by ProposeRequest.format. Model implementations (Claude/OpenAI-compatible/Mock) only do
  * "call model per dialect → get raw proposal → dialect.buildChangeSet"; the model never emits OOXML/XML directly.
  */
-import { assertChangeSet, type AbstractStyle, type ChangeSet, type DocRev, type LogicalAnchor, type VerifyReport } from '@otterpatch/core';
+import { assertChangeSet, type AbstractStyle, type ChangeSet, type DocRev, type LogicalAnchor, type SheetCellValue, type VerifyReport } from '@otterpatch/core';
 
 export interface ProposeRequest {
   hostId: string;
@@ -17,7 +17,7 @@ export interface ProposeRequest {
   /** Internal validator feedback for a retry. Kept separate from untrusted document context. */
   proposalFeedback?: string[];
   /** Full sheet data (passed locally to serve, not stuffed into the model prompt; consumed on demand by the read_range/aggregate tools). */
-  sheet?: { a1: string; values: unknown[][]; formulas?: Array<Array<string | null>>; styles?: Array<Array<AbstractStyle | null>>; name?: string; names?: string[] };
+  sheet?: { a1: string; values: SheetCellValue[][]; formulas?: Array<Array<string | null>>; styles?: Array<Array<AbstractStyle | null>>; name?: string; names?: string[] };
   /** Structured drawio topology. Context remains display text and is not used for fuzzy id checks. */
   board?: {
     nodes: Array<{ id: string; parent?: string; x?: number; y?: number; width?: number; height?: number }>;
