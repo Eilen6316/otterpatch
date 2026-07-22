@@ -8,6 +8,7 @@ import { useT } from './i18n.js';
 import { IconSelect, IconCheck, IconChevron, IconX, IconUndo } from './icons.js';
 import type { DiffTurn } from './app-thread-types.js';
 import type { RichDocHandle } from './RichDoc.js';
+import { previewValueText } from './proposal-materializers.js';
 import { akey, BATCH_RX } from './review-shared.js';
 
 export interface ReviewBoxProps {
@@ -56,9 +57,10 @@ export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBat
               const table = w?.table;
               const isFmt = !!(it.style || w?.style);
               const refShort = it.ref.replace(/^.*!/, '') || (table ? t('表格') : '');
-              const oldV = table ? '' : w ? (w.quote || '') : (!it.style && o?.before != null && String(o.before) !== '' ? String(o.before) : '');
-              const newV = table ? '' : w ? (w.replacement ?? '') : (it.after ?? '');
-              const fmtDesc = it.after || (w?.style ? Object.keys(w.style).join('/') : '') || t('改格式');
+              const observedBefore = previewValueText(it.before);
+              const oldV = table ? '' : w ? (w.quote || '') : (observedBefore || (!it.style && o?.before != null && String(o.before) !== '' ? String(o.before) : ''));
+              const newV = table ? '' : w ? (w.replacement ?? '') : previewValueText(it.after ?? it.proposedAfter);
+              const fmtDesc = it.proposalSummary || previewValueText(it.after) || (w?.style ? Object.keys(w.style).join('/') : '') || t('改格式');
               const curHunk = active && k === ridx;
               const acc = accepted.has(akey(d.changeSetId, it.editId));
               const seen = active ? k < ridx : true; // active:游标已过=已处置;历史回合:直接亮处置结果

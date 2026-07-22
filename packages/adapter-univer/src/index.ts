@@ -66,4 +66,4 @@ export const univerAdapterRegistration: AdapterRegistration = {
 
 export { buildXlsxCompiler } from './xlsx-patch.js';
 export { GridChangeSetEngine, gridShadow, type GridCell, type GridShadow } from './grid-engine.js';
-export { buildGridVerifier, type SheetSnapshot } from './grid-verify.js';
+export { buildGridVerifier, gridShadowFromSnapshot, sheetSnapshotContains, type SheetSnapshot } from './grid-verify.js';

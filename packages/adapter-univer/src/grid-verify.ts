@@ -39,22 +39,76 @@ function topLeft(a1: string): { c: number; r: number } {
 export interface SheetSnapshot {
   a1: string;
   values: unknown[][];
+  /** Formula matrix aligned with values. Empty strings mean the cell has no formula. */
+  formulas?: Array<Array<string | null>>;
+  name?: string;
+  names?: string[];
+}
+
+/** Convert a host sheet snapshot into the typed grid used by shadow apply. */
+export function gridShadowFromSnapshot(sheet: SheetSnapshot): ReturnType<typeof gridShadow> {
+  const tl = topLeft(sheet.a1);
+  const shadow = gridShadow();
+  const rows = Math.max(sheet.values.length, sheet.formulas?.length ?? 0);
+  for (let r = 0; r < rows; r++) {
+    const row = sheet.values[r] ?? [];
+    const formulas = sheet.formulas?.[r] ?? [];
+    const width = Math.max(row.length, formulas.length);
+    for (let c = 0; c < width; c++) {
+      const ref = colLetter(tl.c + c) + (tl.r + r + 1);
+      const value = row[c];
+      const formula = formulas[c];
+      if (typeof formula === 'string' && formula.length > 0) {
+        shadow.set(ref, { formula });
+        continue;
+      }
+      if (value == null || value === '') continue;
+      if (typeof value === 'number' && !Number.isFinite(value)) {
+        throw new Error(`sheet snapshot contains a non-finite number at ${ref}`);
+      }
+      if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+        throw new Error(`sheet snapshot contains an unsupported value at ${ref}`);
+      }
+      shadow.set(ref, { value });
+    }
+  }
+  return shadow;
+}
+
+/** True only when a single-cell reference is inside this exact sheet snapshot. */
+export function sheetSnapshotContains(sheet: SheetSnapshot, a1: string, anchorSheet?: string): boolean {
+  const snapshotSheet = sheet.name ?? sheetNameOf(sheet.a1);
+  const targetSheet = sheetNameOf(a1) ?? anchorSheet;
+  if (snapshotSheet && targetSheet && snapshotSheet !== targetSheet) return false;
+  const tl = topLeft(sheet.a1);
+  const target = cellRC(bareCell(a1));
+  const rows = Math.max(sheet.values.length, sheet.formulas?.length ?? 0);
+  let columns = 0;
+  for (let row = 0; row < rows; row++) {
+    columns = Math.max(columns, sheet.values[row]?.length ?? 0, sheet.formulas?.[row]?.length ?? 0);
+  }
+  return target.row >= tl.r + 1
+    && target.row <= tl.r + rows
+    && target.col >= tl.c + 1
+    && target.col <= tl.c + columns;
+}
+
+function sheetNameOf(a1: string): string | undefined {
+  const bang = a1.lastIndexOf('!');
+  return bang >= 0 ? a1.slice(0, bang).replace(/^'|'$/g, '') : undefined;
 }
 
 /** Build a shadow verifier from a full-sheet snapshot (return signature is compatible with @otterpatch/agent's ChangeSetVerifier). */
 export function buildGridVerifier(sheet: SheetSnapshot): (cs: ChangeSet) => Promise<VerifyReport> {
   return async (cs: ChangeSet): Promise<VerifyReport> => {
     const tl = topLeft(sheet.a1);
-    const shadow = gridShadow();
-    const rows = sheet.values.length;
+    const shadow = gridShadowFromSnapshot(sheet);
+    const rows = Math.max(sheet.values.length, sheet.formulas?.length ?? 0);
     let maxCol = 0;
     for (let r = 0; r < rows; r++) {
       const row = sheet.values[r] ?? [];
-      if (row.length > maxCol) maxCol = row.length;
-      for (let c = 0; c < row.length; c++) {
-        const v = row[c];
-        if (v != null && v !== '') shadow.set(colLetter(tl.c + c) + (tl.r + r + 1), { value: v as CellValue });
-      }
+      const formulas = sheet.formulas?.[r] ?? [];
+      if (Math.max(row.length, formulas.length) > maxCol) maxCol = Math.max(row.length, formulas.length);
     }
     const dataMaxRow = tl.r + rows; // 1-based last data row
     const dataMaxCol = tl.c + maxCol; // 1-based last data column

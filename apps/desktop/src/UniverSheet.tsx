@@ -137,7 +137,7 @@ export interface UniSel {
   rows: number;
   cols: number;
   text: string; // 喂给模型 prompt 的全局概览 + 选区焦点(廉价)
-  sheet?: { a1: string; values: unknown[][]; name?: string; names?: string[] }; // 整表全量(本地传给 serve,供 read_range/aggregate 按需取数)
+  sheet?: { a1: string; values: unknown[][]; formulas?: Array<Array<string | null>>; name?: string; names?: string[] }; // 整表全量(本地传给 serve,供 read_range/aggregate 按需取数)
 }
 
 const HEADERS = ['日期', '产品', '销量', '单价', '金额', '毛利率'];
@@ -205,13 +205,17 @@ function snap(wb: FWorkbookLike | null | undefined): UniSel | null {
   try {
     const range = wb?.getActiveRange() ?? null;
     // 整张表(used range)—— 与选区无关,始终构建,这样没圈选也能"看全局"
-    const ws = (wb as unknown as { getActiveSheet?: () => { getName?: () => string; getDataRange?: () => { getA1Notation?: () => string; getValues?: () => unknown[][] } } | null } | null)?.getActiveSheet?.();
+    const ws = (wb as unknown as { getActiveSheet?: () => { getName?: () => string; getDataRange?: () => { getA1Notation?: () => string; getValues?: () => unknown[][]; getFormulas?: () => Array<Array<string | null>> } } | null } | null)?.getActiveSheet?.();
     const dr = ws?.getDataRange?.();
     const sheetA1 = dr?.getA1Notation?.();
     const sheetVals = dr?.getValues?.() as unknown[][] | undefined;
+    const sheetFormulas = dr?.getFormulas?.();
     if ((!sheetA1 || !sheetVals || !sheetVals.length) && !range) return null; // 空表且无选区
     const sA1 = sheetA1 ?? range!.getA1Notation();
     const sVals = sheetVals && sheetVals.length ? sheetVals : range!.getValues();
+    const sFormulas = sheetFormulas?.length
+      ? sheetFormulas
+      : (range as FRangeLike & { getFormulas?: () => Array<Array<string | null>> }).getFormulas?.();
     const R = sVals.length;
     const C = sVals[0]?.length ?? 0;
     const sStart = parseStart(sA1);
@@ -256,7 +260,18 @@ function snap(wb: FWorkbookLike | null | undefined): UniSel | null {
     }
 
     const text = `[整张表] 范围 ${sA1}(${R} 行 × ${C} 列)\n列概览: ${colLegend}\n数据(单元格=值):\n${dataBlock}${focusText}`;
-    return { a1, rows, cols, text, sheet: { a1: sA1, values: sVals.slice(0, 3000), ...(ws?.getName?.() ? { name: ws.getName() } : {}) } };
+    return {
+      a1,
+      rows,
+      cols,
+      text,
+      sheet: {
+        a1: sA1,
+        values: sVals.slice(0, 3000),
+        ...(sFormulas?.length ? { formulas: sFormulas.slice(0, 3000) } : {}),
+        ...(ws?.getName?.() ? { name: ws.getName() } : {}),
+      },
+    };
   } catch {
     return null;
   }

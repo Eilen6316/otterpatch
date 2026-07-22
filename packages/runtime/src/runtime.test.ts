@@ -14,7 +14,7 @@ import type { OtterPatchEvent } from './events.js';
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 const dec = new TextDecoder();
 
-test('runtime diff summarizes structured Word tables without flattening cells', () => {
+test('runtime diff keeps proposal data separate when no Word shadow is available', () => {
   const anchorId = 'a0' as AnchorId;
   const cs: ChangeSet = {
     id: 'table-cs', hostId: 'h', baseRev: 0 as DocRev, origin: { by: 'human' }, meta: { intent: 'insert table' },
@@ -22,9 +22,12 @@ test('runtime diff summarizes structured Word tables without flattening cells', 
     edits: [{ id: 'e0', target: anchorId, op: { family: 'structure', kind: 'insertTable', rows: [['Name', 'Value'], ['Alpha', '10']], headerRows: 1, at: 'end' } }],
   };
 
-  assert.deepEqual(buildDiff(cs).items[0], {
-    editId: 'e0', ref: '文档末尾', kind: 'insertTable', badge: 'add', label: '插入 2×2 表格 · 1 行表头', after: '2×2 表格',
-  });
+  const diff = buildDiff(cs, { format: 'word', unavailableReason: 'no Word shadow' });
+  assert.equal(diff.previewStatus, 'unavailable');
+  assert.equal(diff.items[0]?.ref, '文档末尾');
+  assert.equal(diff.items[0]?.proposalSummary, '2×2 表格');
+  assert.equal(diff.items[0]?.before, undefined);
+  assert.equal(diff.items[0]?.after, undefined);
 });
 
 function makeXlsx(): Uint8Array {
@@ -59,15 +62,21 @@ test('runtime: propose → diff → commit(excel) 端到端 + 事件流', async 
   rt.on((e) => seen.push(e.type));
 
   const model = new MockModelClient(() => ({ plan: '把 B1 改成 99', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] }));
+  const request: ProposeRequest = {
+    hostId: 'h1', format: 'excel', intent: '把 B1 改成 99', baseRev: 0 as DocRev, anchors: [], context: 'B1=20',
+    sheet: { a1: 'Sheet1!B1', name: 'Sheet1', values: [[20]] },
+  };
   const cs = await rt.propose(
-    { hostId: 'h1', format: 'excel', intent: '把 B1 改成 99', baseRev: 0 as DocRev, anchors: [], context: 'B1=20' },
+    request,
     model,
   );
   assert.equal(cs.edits.length, 1);
 
-  const d = rt.diff(cs);
+  const d = await rt.diff(cs, { format: 'excel', sheet: request.sheet });
   assert.equal(d.items.length, 1);
-  assert.equal(d.items[0]!.after, '99');
+  assert.deepEqual(d.items[0]!.before, { kind: 'cell', value: 20 });
+  assert.deepEqual(d.items[0]!.after, { kind: 'cell', value: 99 });
+  assert.equal(d.previewStatus, 'verified');
   assert.equal(d.items[0]!.badge, 'modify');
 
   const original = makeXlsx();
@@ -82,6 +91,65 @@ test('runtime: propose → diff → commit(excel) 端到端 + 事件流', async 
   for (const t of ['propose:start', 'propose:done', 'diff:done', 'commit:start', 'commit:done'] as const) {
     assert.ok(seen.includes(t), `missing event ${t}`);
   }
+});
+
+test('runtime diff reports shadow before/after and indirect formula recalculation', async () => {
+  const anchorId = 'a0' as AnchorId;
+  const cs: ChangeSet = {
+    id: 'recalc', hostId: 'h', baseRev: 0 as DocRev,
+    anchors: { [anchorId]: { id: anchorId, hostId: 'h' as HostId, kind: 'grid', ref: null, baseRev: 0 as DocRev, portable: { kind: 'grid', sheet: 'Sheet1', a1: 'A1' } } },
+    origin: { by: 'human' }, meta: { intent: 'change dependency' },
+    edits: [{ id: 'e0', target: anchorId, op: { family: 'value', kind: 'setValue', value: 25 } }],
+  };
+  const diff = await new OtterPatchRuntime().diff(cs, {
+    format: 'excel',
+    sheet: { a1: 'Sheet1!A1:B1', name: 'Sheet1', values: [[10, 20]], formulas: [[null, '=A1*2']] },
+  });
+
+  assert.deepEqual(diff.items[0]?.before, { kind: 'cell', value: 10 });
+  assert.deepEqual(diff.items[0]?.after, { kind: 'cell', value: 25 });
+  assert.deepEqual(diff.indirectEffects[0]?.before, { kind: 'cell', value: 20, formula: '=A1*2' });
+  assert.deepEqual(diff.indirectEffects[0]?.after, { kind: 'cell', value: 50, formula: '=A1*2' });
+  assert.equal(diff.indirectEffects[0]?.target, 'Sheet1!B1');
+  assert.deepEqual(diff.expectedTouchedParts, ['worksheet[Sheet1]']);
+});
+
+test('runtime diff is explicit when the source snapshot is missing', async () => {
+  const diff = await new OtterPatchRuntime().diff(singleCellChangeSet('no-snapshot'), { format: 'excel' });
+  assert.equal(diff.previewStatus, 'unavailable');
+  assert.equal(diff.source, 'unavailable');
+  assert.match(diff.unavailableReason ?? '', /sheet snapshot/);
+  assert.equal(diff.items[0]?.before, undefined);
+  assert.equal(diff.items[0]?.after, undefined);
+  assert.deepEqual(diff.items[0]?.proposedAfter, { kind: 'cell', value: 1 });
+});
+
+test('runtime diff does not treat a target outside the snapshot as an empty cell', async () => {
+  const diff = await new OtterPatchRuntime().diff(singleCellChangeSet('outside-snapshot'), {
+    format: 'excel',
+    sheet: { a1: 'Sheet1!A1', name: 'Sheet1', values: [[10]] },
+  });
+  assert.equal(diff.previewStatus, 'unavailable');
+  assert.equal(diff.items[0]?.backendSupport, 'partial');
+  assert.equal(diff.items[0]?.before, undefined);
+  assert.equal(diff.items[0]?.after, undefined);
+});
+
+test('runtime diff preserves explicit format removal and null proposal semantics', () => {
+  const style = buildDiff(
+    singleCellChangeSet('remove-format', { family: 'style', kind: 'setStyle', style: { bold: false, italic: false } }),
+    { format: 'excel', unavailableReason: 'style snapshot unavailable' },
+  );
+  assert.match(style.items[0]?.label ?? '', /取消加粗/);
+  assert.match(style.items[0]?.label ?? '', /取消斜体/);
+  assert.deepEqual(style.items[0]?.style, { bold: false, italic: false });
+
+  const cleared = buildDiff(
+    singleCellChangeSet('clear-value', { family: 'value', kind: 'setValue', value: null }),
+    { format: 'excel', unavailableReason: 'snapshot unavailable' },
+  );
+  assert.deepEqual(cleared.items[0]?.proposedAfter, { kind: 'cell', value: null });
+  assert.equal(cleared.items[0]?.proposalSummary, 'null');
 });
 
 test('runtime: verifyOpts 给 word/drawio 挂上影子自检、未注册格式不挂', async () => {
@@ -247,7 +315,7 @@ test('runtime: serializes same-source commits, verifies output, and isolates eve
   };
   rt.registerWriteback('test', () => backend);
   rt.on(() => { throw new Error('observer failure'); });
-  assert.doesNotThrow(() => rt.diff(cs));
+  await assert.doesNotReject(() => rt.diff(cs));
 
   const first = rt.reviewProposal(rt.createProposal(cs, 'test', 'doc-1'), cs, ['e1'], bytes, 'r1');
   const second = rt.reviewProposal(rt.createProposal(cs, 'test', 'doc-1'), cs, ['e1'], bytes, 'r2');

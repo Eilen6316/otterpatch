@@ -72,7 +72,10 @@ export function assertProposeRequestBudget(req: ProposeRequest): void {
   if (req.anchors.length > RESOURCE_LIMITS.changeSetAnchors) {
     throw new ResourceLimitError('proposal_anchors', RESOURCE_LIMITS.changeSetAnchors, req.anchors.length);
   }
-  if (req.sheet) assertJsonBudget(req.sheet, 'sheet_snapshot');
+  if (req.sheet) {
+    assertJsonBudget(req.sheet, 'sheet_snapshot');
+    assertSheetSnapshotBudget(req.sheet);
+  }
   if (req.doc) assertJsonBudget(req.doc, 'document_snapshot');
   const feedback = req.proposalFeedback?.length
     ? '\n\n受信任的提案校验反馈:\n' + req.proposalFeedback.map((e) => '- ' + e).join('\n')
@@ -217,15 +220,16 @@ export function parseClarify(input: unknown): ClarifyQuestion[] {
 
 // ─────────────── Data-fetch execution (read_range / aggregate) ───────────────
 
-export type SheetData = { a1: string; values: unknown[][]; name?: string; names?: string[] };
+export type SheetData = { a1: string; values: unknown[][]; formulas?: Array<Array<string | null>>; name?: string; names?: string[] };
 
-function assertSheetBudget(sheet: SheetData): void {
-  if (sheet.values.length > RESOURCE_LIMITS.totalTouchedCells) {
-    throw new ResourceLimitError('sheet_snapshot_rows', RESOURCE_LIMITS.totalTouchedCells, sheet.values.length);
+export function assertSheetSnapshotBudget(sheet: SheetData): void {
+  const rows = Math.max(sheet.values.length, sheet.formulas?.length ?? 0);
+  if (rows > RESOURCE_LIMITS.totalTouchedCells) {
+    throw new ResourceLimitError('sheet_snapshot_rows', RESOURCE_LIMITS.totalTouchedCells, rows);
   }
   let cells = 0;
-  for (const row of sheet.values) {
-    cells += row.length;
+  for (let index = 0; index < rows; index++) {
+    cells += Math.max(sheet.values[index]?.length ?? 0, sheet.formulas?.[index]?.length ?? 0);
     if (cells > RESOURCE_LIMITS.totalTouchedCells) {
       throw new ResourceLimitError('sheet_snapshot_cells', RESOURCE_LIMITS.totalTouchedCells, cells);
     }
@@ -264,7 +268,7 @@ function cellRepr(v: unknown): string {
 
 /** Read any A1 range from the full-sheet data; returns text with cell references. */
 export function readRange(sheet: SheetData, query: string): string {
-  assertSheetBudget(sheet);
+  assertSheetSnapshotBudget(sheet);
   assertA1RangeBudget(query, RESOURCE_LIMITS.readRangeCells, 'read_range_cells');
   const s = startOf(sheet.a1);
   const parts = query.replace(/^.*!/, '').replace(/[$]/g, '').split(':');
@@ -320,7 +324,7 @@ function aggOf(nums: number[], op: string): string {
 
 /** Aggregate a column (skipping the header row); supports where pre-filtering and groupBy grouping (pivot/grouped summary). */
 export function aggregate(sheet: SheetData, column: string, op: string, groupBy?: string, where?: AggWhere): string {
-  assertSheetBudget(sheet);
+  assertSheetSnapshotBudget(sheet);
   const s = startOf(sheet.a1);
   const ci = colIndex(column.replace(/[^A-Za-z]/g, '') || 'A') - s.c;
   const gi = groupBy ? colIndex(groupBy.replace(/[^A-Za-z]/g, '') || 'A') - s.c : -1;

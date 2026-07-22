@@ -8,29 +8,46 @@
  * Writeback backends are routed by format: excel/xlsx → surgical OOXML (Univer compiler);
  * drawio → single-XML surgical edit.
  */
-import { Agent, assertProposeRequestBudget, buildDocVerifier, buildDrawioVerifier } from '@otterpatch/agent';
+import { Agent, assertProposeRequestBudget, assertSheetSnapshotBudget, buildDocVerifier, buildDrawioVerifier } from '@otterpatch/agent';
 import type { AgentResponse, ChangeSetVerifier, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from '@otterpatch/agent';
-import type { ApprovalPolicy, ChangeSet, ChangeSetRiskContext, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
+import type { ApprovalPolicy, CellValue, ChangeSet, ChangeSetRiskContext, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
 import {
   CAPABILITY_MANIFEST_VERSION,
   DEFAULT_POLICY,
   RESOURCE_LIMITS,
   ResourceLimitError,
+  a1RangeCellCount,
   assertChangeSet,
   assertFormatCapabilities,
+  assertJsonBudget,
   capabilityManifests,
   decideApproval,
   isResourceLimitError,
+  supportsFormatOperation,
 } from '@otterpatch/core';
 import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
-import { buildXlsxCompiler, buildGridVerifier } from '@otterpatch/adapter-univer';
+import {
+  GridChangeSetEngine,
+  buildXlsxCompiler,
+  buildGridVerifier,
+  gridShadowFromSnapshot,
+  sheetSnapshotContains,
+  type GridShadow,
+  type SheetSnapshot,
+} from '@otterpatch/adapter-univer';
 import { DrawioSurgicalWriteback } from '@otterpatch/adapter-drawio';
 import { WordRedlineWriteback } from '@otterpatch/adapter-word';
 import { PdfFormWriteback } from '@otterpatch/adapter-pdf';
 import { buildPptxCompiler } from '@otterpatch/adapter-pptx';
 import { defaultLibrary } from '@otterpatch/skills';
 import type { SkillLibrary } from '@otterpatch/skills';
-import { buildDiff, type OtterPatchDiff } from './diff.js';
+import {
+  buildDiff,
+  type DiffObservation,
+  type DiffSupport,
+  type OtterPatchDiff,
+  type OtterPatchDiffEffect,
+} from './diff.js';
 import type { OtterPatchEvent, OtterPatchEventListener } from './events.js';
 import { ReviewAuthority, sha256Bytes, type ProposalEnvelope, type ReviewedProposal, type ReviewReceipt } from './review.js';
 
@@ -45,6 +62,15 @@ export interface CommitInput {
   proposal?: ProposalEnvelope;
   reviewReceipt?: ReviewReceipt;
   /** Trusted host observations used to classify scope-sensitive risk. */
+  riskContext?: ChangeSetRiskContext;
+}
+
+export interface DiffInput {
+  /** Required for a format-engine preview. Inferred conservatively when omitted. */
+  format?: string;
+  /** Read-only sheet snapshot used to construct an isolated Excel shadow. */
+  sheet?: SheetSnapshot;
+  /** Trusted host observations used by the contextual risk assessment. */
   riskContext?: ChangeSetRiskContext;
 }
 
@@ -205,11 +231,22 @@ export class OtterPatchRuntime {
   }
 
   /** ChangeSet → reviewable diff. */
-  diff(cs: ChangeSet): OtterPatchDiff {
+  async diff(cs: ChangeSet, input: DiffInput = {}): Promise<OtterPatchDiff> {
     assertChangeSet(cs);
-    const d = buildDiff(cs);
-    this.emit({ type: 'diff:done', diff: d });
-    return d;
+    try {
+      if (input.sheet) {
+        assertJsonBudget(input.sheet, 'sheet_snapshot');
+        assertSheetSnapshotBudget(input.sheet);
+      }
+      const format = (input.format ?? inferFormat(cs)).toLowerCase();
+      const observation = await buildDiffObservation(cs, format, input.sheet, input.riskContext);
+      const diff = buildDiff(cs, observation);
+      this.emit({ type: 'diff:done', diff });
+      return diff;
+    } catch (err) {
+      this.emit({ type: 'error', stage: 'diff', message: errMsg(err) });
+      throw err;
+    }
   }
 
   /** Sign a model proposal before it is shown for review. The source file is bound when review completes. */
@@ -400,6 +437,156 @@ function filterAcceptedEdits(cs: ChangeSet, acceptedEditIds: string[]): ChangeSe
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+const GRID_PREVIEW_OPS = new Set(['setValue', 'setFormula', 'deleteRange']);
+
+function inferFormat(cs: ChangeSet): string {
+  const kinds = new Set(Object.values(cs.anchors).map((anchor) => anchor.portable.kind));
+  if (kinds.size === 1 && kinds.has('grid')) return 'excel';
+  if (kinds.size === 1 && kinds.has('flow')) return 'word';
+  if (kinds.size === 1 && kinds.has('object')) return 'drawio';
+  return 'unknown';
+}
+
+async function buildDiffObservation(
+  cs: ChangeSet,
+  format: string,
+  sheet: SheetSnapshot | undefined,
+  riskContext: ChangeSetRiskContext | undefined,
+): Promise<DiffObservation> {
+  const base: DiffObservation = {
+    format,
+    ...(riskContext ? { riskContext } : {}),
+  };
+  if (format !== 'excel' && format !== 'xlsx') {
+    return { ...base, unavailableReason: `No ${format} shadow preview engine is registered.` };
+  }
+  if (!sheet) {
+    return { ...base, unavailableReason: 'Excel diff requires a read-only sheet snapshot.' };
+  }
+
+  const supportByEdit: Record<string, DiffSupport> = {};
+  for (const edit of cs.edits) {
+    const anchor = cs.anchors[edit.target];
+    const cellCount = anchor?.portable.kind === 'grid' ? a1RangeCellCount(anchor.portable.a1) : null;
+    if (!supportsFormatOperation(format, edit.op.kind, 'preview') || !supportsFormatOperation(format, edit.op.kind, 'writeback')) {
+      supportByEdit[edit.id] = 'unsupported';
+    } else if (
+      GRID_PREVIEW_OPS.has(edit.op.kind)
+      && cellCount === 1
+      && anchor?.portable.kind === 'grid'
+      && sheetSnapshotContains(sheet, anchor.portable.a1, anchor.portable.sheet)
+    ) {
+      supportByEdit[edit.id] = 'verified';
+    } else {
+      supportByEdit[edit.id] = 'partial';
+    }
+  }
+
+  const executable = cs.edits.filter((edit) => supportByEdit[edit.id] === 'verified');
+  if (!executable.length) {
+    return {
+      ...base,
+      supportByEdit,
+      unavailableReason: 'The Excel shadow engine did not simulate any proposed operations.',
+    };
+  }
+
+  try {
+    const initial = gridShadowFromSnapshot(sheet);
+    const beforeGrid = cloneGrid(initial);
+    const afterGrid = cloneGrid(initial);
+    const engine = new GridChangeSetEngine();
+    const beforeResult = await engine.shadowApply({ ...cs, edits: [] }, beforeGrid);
+    const shadow = await engine.shadowApply({ ...cs, edits: executable }, afterGrid);
+    const indirectEffects = formulaEffects(
+      cs,
+      executable.map((edit) => edit.id),
+      sheet,
+      initial,
+      afterGrid,
+      beforeResult.effects.recalculated ?? [],
+      shadow.effects.recalculated ?? [],
+    );
+    const partialCount = Object.values(supportByEdit).filter((support) => support !== 'verified').length;
+    return {
+      ...base,
+      shadow,
+      supportByEdit,
+      indirectEffects,
+      ...(partialCount ? { unavailableReason: `${partialCount} operation(s) were not fully simulated.` } : {}),
+    };
+  } catch (error) {
+    for (const editId of Object.keys(supportByEdit)) {
+      if (supportByEdit[editId] === 'verified') supportByEdit[editId] = 'partial';
+    }
+    return {
+      ...base,
+      supportByEdit,
+      unavailableReason: `Excel shadow preview failed: ${errMsg(error)}`,
+    };
+  }
+}
+
+function cloneGrid(grid: GridShadow): GridShadow {
+  return new Map([...grid].map(([ref, cell]) => [ref, { ...cell }]));
+}
+
+function bareGridRef(value: string): string {
+  return value.replace(/^.*!/, '').replace(/\$/g, '').toUpperCase();
+}
+
+function formulaEffects(
+  cs: ChangeSet,
+  editIds: string[],
+  sheet: SheetSnapshot,
+  beforeGrid: GridShadow,
+  afterGrid: GridShadow,
+  beforeRows: CellValue[][],
+  afterRows: CellValue[][],
+): OtterPatchDiffEffect[] {
+  const directTargets = new Set(
+    cs.edits
+      .filter((edit) => editIds.includes(edit.id))
+      .map((edit) => cs.anchors[edit.target])
+      .filter((anchor) => anchor?.portable.kind === 'grid')
+      .map((anchor) => bareGridRef(anchor!.portable.kind === 'grid' ? anchor!.portable.a1 : '')),
+  );
+  const before = recalculatedMap(beforeRows);
+  const after = recalculatedMap(afterRows);
+  const refs = new Set([...before.keys(), ...after.keys()]);
+  const sheetName = sheet.name ?? (/^(.*?)!/.exec(sheet.a1)?.[1]?.replace(/^'|'$/g, ''));
+  const effects: OtterPatchDiffEffect[] = [];
+  for (const ref of refs) {
+    if (directTargets.has(ref)) continue;
+    const beforeValue = before.get(ref);
+    const afterValue = after.get(ref);
+    const beforeFormula = beforeGrid.get(ref)?.formula;
+    const afterFormula = afterGrid.get(ref)?.formula;
+    if (Object.is(beforeValue, afterValue) && beforeFormula === afterFormula) continue;
+    const target = sheetName ? `${sheetName}!${ref}` : ref;
+    const effect: OtterPatchDiffEffect = {
+      target,
+      kind: 'formula-recalculation',
+      summary: `formula recalculated at ${target}`,
+      editIds: [...editIds],
+    };
+    if (before.has(ref)) effect.before = { kind: 'cell', value: beforeValue ?? null, ...(beforeFormula ? { formula: beforeFormula } : {}) };
+    if (after.has(ref)) effect.after = { kind: 'cell', value: afterValue ?? null, ...(afterFormula ? { formula: afterFormula } : {}) };
+    effects.push(effect);
+  }
+  return effects;
+}
+
+function recalculatedMap(rows: CellValue[][]): Map<string, CellValue> {
+  const result = new Map<string, CellValue>();
+  for (const row of rows) {
+    const ref = row[0];
+    if (typeof ref !== 'string') continue;
+    result.set(ref.toUpperCase(), row[1] ?? null);
+  }
+  return result;
 }
 
 /**

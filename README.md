@@ -52,7 +52,7 @@ OtterPatch ships as an MCP server so any agent / IDE can drive the propose → r
 ```text
 otterpatch_skills   list built-in document skills
 otterpatch_propose  intent (+ selection context) → constrained ChangeSet + reviewable diff   (BYOK)
-otterpatch_diff     ChangeSet → reviewable diff
+otterpatch_diff     ChangeSet + read-only host snapshot → shadow-derived diff (missing snapshot is reported as unavailable)
 otterpatch_commit   signed proposal + review receipt + file → surgical write-back + fidelity report
 ```
 

@@ -41,7 +41,7 @@ OtterPatch 是位于 LLM Agent 与你的 Office 文档之间的**安全提交层
 | `packages/core` | 与格式无关的类型：`Anchor`、`ChangeSet`、`EditOp`、`AbstractStyle`、适配器注册表、回写契约 |
 | `packages/agent` | 意图 → 受约束的 `ChangeSet`。与提供商无关的 `ModelClient`（Claude 原生 + OpenAI 兼容 ×8）。多步循环、读取工具、校验器均在此包 |
 | `packages/skills` | 技能中枢：SKILL.md 解析、匹配、渐进式披露，内置能力卡片 + 领域剧本（playbook） |
-| `packages/runtime` | 无头编排器：`propose → diff → commit` + JSON 事件流。校验器注册表 + 最终自检包装器。由 MCP 服务器、CLI、桌面端共用 |
+| `packages/runtime` | 无头编排器：`propose → 影子结果 diff → commit` + JSON 事件流。diff 会区分真实观测的 before/after 与提案数据；缺少快照时显式返回 unavailable。由 MCP 服务器、CLI、桌面端共用 |
 | `packages/adapter-*` | 按格式的编译/回写：`univer`（Excel）、`word`（修订标记 `w:ins`/`w:del` + `rPrChange`/`pPrChange`）、`drawio`、`pdf`（AcroForm）、`pptx` |
 | `packages/writeback-surgical` | OOXML 外科手术式回写引擎（已验证：在一个真实的 531 KB docx 上，31 个部件中 30 个字节级一致） |
 | `apps/desktop` | 座舱 UI（Vite + React + Electron）：工作区（Univer 表格、富文本 Word、drawio 画板）、审阅栏、BYOK 模型面板 |

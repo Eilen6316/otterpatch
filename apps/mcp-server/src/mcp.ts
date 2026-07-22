@@ -34,6 +34,14 @@ const failWith = (stage: string, error: unknown) => isResourceLimitError(error)
 
 const server = new McpServer({ name: 'otterpatch', version: '0.0.1' });
 
+const sheetSchema = z.object({
+  a1: z.string(),
+  values: z.array(z.array(z.unknown())),
+  formulas: z.array(z.array(z.string().nullable())).optional(),
+  name: z.string().optional(),
+  names: z.array(z.string()).optional(),
+});
+
 server.registerTool(
   'otterpatch_skills',
   { description: 'List OtterPatch built-in (universal) document skills (xlsx/docx/pptx/pdf/drawio).', inputSchema: {} },
@@ -54,12 +62,7 @@ server.registerTool(
       provider: z.string().default('claude').describe('claude | openai | deepseek | glm | kimi | doubao | minimax | gemini'),
       model: z.string().optional(),
       apiKey: z.string().optional(),
-      sheet: z.object({
-        a1: z.string(),
-        values: z.array(z.array(z.unknown())),
-        name: z.string().optional(),
-        names: z.array(z.string()).optional(),
-      }).optional(),
+      sheet: sheetSchema.optional(),
       doc: z.object({ blocks: z.array(z.object({ style: z.string(), text: z.string(), font: z.string().optional(), size: z.number().optional(), align: z.string().optional(), lineSpacing: z.number().optional() })) }).optional(),
       history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).optional(),
     },
@@ -86,7 +89,7 @@ server.registerTool(
       );
       if (r.kind === 'answer') return ok({ answer: r.text });
       if (r.kind === 'clarify') return ok({ questions: r.questions });
-      return ok({ changeSet: r.changeSet, diff: rt.diff(r.changeSet), proposal: rt.createProposal(r.changeSet, a.format, a.documentId ?? r.changeSet.hostId) });
+      return ok({ changeSet: r.changeSet, diff: await rt.diff(r.changeSet, { format: a.format, ...(a.sheet ? { sheet: a.sheet } : {}) }), proposal: rt.createProposal(r.changeSet, a.format, a.documentId ?? r.changeSet.hostId) });
     } catch (e) {
       return failWith('propose', e);
     }
@@ -95,12 +98,19 @@ server.registerTool(
 
 server.registerTool(
   'otterpatch_diff',
-  { description: 'Render a reviewable diff for a ChangeSet (passed as JSON string).', inputSchema: { changeSet: z.string().describe('ChangeSet JSON') } },
+  {
+    description: 'Render a reviewable diff from a ChangeSet and a read-only host snapshot. Without a snapshot the result is explicitly marked unavailable.',
+    inputSchema: {
+      changeSet: z.string().describe('ChangeSet JSON'),
+      format: z.string().optional().describe('excel | drawio | word | ...; inferred conservatively when omitted'),
+      sheet: sheetSchema.optional().describe('required for a shadow-derived Excel preview'),
+    },
+  },
   async (a) => {
     try {
       const changeSet = JSON.parse(a.changeSet) as ChangeSet;
       assertChangeSet(changeSet);
-      return ok(rt.diff(changeSet));
+      return ok(await rt.diff(changeSet, { ...(a.format ? { format: a.format } : {}), ...(a.sheet ? { sheet: a.sheet } : {}) }));
     } catch (e) {
       return failWith('diff', e);
     }

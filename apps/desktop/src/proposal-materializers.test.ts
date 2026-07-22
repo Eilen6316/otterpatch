@@ -89,6 +89,22 @@ test('materializeGridOps separates cell values, styles, and structural operation
   ]);
 });
 
+test('materializeGridOps preserves typed shadow values, formulas, null, and explicit false styles', () => {
+  const result = materializeGridOps(diff([
+    { editId: 'number', ref: 'A1', kind: 'setValue', badge: 'modify', label: 'number', after: { kind: 'cell', value: 42 } },
+    { editId: 'formula', ref: 'A2', kind: 'setFormula', badge: 'modify', label: 'formula', after: { kind: 'cell', value: 84, formula: '=A1*2' } },
+    { editId: 'clear', ref: 'A3', kind: 'setValue', badge: 'modify', label: 'clear', proposedAfter: { kind: 'cell', value: null } },
+    { editId: 'unbold', ref: 'A4', kind: 'setStyle', badge: 'modify', label: 'unbold', style: { bold: false } },
+  ]));
+
+  assert.deepEqual(result, [
+    { a1: 'A1', value: 42, note: 'number', editId: 'number' },
+    { a1: 'A2', value: '=A1*2', note: 'formula', editId: 'formula' },
+    { a1: 'A3', value: null, note: 'clear', editId: 'clear' },
+    { a1: 'A4', bold: false, note: 'unbold', editId: 'unbold' },
+  ]);
+});
+
 test('materializeAddedBoardObjects preserves references and resolves collisions and parent coordinates', () => {
   const changeSet = {
     edits: [

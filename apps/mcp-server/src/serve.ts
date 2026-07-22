@@ -3,12 +3,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomBytes } from 'node:crypto';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
 import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, isResourceLimitError } from '@otterpatch/core';
-import { createModelClient, type Provider } from '@otterpatch/agent';
+import { createModelClient, type ProposeRequest, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
 import { OtterPatchRuntime, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
 import { decodeDocumentBase64 } from './document-input.js';
 
 const rt = new OtterPatchRuntime();
+type SheetInput = NonNullable<ProposeRequest['sheet']>;
 const PORT = Number(process.env.OtterPatch_PORT ?? 4319);
 const HOST = '127.0.0.1';
 const DEFAULT_MAX_BODY_BYTES = RESOURCE_LIMITS.httpBodyBytes;
@@ -150,7 +151,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
             baseRev: readDocRev(a.baseRev, 0),
             anchors: [],
             context: String(a.context ?? ''),
-            ...(a.sheet ? { sheet: a.sheet as { a1: string; values: unknown[][]; name?: string; names?: string[] } } : {}),
+            ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}),
             ...(a.doc ? { doc: a.doc as { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> } } : {}),
             ...(Array.isArray(a.history) ? { history: a.history as Array<{ role: 'user' | 'assistant'; content: string }> } : {}),
           },
@@ -158,7 +159,11 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         );
         if (r.kind === 'answer') send(req, res, 200, { answer: r.text });
         else if (r.kind === 'clarify') send(req, res, 200, { questions: r.questions });
-        else send(req, res, 200, { changeSet: r.changeSet, diff: rt.diff(r.changeSet), proposal: rt.createProposal(r.changeSet, String(a.format), String(a.documentId ?? r.changeSet.hostId)) });
+        else send(req, res, 200, {
+          changeSet: r.changeSet,
+          diff: await rt.diff(r.changeSet, { format: String(a.format), ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}) }),
+          proposal: rt.createProposal(r.changeSet, String(a.format), String(a.documentId ?? r.changeSet.hostId)),
+        });
         return;
       }
       if (req.method === 'POST' && url === '/propose-stream') {
@@ -170,7 +175,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
         const sse = (e: unknown): void => { res.write(`data: ${JSON.stringify(e)}\n\n`); };
         try {
-          await rt.respondStream(
+          const result = await rt.respondStream(
             {
               hostId: 'serve',
               format: String(a.format),
@@ -178,21 +183,26 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               baseRev: readDocRev(a.baseRev, 0),
               anchors: [],
               context: String(a.context ?? ''),
-              ...(a.sheet ? { sheet: a.sheet as { a1: string; values: unknown[][]; name?: string; names?: string[] } } : {}),
+              ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}),
               ...(a.doc ? { doc: a.doc as { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> } } : {}),
               ...(Array.isArray(a.history) ? { history: a.history as Array<{ role: 'user' | 'assistant'; content: string }> } : {}),
             },
             model,
-            (e) => {
-              if (e.type === 'done') {
-                if (e.result.kind === 'changeset') sse({ type: 'done', kind: 'changeset', changeSet: e.result.changeSet, diff: rt.diff(e.result.changeSet), proposal: rt.createProposal(e.result.changeSet, String(a.format), String(a.documentId ?? e.result.changeSet.hostId)) });
-                else if (e.result.kind === 'clarify') sse({ type: 'done', kind: 'clarify', questions: e.result.questions });
-                else sse({ type: 'done', kind: 'answer', text: e.result.text });
-              } else {
-                sse(e);
-              }
-            },
+            (e) => { if (e.type !== 'done') sse(e); },
           );
+          if (result.kind === 'changeset') {
+            sse({
+              type: 'done',
+              kind: 'changeset',
+              changeSet: result.changeSet,
+              diff: await rt.diff(result.changeSet, { format: String(a.format), ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}) }),
+              proposal: rt.createProposal(result.changeSet, String(a.format), String(a.documentId ?? result.changeSet.hostId)),
+            });
+          } else if (result.kind === 'clarify') {
+            sse({ type: 'done', kind: 'clarify', questions: result.questions });
+          } else {
+            sse({ type: 'done', kind: 'answer', text: result.text });
+          }
         } catch (err) {
           sse({ type: 'error', message: emsg(err) });
         }

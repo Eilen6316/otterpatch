@@ -39,21 +39,53 @@ export interface AgentStyle {
   numberFormat?: string;
 }
 
+export type AgentPreviewValue =
+  | { kind: 'cell'; value: string | number | boolean | null; formula?: string }
+  | { kind: 'text'; runs: Array<{ text: string; marks?: unknown[] }> }
+  | { kind: 'object'; box: { left: number; top: number; width: number; height: number; rotate: number }; props?: Record<string, unknown> };
+
 export interface AgentDiffItem {
   editId: string;
   ref: string;
   kind?: string;
   badge: string;
   label: string;
-  after?: string;
+  before?: AgentPreviewValue;
+  /** Structured shadow result. A string is accepted only for old persisted turns. */
+  after?: AgentPreviewValue | string;
+  proposedAfter?: AgentPreviewValue;
+  proposalSummary?: string;
   style?: AgentStyle;
+  backendSupport?: 'verified' | 'partial' | 'unsupported';
+  affectedCount?: number;
+  boundary?: string;
 }
 
 export interface AgentDiff {
   changeSetId: string;
   hostId: string;
   intent: string;
+  format?: string;
+  previewStatus?: 'verified' | 'partial' | 'unavailable';
+  unavailableReason?: string;
   items: AgentDiffItem[];
+}
+
+export function previewValueText(value: AgentPreviewValue | string | undefined): string {
+  if (typeof value === 'string') return value;
+  if (!value) return '';
+  if (value.kind === 'cell') {
+    const displayed = value.value === null ? 'null' : value.value === '' ? '""' : String(value.value);
+    return value.formula ? `${value.formula} -> ${displayed}` : displayed;
+  }
+  if (value.kind === 'text') return value.runs.map((run) => run.text).join('');
+  return JSON.stringify(value.props ?? value.box);
+}
+
+function gridValueFromPreview(value: AgentPreviewValue | string | undefined): { present: boolean; value?: unknown } {
+  if (typeof value === 'string') return { present: true, value };
+  if (!value || value.kind !== 'cell') return { present: false };
+  return { present: true, value: value.formula ?? value.value };
 }
 
 export interface BoardObject {
@@ -166,7 +198,7 @@ export function materializeWordEdits(diff: AgentDiff, changeSet: unknown): WordE
       };
     }
     if (record?.op?.kind === 'setStyle') return { ...base, style: record.op.style ?? {} };
-    return { ...base, replacement: record?.op?.text ?? (item.after ?? '') };
+    return { ...base, replacement: record?.op?.text ?? previewValueText(item.after ?? item.proposedAfter) };
   });
 }
 
@@ -184,15 +216,16 @@ export function materializeGridOps(diff: AgentDiff): GridOp[] {
           ...(style?.numberFormat ? { numFmt: style.numberFormat } : {}),
           ...(style?.bgColor ? { bg: style.bgColor } : {}),
           ...(style?.color ? { color: style.color } : {}),
-          ...(style?.bold ? { bold: true } : {}),
+          ...(style?.bold !== undefined ? { bold: style.bold } : {}),
           ...(align ? { align } : {}),
           note: item.label ?? item.badge,
           editId: item.editId,
         };
       }
+      const preview = gridValueFromPreview(item.after ?? item.proposedAfter);
       return {
         a1: item.ref,
-        ...(item.after != null ? { value: item.after } : {}),
+        ...(preview.present ? { value: preview.value } : {}),
         note: item.label ?? item.badge,
         editId: item.editId,
       };
