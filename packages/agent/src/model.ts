@@ -17,7 +17,7 @@ export interface ProposeRequest {
   /** Internal validator feedback for a retry. Kept separate from untrusted document context. */
   proposalFeedback?: string[];
   /** Full sheet data (passed locally to serve, not stuffed into the model prompt; consumed on demand by the read_range/aggregate tools). */
-  sheet?: { a1: string; values: unknown[][] };
+  sheet?: { a1: string; values: unknown[][]; name?: string; names?: string[] };
   /** Full Word document snapshot (per-paragraph text + styles; likewise not in the prompt, fetched on demand via read_blocks/find_text/get_outline/get_style_usage). */
   doc?: { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> };
   /** Multi-turn conversation history (user messages + agent answers/change summaries) so this request carries context. */

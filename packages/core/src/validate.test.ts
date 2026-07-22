@@ -65,6 +65,63 @@ test('assertChangeSet rejects malformed op payloads', () => {
   assert.throws(() => assertChangeSet(invalid), /insertText requires text and at/);
 });
 
+test('assertChangeSet rejects non-finite cell values and mutually exclusive op fields', () => {
+  const cs = validChangeSet();
+  for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const invalid = { ...cs, edits: [{ ...cs.edits[0], op: { family: 'value', kind: 'setValue', value } }] };
+    assert.throws(() => assertChangeSet(invalid), /non-finite/);
+  }
+  const extraFormula = { ...cs, edits: [{ ...cs.edits[0], op: { family: 'value', kind: 'setValue', value: 1, formula: '=1' } }] };
+  assert.throws(() => assertChangeSet(extraFormula), /unsupported fields: formula/);
+});
+
+test('assertChangeSet validates style and object operation semantics', () => {
+  const cs = validChangeSet();
+  const withOp = (op: unknown) => ({ ...cs, edits: [{ ...cs.edits[0], op }] });
+
+  assert.doesNotThrow(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', style: { bold: false, color: '#c00000', size: 12 } })));
+  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', style: {} })), /at least one property/);
+  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', style: { color: '#fff\" bad=\"1' } })), /hex color/);
+  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', style: { mystery: true } })), /unsupported fields: mystery/);
+
+  assert.doesNotThrow(() => assertChangeSet(withOp({ family: 'object', kind: 'moveObject', box: { left: 0, top: -5, width: 10 } })));
+  assert.throws(() => assertChangeSet(withOp({ family: 'object', kind: 'moveObject', box: {} })), /at least one coordinate/);
+  assert.throws(() => assertChangeSet(withOp({ family: 'object', kind: 'moveObject', box: { width: 0 } })), /must be positive/);
+  assert.doesNotThrow(() => assertChangeSet(withOp({ family: 'object', kind: 'setObjectProps', props: { value: '', style: 'rounded=1;' } })));
+  assert.doesNotThrow(() => assertChangeSet(withOp({ family: 'object', kind: 'setObjectProps', props: { imgAction: 'resize', width: 320 } })));
+  assert.throws(() => assertChangeSet(withOp({ family: 'object', kind: 'setObjectProps', props: {} })), /non-empty object/);
+  assert.doesNotThrow(() => assertChangeSet(withOp({ family: 'object', kind: 'addObject', payload: { id: 'n1', vertex: true, parent: '1', geometry: { x: 0, y: 0, width: 80, height: 40 } } })));
+  assert.throws(() => assertChangeSet(withOp({ family: 'object', kind: 'addObject', payload: { id: 'n1', vertex: true, parent: '1', geometry: { x: Number.NaN } } })), /must be finite/);
+});
+
+test('assertChangeSet validates chart, conditional-format, and data-validation payloads', () => {
+  const cs = validChangeSet();
+  const withOp = (op: unknown) => ({ ...cs, edits: [{ ...cs.edits[0], op }] });
+
+  assert.doesNotThrow(() => assertChangeSet(withOp({
+    family: 'object', kind: 'insertChart', chartType: 'bar', title: 'Sales',
+    categories: ['Jan', 'Feb'], series: [{ name: 'Revenue', data: [1, 2] }],
+  })));
+  assert.throws(() => assertChangeSet(withOp({
+    family: 'object', kind: 'insertChart', chartType: 'bar', title: 'Sales',
+    categories: ['Jan'], series: [{ name: 'Revenue', data: [1, 2] }],
+  })), /length mismatch/);
+
+  assert.doesNotThrow(() => assertChangeSet(withOp({ family: 'style', kind: 'conditionalFormat', when: 'between', v1: 1, v2: 5, style: { bold: true } })));
+  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'conditionalFormat', when: 'between', v1: 5, v2: 1, style: { bold: true } })), /ordered numeric/);
+  assert.doesNotThrow(() => assertChangeSet(withOp({ family: 'style', kind: 'dataValidation', rule: 'list', list: ['A', 'B'] })));
+  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'dataValidation', rule: 'list' })), /non-empty string list/);
+});
+
+test('assertChangeSet binds rawHost operations to the ChangeSet host and requires an inverse', () => {
+  const cs = validChangeSet();
+  const raw = { family: 'raw', kind: 'rawHost', hostId: cs.hostId, payload: { command: 'x' } };
+  const valid = { ...cs, edits: [{ ...cs.edits[0], op: raw, inverse: { family: 'value', kind: 'setValue', value: 1 } }] };
+  assert.doesNotThrow(() => assertChangeSet(valid));
+  assert.throws(() => assertChangeSet({ ...cs, edits: [{ ...cs.edits[0], op: raw }] }), /requires an inverse/);
+  assert.throws(() => assertChangeSet({ ...valid, edits: [{ ...valid.edits[0], op: { ...raw, hostId: 'other' } }] }), /must match ChangeSet.hostId/);
+});
+
 test('assertChangeSet validates structured Word table payloads', () => {
   const cs = validChangeSet();
   const valid = {

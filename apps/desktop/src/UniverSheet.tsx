@@ -205,7 +205,7 @@ function snap(wb: FWorkbookLike | null | undefined): UniSel | null {
   try {
     const range = wb?.getActiveRange() ?? null;
     // 整张表(used range)—— 与选区无关,始终构建,这样没圈选也能"看全局"
-    const ws = (wb as unknown as { getActiveSheet?: () => { getDataRange?: () => { getA1Notation?: () => string; getValues?: () => unknown[][] } } | null } | null)?.getActiveSheet?.();
+    const ws = (wb as unknown as { getActiveSheet?: () => { getName?: () => string; getDataRange?: () => { getA1Notation?: () => string; getValues?: () => unknown[][] } } | null } | null)?.getActiveSheet?.();
     const dr = ws?.getDataRange?.();
     const sheetA1 = dr?.getA1Notation?.();
     const sheetVals = dr?.getValues?.() as unknown[][] | undefined;
@@ -256,7 +256,7 @@ function snap(wb: FWorkbookLike | null | undefined): UniSel | null {
     }
 
     const text = `[整张表] 范围 ${sA1}(${R} 行 × ${C} 列)\n列概览: ${colLegend}\n数据(单元格=值):\n${dataBlock}${focusText}`;
-    return { a1, rows, cols, text, sheet: { a1: sA1, values: sVals.slice(0, 3000) } };
+    return { a1, rows, cols, text, sheet: { a1: sA1, values: sVals.slice(0, 3000), ...(ws?.getName?.() ? { name: ws.getName() } : {}) } };
   } catch {
     return null;
   }

@@ -46,6 +46,41 @@ test('Agent capability surfaces expose only operations with verified writeback',
   assert.doesNotMatch(wordDialect.systemPrompt + JSON.stringify(wordDialect.parameters), /all=true|"all"/);
 });
 
+test('Excel tool schema and builder discriminate operations without dangerous defaults', () => {
+  const parameters = excelDialect.parameters as {
+    properties: { edits: { items: { oneOf: Array<{ additionalProperties: boolean; required: string[]; properties: { op: { enum: string[] } } }> } } };
+  };
+  const variants = parameters.properties.edits.items.oneOf;
+  assert.deepEqual(variants.map((variant) => variant.properties.op.enum[0]), ['setValue', 'setFormula', 'setStyle', 'setNumberFormat', 'clear']);
+  assert.deepEqual(variants.map((variant) => variant.required), [
+    ['cell', 'op', 'value'],
+    ['cell', 'op', 'formula'],
+    ['cell', 'op', 'style'],
+    ['cell', 'op', 'pattern'],
+    ['cell', 'op'],
+  ]);
+  assert.ok(variants.every((variant) => variant.additionalProperties === false));
+
+  const request = { hostId: 'h1', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '', sheet: { name: 'Current', a1: 'A1', values: [[1]] } };
+  for (const edit of [
+    { cell: 'A1', op: 'setValue' },
+    { cell: 'A1', op: 'setFormula' },
+    { cell: 'A1', op: 'setStyle' },
+    { cell: 'A1', op: 'setNumberFormat' },
+    { cell: 'A1', op: 'clear', value: 1 },
+  ]) {
+    assert.throws(() => excelDialect.buildChangeSet(request, { plan: 'x', edits: [edit] }), /required|unsupported fields/);
+  }
+
+  const unqualified = excelDialect.buildChangeSet(request, { plan: 'x', edits: [{ cell: 'A1', op: 'setValue', value: null }] });
+  const anchor = unqualified.anchors[unqualified.edits[0]!.target]!;
+  assert.equal(anchor.portable.kind === 'grid' ? anchor.portable.sheet : '', 'Current');
+  assert.throws(
+    () => excelDialect.buildChangeSet({ ...request, sheet: undefined }, { plan: 'x', edits: [{ cell: 'A1', op: 'setValue', value: 1 }] }),
+    /requires the current sheet name/,
+  );
+});
+
 test('Agent word: 二维 table 提案 → insertTable ChangeSet', async () => {
   const mock = new MockModelClient(() => ({
     plan: '插入对照表',
@@ -83,7 +118,7 @@ test('Agent: 未知格式抛错', async () => {
 
 test('Agent + SkillLibrary: 命中技能注入系统提示,不影响产出', async () => {
   const lib = defaultLibrary();
-  const mock = new MockModelClient(() => ({ plan: 'x', edits: [{ cell: 'A1', op: 'setValue', value: 1 }] }));
+  const mock = new MockModelClient(() => ({ plan: 'x', edits: [{ cell: 'Sheet1!A1', op: 'setValue', value: 1 }] }));
   const cs = await new Agent(mock, undefined, lib).propose({
     hostId: 'h1',
     format: 'excel',
@@ -113,7 +148,7 @@ test('conventionFromMarkdown: 去 frontmatter 取正文', () => {
 
 test('Agent + 约定 + 技能:都注入系统提示,不破坏产出', async () => {
   const conv = new ConventionStack().add({ scope: 'global', text: '数字保留两位小数' });
-  const mock = new MockModelClient(() => ({ plan: 'x', edits: [{ cell: 'A1', op: 'setValue', value: 1 }] }));
+  const mock = new MockModelClient(() => ({ plan: 'x', edits: [{ cell: 'Sheet1!A1', op: 'setValue', value: 1 }] }));
   const cs = await new Agent(mock, undefined, defaultLibrary(), conv).propose({
     hostId: 'h1',
     format: 'excel',
@@ -129,7 +164,7 @@ test('Agent reask: 校验失败 → 同回合重试修正', async () => {
   let n = 0;
   const mock = new MockModelClient(() => {
     n++;
-    return { plan: 'x', edits: n < 2 ? [] : [{ cell: 'A1', op: 'setValue', value: 1 }] };
+    return { plan: 'x', edits: n < 2 ? [] : [{ cell: 'Sheet1!A1', op: 'setValue', value: 1 }] };
   });
   const cs = await new Agent(mock, undefined, undefined, undefined, {
     validator: (c) => ({ ok: c.edits.length > 0, errors: c.edits.length ? [] : ['edits 不能为空'] }),

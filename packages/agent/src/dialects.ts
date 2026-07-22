@@ -2,7 +2,7 @@
  * Host dialects: Excel (A1 + setValue/setFormula) and drawio (mxCell id + add/update/delete/move).
  * Each format has its own system prompt, tool schema, and raw-proposal → ChangeSet construction.
  */
-import { RESOURCE_LIMITS, ResourceLimitError, proposalOperationNamesFor } from '@otterpatch/core';
+import { MAX_FORMULA_CHARS, RESOURCE_LIMITS, ResourceLimitError, assertA1RangeBudget, proposalOperationNamesFor } from '@otterpatch/core';
 import type { AnchorId, CellValue, ChangeSet, Edit, EditOp, EditOpKind, HostId, LogicalAnchor } from '@otterpatch/core';
 import type { HostDialect, ProposeRequest } from './model.js';
 import {
@@ -52,28 +52,101 @@ const EXCEL_OP_BY_NAME = {
 export type ExcelOp = keyof typeof EXCEL_OP_BY_NAME;
 export const EXCEL_OPS = proposalOperationNamesFor('excel') as ExcelOp[];
 if (EXCEL_OPS.some((op) => !(op in EXCEL_OP_BY_NAME))) throw new Error('Excel capability manifest has no dialect mapping');
+export type ExcelProposalEdit =
+  | { cell: string; op: 'setValue'; value: CellValue }
+  | { cell: string; op: 'setFormula'; formula: string }
+  | { cell: string; op: 'setStyle'; style: ExcelStyle }
+  | { cell: string; op: 'setNumberFormat'; pattern: string }
+  | { cell: string; op: 'clear' };
+
 export interface ExcelProposal {
   plan: string;
-  edits: Array<{
-    cell: string;
-    op: ExcelOp;
-    value?: CellValue;
-    formula?: string;
-    style?: ExcelStyle;
-    pattern?: string; // setNumberFormat number format, e.g. 0% / "¥"#,##0.00
-  }>;
+  edits: ExcelProposalEdit[];
 }
 
-function sheetOf(cell: string): string {
-  const i = cell.indexOf('!');
-  return i >= 0 ? cell.slice(0, i).replace(/^'|'$/g, '') : 'Sheet1';
+function sheetOf(req: ProposeRequest, cell: string): string {
+  const i = cell.lastIndexOf('!');
+  if (i >= 0) {
+    const raw = cell.slice(0, i).trim();
+    const name = raw.startsWith("'") && raw.endsWith("'") ? raw.slice(1, -1).replace(/''/g, "'") : raw;
+    if (!name) throw new Error('excel dialect: qualified cell requires a sheet name');
+    return name;
+  }
+  const activeSheet = req.sheet?.name?.trim();
+  if (!activeSheet) throw new Error('excel dialect: unqualified cell requires the current sheet name');
+  return activeSheet;
 }
 
-function buildExcelChangeSet(req: ProposeRequest, p: ExcelProposal): ChangeSet {
+function assertExcelProposal(value: unknown): asserts value is ExcelProposal {
+  if (!isProposalRecord(value)) throw new Error('excel dialect: proposal must be an object');
+  assertProposalKeys(value, new Set(['plan', 'edits']), 'proposal');
+  if (typeof value.plan !== 'string' || !value.plan.trim()) throw new Error('excel dialect: plan is required');
+  if (!Array.isArray(value.edits)) throw new Error('excel dialect: edits must be an array');
+  assertProposalItemCount(value.edits);
+  value.edits.forEach((candidate, index) => {
+    if (!isProposalRecord(candidate)) throw new Error(`excel dialect: edit ${index} must be an object`);
+    if (typeof candidate.cell !== 'string' || !candidate.cell.trim()) throw new Error(`excel dialect: edit ${index} cell is required`);
+    assertA1RangeBudget(candidate.cell);
+    switch (candidate.op) {
+      case 'setValue':
+        assertProposalKeys(candidate, new Set(['cell', 'op', 'value']), `edit ${index}`);
+        if (!isProposalCellValue(candidate.value)) throw new Error(`excel dialect: edit ${index} setValue.value is required and must be finite`);
+        break;
+      case 'setFormula':
+        assertProposalKeys(candidate, new Set(['cell', 'op', 'formula']), `edit ${index}`);
+        if (typeof candidate.formula !== 'string' || !candidate.formula.trim() || candidate.formula.length > MAX_FORMULA_CHARS) throw new Error(`excel dialect: edit ${index} setFormula.formula is required`);
+        break;
+      case 'setStyle':
+        assertProposalKeys(candidate, new Set(['cell', 'op', 'style']), `edit ${index}`);
+        assertExcelStyle(candidate.style, index);
+        break;
+      case 'setNumberFormat':
+        assertProposalKeys(candidate, new Set(['cell', 'op', 'pattern']), `edit ${index}`);
+        if (typeof candidate.pattern !== 'string' || !candidate.pattern.trim()) throw new Error(`excel dialect: edit ${index} setNumberFormat.pattern is required`);
+        break;
+      case 'clear':
+        assertProposalKeys(candidate, new Set(['cell', 'op']), `edit ${index}`);
+        break;
+      default:
+        throw new Error(`excel dialect: edit ${index} has an unsupported op`);
+    }
+  });
+}
+
+function assertExcelStyle(value: unknown, index: number): asserts value is ExcelStyle {
+  if (!isProposalRecord(value)) throw new Error(`excel dialect: edit ${index} setStyle.style is required`);
+  const allowed = new Set(['bold', 'italic', 'color', 'bgColor', 'align']);
+  assertProposalKeys(value, allowed, `edit ${index} style`);
+  if (!Object.keys(value).length) throw new Error(`excel dialect: edit ${index} setStyle.style must not be empty`);
+  if (value.bold !== undefined && typeof value.bold !== 'boolean') throw new Error(`excel dialect: edit ${index} style.bold must be boolean`);
+  if (value.italic !== undefined && typeof value.italic !== 'boolean') throw new Error(`excel dialect: edit ${index} style.italic must be boolean`);
+  for (const key of ['color', 'bgColor'] as const) {
+    if (value[key] !== undefined && (typeof value[key] !== 'string' || !/^#?(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value[key].trim()))) {
+      throw new Error(`excel dialect: edit ${index} style.${key} must be a hex color`);
+    }
+  }
+  if (value.align !== undefined && !['left', 'center', 'right'].includes(String(value.align))) throw new Error(`excel dialect: edit ${index} style.align invalid`);
+}
+
+function isProposalRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function assertProposalKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>, label: string): void {
+  const unknown = Object.keys(value).filter((key) => !allowed.has(key));
+  if (unknown.length) throw new Error(`excel dialect: ${label} contains unsupported fields: ${unknown.join(', ')}`);
+}
+
+function isProposalCellValue(value: unknown): value is CellValue {
+  return value === null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function buildExcelChangeSet(req: ProposeRequest, proposal: unknown): ChangeSet {
+  assertExcelProposal(proposal);
+  const p = proposal;
   const anchors: Record<AnchorId, LogicalAnchor> = {};
   const edits: Edit[] = [];
-  assertProposalItemCount(p.edits ?? []);
-  (p.edits ?? []).forEach((e, i) => {
+  p.edits.forEach((e, i) => {
     const aid = ('a' + i) as AnchorId;
     anchors[aid] = {
       id: aid,
@@ -81,21 +154,51 @@ function buildExcelChangeSet(req: ProposeRequest, p: ExcelProposal): ChangeSet {
       kind: 'grid',
       ref: null,
       baseRev: req.baseRev,
-      portable: { kind: 'grid', sheet: sheetOf(e.cell), a1: e.cell },
+      portable: { kind: 'grid', sheet: sheetOf(req, e.cell), a1: e.cell },
     };
     let op: EditOp;
     switch (e.op) {
-      case 'setFormula': op = { family: 'value', kind: 'setFormula', formula: e.formula ?? '' }; break;
-      case 'setStyle': op = { family: 'style', kind: 'setStyle', style: e.style ?? {} }; break;
-      case 'setNumberFormat': op = { family: 'style', kind: 'setNumberFormat', pattern: e.pattern ?? 'General' }; break;
+      case 'setFormula': op = { family: 'value', kind: 'setFormula', formula: e.formula }; break;
+      case 'setStyle': op = { family: 'style', kind: 'setStyle', style: e.style }; break;
+      case 'setNumberFormat': op = { family: 'style', kind: 'setNumberFormat', pattern: e.pattern }; break;
       case 'clear': op = { family: 'value', kind: 'deleteRange' }; break;
-      case 'setValue': op = { family: 'value', kind: 'setValue', value: (e.value ?? null) as CellValue }; break;
-      default: throw new Error('excel dialect: unknown op ' + (e as { op: string }).op);
+      case 'setValue': op = { family: 'value', kind: 'setValue', value: e.value }; break;
     }
     edits.push({ id: 'e' + i, target: aid, op });
   });
   return newChangeSet(req, p.plan, anchors, edits);
 }
+
+const EXCEL_CELL_SCHEMA = {
+  type: 'string',
+  minLength: 1,
+  description: 'A1 reference. An unqualified reference uses the explicit current-sheet name supplied with the request.',
+};
+const EXCEL_STYLE_SCHEMA = {
+  type: 'object',
+  minProperties: 1,
+  additionalProperties: false,
+  properties: {
+    bold: { type: 'boolean' },
+    italic: { type: 'boolean' },
+    color: { type: 'string', pattern: '^#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$' },
+    bgColor: { type: 'string', pattern: '^#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$' },
+    align: { type: 'string', enum: ['left', 'center', 'right'] },
+  },
+};
+const excelEditSchema = (op: ExcelOp, properties: Record<string, unknown>, required: string[]) => ({
+  type: 'object',
+  additionalProperties: false,
+  properties: { cell: EXCEL_CELL_SCHEMA, op: { type: 'string', enum: [op] }, ...properties },
+  required: ['cell', 'op', ...required],
+});
+const EXCEL_EDIT_SCHEMAS: Record<ExcelOp, ReturnType<typeof excelEditSchema>> = {
+  setValue: excelEditSchema('setValue', { value: { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }, { type: 'null' }] } }, ['value']),
+  setFormula: excelEditSchema('setFormula', { formula: { type: 'string', minLength: 1, maxLength: MAX_FORMULA_CHARS } }, ['formula']),
+  setStyle: excelEditSchema('setStyle', { style: EXCEL_STYLE_SCHEMA }, ['style']),
+  setNumberFormat: excelEditSchema('setNumberFormat', { pattern: { type: 'string', minLength: 1 } }, ['pattern']),
+  clear: excelEditSchema('clear', {}, []),
+};
 
 export const excelDialect: HostDialect = {
   format: 'excel',
@@ -130,12 +233,14 @@ export const excelDialect: HostDialect = {
             pattern: { type: 'string', description: 'setNumberFormat 的数字格式,如 0% 或 "¥"#,##0.00' },
           },
           required: ['cell', 'op'],
+          oneOf: EXCEL_OPS.map((op) => EXCEL_EDIT_SCHEMAS[op]),
         },
       },
     },
     required: ['plan', 'edits'],
+    additionalProperties: false,
   },
-  buildChangeSet: (req, proposal) => buildExcelChangeSet(req, proposal as ExcelProposal),
+  buildChangeSet: buildExcelChangeSet,
 };
 
 // ───────────────────────── drawio ─────────────────────────
@@ -177,19 +282,25 @@ function buildDrawioChangeSet(req: ProposeRequest, p: DrawioProposal): ChangeSet
       case 'add': {
         const parent = o.parent ?? '1';
         elementId = o.cellId ?? 'add' + i; // anchor points at the newly created object itself (clearer diff/review); parent container is carried via payload.parent
+        const geometry = {
+          ...(o.x != null ? { x: o.x } : {}),
+          ...(o.y != null ? { y: o.y } : {}),
+          ...(o.width != null ? { width: o.width } : {}),
+          ...(o.height != null ? { height: o.height } : {}),
+        };
         op = {
           family: 'object',
           kind: 'addObject',
           payload: {
             id: o.cellId ?? 'add' + i,
-            value: o.value,
-            style: o.style,
-            vertex: o.vertex,
-            edge: o.edge,
+            ...(o.value != null ? { value: o.value } : {}),
+            ...(o.style != null ? { style: o.style } : {}),
+            ...(o.vertex != null ? { vertex: o.vertex } : {}),
+            ...(o.edge != null ? { edge: o.edge } : {}),
             parent,
-            source: o.source,
-            target: o.target,
-            geometry: { x: o.x, y: o.y, width: o.width, height: o.height },
+            ...(o.source != null ? { source: o.source } : {}),
+            ...(o.target != null ? { target: o.target } : {}),
+            ...(Object.keys(geometry).length ? { geometry } : {}),
           },
         };
         break;
@@ -204,7 +315,16 @@ function buildDrawioChangeSet(req: ProposeRequest, p: DrawioProposal): ChangeSet
         break;
       case 'move':
         elementId = o.cellId ?? '';
-        op = { family: 'object', kind: 'moveObject', box: { left: o.x, top: o.y, width: o.width, height: o.height } };
+        op = {
+          family: 'object',
+          kind: 'moveObject',
+          box: {
+            ...(o.x != null ? { left: o.x } : {}),
+            ...(o.y != null ? { top: o.y } : {}),
+            ...(o.width != null ? { width: o.width } : {}),
+            ...(o.height != null ? { height: o.height } : {}),
+          },
+        };
         break;
       default:
         throw new Error(`drawio dialect: unknown op ${(o as { op: string }).op}`);

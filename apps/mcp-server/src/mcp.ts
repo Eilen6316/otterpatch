@@ -54,7 +54,12 @@ server.registerTool(
       provider: z.string().default('claude').describe('claude | openai | deepseek | glm | kimi | doubao | minimax | gemini'),
       model: z.string().optional(),
       apiKey: z.string().optional(),
-      sheet: z.object({ a1: z.string(), values: z.array(z.array(z.unknown())) }).optional(),
+      sheet: z.object({
+        a1: z.string(),
+        values: z.array(z.array(z.unknown())),
+        name: z.string().optional(),
+        names: z.array(z.string()).optional(),
+      }).optional(),
       doc: z.object({ blocks: z.array(z.object({ style: z.string(), text: z.string(), font: z.string().optional(), size: z.number().optional(), align: z.string().optional(), lineSpacing: z.number().optional() })) }).optional(),
       history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).optional(),
     },
