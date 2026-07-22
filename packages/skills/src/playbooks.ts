@@ -15,7 +15,7 @@ const PLAYBOOK_NAMES = ['docx-gongwen', 'docx-conventions', 'docx-coauthoring', 
 function loadPlaybook(name: string): SkillCard {
   // src/ and dist/ sit at the same depth, so ../skills resolves to the skills/ dir at the package root (shipped with the package) from either
   const url = new URL(`../skills/${name}/SKILL.md`, import.meta.url);
-  return parseSkillMd(readFileSync(url, 'utf8'), 'otterpatch/playbooks');
+  return parseSkillMd(readFileSync(url, 'utf8'), 'otterpatch/playbooks', 'builtin');
 }
 
 export const PLAYBOOK_SKILLS: SkillCard[] = PLAYBOOK_NAMES.map(loadPlaybook);

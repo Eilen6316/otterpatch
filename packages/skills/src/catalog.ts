@@ -20,6 +20,7 @@ export const BUILTIN_SKILLS: SkillCard[] = [
     formats: ['excel', 'xlsx'],
     keywords: ['excel', 'xlsx', '表格', '公式', '透视', 'openpyxl', '图表'],
     source: ANTHROPIC,
+    trust: 'builtin',
   },
   {
     name: 'docx',
@@ -27,6 +28,7 @@ export const BUILTIN_SKILLS: SkillCard[] = [
     formats: ['word', 'docx'],
     keywords: ['word', 'docx', '文档', '修订', '排版', 'python-docx'],
     source: ANTHROPIC,
+    trust: 'builtin',
   },
   {
     name: 'pptx',
@@ -34,6 +36,7 @@ export const BUILTIN_SKILLS: SkillCard[] = [
     formats: ['ppt', 'pptx'],
     keywords: ['ppt', 'pptx', '幻灯片', '演示', '母版', 'python-pptx'],
     source: ANTHROPIC,
+    trust: 'builtin',
   },
   {
     name: 'pdf',
@@ -41,6 +44,7 @@ export const BUILTIN_SKILLS: SkillCard[] = [
     formats: ['pdf'],
     keywords: ['pdf', '表单', '抽取', '生成'],
     source: ANTHROPIC,
+    trust: 'builtin',
   },
   {
     name: 'drawio',
@@ -48,6 +52,7 @@ export const BUILTIN_SKILLS: SkillCard[] = [
     formats: ['drawio'],
     keywords: ['drawio', '流程图', '图', '节点', '连线', 'diagram'],
     source: 'otterpatch',
+    trust: 'builtin',
   },
 ];
 

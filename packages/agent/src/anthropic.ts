@@ -10,7 +10,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ChangeSet } from '@otterpatch/core';
 import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
-import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, execReadTool, parseClarify, recentHistory, respondSystemParts } from './sheet-tools.js';
+import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, execReadTool, parseClarify, proposalSystem, recentHistory, respondSystem } from './sheet-tools.js';
 import { NUDGE_DIRECT, NUDGE_TOOLIFY, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
 import { salvageProposalArgs, salvageText } from './json-salvage.js';
 
@@ -63,25 +63,20 @@ export class AnthropicModelClient implements ModelClient {
   private initMessages(req: ProposeRequest): Anthropic.MessageParam[] {
     return normalizeMessages([
       ...recentHistory(req).map((m) => ({ role: m.role, content: m.content })),
-      { role: 'user', content: req.intent },
+      { role: 'user', content: currentRequestMessage(req) },
     ]);
   }
-  /** Split system into two blocks with prompt-cache breakpoints: stable (dialect + skills, unchanged across turns) + volatile (this turn's document snapshot).
-   *  Breakpoint at the end of volatile → every step of this turn's multi-step loop (data fetch/repair, up to 8 steps) hits the full system cache; across turns at least stable hits. */
-  private systemBlocks(req: ProposeRequest, dialect: HostDialect): Array<Anthropic.TextBlockParam> {
-    const p = respondSystemParts(dialect, req);
-    return [
-      { type: 'text', text: p.stable, cache_control: { type: 'ephemeral' } },
-      { type: 'text', text: p.volatile, cache_control: { type: 'ephemeral' } },
-    ];
+  /** Stable system block; request-specific document data lives in the user message. */
+  private systemBlocks(dialect: HostDialect): Array<Anthropic.TextBlockParam> {
+    return [{ type: 'text', text: respondSystem(dialect), cache_control: { type: 'ephemeral' } }];
   }
 
   async proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet> {
     const res = await this.client.messages.create({
       model: this.model,
       max_tokens: this.maxTokens,
-      system: dialect.systemPrompt + '\n\n选区上下文:\n' + req.context,
-      messages: [{ role: 'user', content: req.intent }],
+      system: proposalSystem(dialect),
+      messages: [{ role: 'user', content: currentRequestMessage(req) }],
       tools: [{ name: dialect.toolName, description: dialect.toolDescription, input_schema: dialect.parameters as unknown as Anthropic.Tool['input_schema'] }],
       tool_choice: { type: 'tool', name: dialect.toolName },
     });
@@ -94,7 +89,7 @@ export class AnthropicModelClient implements ModelClient {
 
   /** Smart routing + multi-step loop: answer_user / read_range / aggregate; shadow-verify proposals and feed failures back for repair (propose→observe→repair). */
   async respond(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Promise<AgentResponse> {
-    const system = this.systemBlocks(req, dialect);
+    const system = this.systemBlocks(dialect);
     const tools = this.toolset(req, dialect, opts);
     const messages = this.initMessages(req);
     let repairsLeft = opts?.maxRepairs ?? 1;
@@ -144,7 +139,7 @@ export class AnthropicModelClient implements ModelClient {
 
   /** Streaming variant of respond: emits answer deltas for text (and reasoning deltas when extended thinking is on). Multi-step loop + shadow verification same as respond. */
   async respondStream(req: ProposeRequest, dialect: HostDialect, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
-    const system = this.systemBlocks(req, dialect);
+    const system = this.systemBlocks(dialect);
     const tools = this.toolset(req, dialect, opts);
     const messages = this.initMessages(req);
     let repairsLeft = opts?.maxRepairs ?? 1;

@@ -14,6 +14,8 @@ export interface ProposeRequest {
   anchors: LogicalAnchor[]; // User selection (pixels already converted to anchors)
   context: string; // Read-only snapshot of the selection, fed to the model
   sessionId?: string;
+  /** Internal validator feedback for a retry. Kept separate from untrusted document context. */
+  proposalFeedback?: string[];
   /** Full sheet data (passed locally to serve, not stuffed into the model prompt; consumed on demand by the read_range/aggregate tools). */
   sheet?: { a1: string; values: unknown[][] };
   /** Full Word document snapshot (per-paragraph text + styles; likewise not in the prompt, fetched on demand via read_blocks/find_text/get_outline/get_style_usage). */

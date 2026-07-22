@@ -10,7 +10,7 @@
 import OpenAI from 'openai';
 import type { ChangeSet } from '@otterpatch/core';
 import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
-import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, execReadTool, parseClarify, recentHistory, respondSystem } from './sheet-tools.js';
+import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, execReadTool, parseClarify, proposalSystem, recentHistory, respondSystem } from './sheet-tools.js';
 import { NUDGE_DIRECT, NUDGE_TOOLIFY, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
 import { salvageProposalArgs, salvageText, safeParse } from './json-salvage.js';
 
@@ -68,8 +68,8 @@ export class OpenAICompatModelClient implements ModelClient {
     forced: boolean,
   ): Promise<OpenAI.Chat.Completions.ChatCompletion> {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-      { role: 'system', content: dialect.systemPrompt + '\n\n选区上下文:\n' + req.context },
-      { role: 'user', content: req.intent },
+      { role: 'system', content: proposalSystem(dialect) },
+      { role: 'user', content: currentRequestMessage(req) },
     ];
     // When the tool is not forced (incl. reasoning-model fallback): nudge the model toward a tool call with an extra message
     if (!forced) {
@@ -115,9 +115,9 @@ export class OpenAICompatModelClient implements ModelClient {
   /** Assemble messages (system + multi-turn history + current instruction) and the tool menu (edit-proposal / answer_user / read-only data / host extras). */
   private buildCtx(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): { messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[]; tools: OpenAI.Chat.Completions.ChatCompletionTool[] } {
     const messages = normalizeMessages([
-      { role: 'system', content: respondSystem(dialect, req) },
+      { role: 'system', content: respondSystem(dialect) },
       ...recentHistory(req).map((m) => ({ role: m.role, content: m.content })),
-      { role: 'user', content: req.intent },
+      { role: 'user', content: currentRequestMessage(req) },
     ]);
     const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       { type: 'function', function: { name: dialect.toolName, description: dialect.toolDescription, parameters: dialect.parameters } },

@@ -10,6 +10,7 @@ export interface SkillCard {
   keywords: string[]; // used for intent matching
   instructions?: string; // L1: SKILL.md body (only needed after a match)
   source?: string; // built-in / file path / URL
+  trust: 'builtin' | 'external';
 }
 
 function inferFormats(name: string, explicit: string[]): string[] {
@@ -37,7 +38,7 @@ function deriveKeywords(desc: string): string[] {
   return m ? splitList(m[1]!) : [];
 }
 
-export function parseSkillMd(md: string, source?: string): SkillCard {
+export function parseSkillMd(md: string, source?: string, trust: SkillCard['trust'] = 'external'): SkillCard {
   const text = md.replace(/\r\n/g, '\n');
   const m = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/.exec(text);
   const fm = m ? m[1]! : '';
@@ -77,5 +78,6 @@ export function parseSkillMd(md: string, source?: string): SkillCard {
     keywords,
     instructions: body || undefined,
     source,
+    trust,
   };
 }
