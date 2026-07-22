@@ -63,9 +63,14 @@ test('SkillLibrary.match: 按格式 + 意图排序(内置通用)', () => {
 });
 
 test('SkillLibrary.render: 生成可注入系统提示的片段', () => {
-  const snip = defaultLibrary().render('word', '排版这个文档');
+  const lib = defaultLibrary();
+  const bundle = lib.promptBundle('word', '排版这个文档');
+  const snip = lib.render('word', '排版这个文档');
   assert.match(snip, /可用技能/);
   assert.match(snip, /docx/);
+  assert.equal(bundle.text, snip);
+  assert.ok(bundle.cards.length > 0);
+  assert.ok(bundle.cards.every((card) => card.trust === 'builtin' && /^sha256:[a-f0-9]{64}$/.test(card.checksum)));
 });
 
 test('内置能力卡不再宣称当前后端无法写回的理想化能力', () => {

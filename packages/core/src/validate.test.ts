@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { AnchorId, ChangeSet, DocRev, HostId, LogicalAnchor } from './index.js';
 import { assertChangeSet } from './validate.js';
 import { RESOURCE_LIMITS, ResourceLimitError } from './limits.js';
+import { uuidv7 } from './uuid.js';
 
 function validChangeSet(): ChangeSet {
   const anchorId = 'a1' as AnchorId;
@@ -27,6 +28,37 @@ function validChangeSet(): ChangeSet {
 
 test('assertChangeSet accepts a well-formed ChangeSet', () => {
   assert.doesNotThrow(() => assertChangeSet(validChangeSet()));
+});
+
+test('assertChangeSet requires complete agent provenance and UUIDv7 identity', () => {
+  const cs = validChangeSet();
+  const agent = {
+    ...cs,
+    id: uuidv7(),
+    origin: {
+      by: 'agent' as const,
+      sessionId: uuidv7(),
+      provenance: {
+        provider: 'openai',
+        model: 'provider-model',
+        modelRequestId: 'response-123',
+        skillVersions: [{ id: 'otterpatch/xlsx', version: '1.0.0', checksum: `sha256:${'a'.repeat(64)}` }],
+        promptPolicyVersion: 'prompt-policy-v1',
+        sourceFileSha256: null,
+        parentProposalId: null,
+        repairAttempt: 0,
+        actor: { userId: 'local-user', hostId: 'h' },
+      },
+    },
+  };
+  assert.doesNotThrow(() => assertChangeSet(agent));
+  assert.throws(() => assertChangeSet({ ...agent, id: 'cs-' + Date.now() }), /UUIDv7/);
+  assert.throws(() => assertChangeSet({ ...agent, origin: { ...agent.origin, sessionId: 'mock' } }), /must not be "mock"/);
+  assert.throws(() => assertChangeSet({ ...agent, origin: { by: 'agent', sessionId: uuidv7() } }), /provenance required/);
+  assert.throws(() => assertChangeSet({
+    ...agent,
+    origin: { ...agent.origin, provenance: { ...agent.origin.provenance, sourceFileSha256: 'not-a-hash' } },
+  }), /sourceFileSha256/);
 });
 
 test('assertChangeSet rejects edits whose target anchor is missing', () => {

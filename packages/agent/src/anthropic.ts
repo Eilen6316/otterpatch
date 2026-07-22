@@ -16,6 +16,7 @@ import { salvageProposalArgs, salvageText, salvagedProposalPayload } from './jso
 import { AgentLoopBudget, readToolLimitText, verificationFailureText } from './loop-budget.js';
 import { readingStatus } from './stream-status.js';
 import { ProviderCallController, type ProviderRetryPolicy } from './provider-control.js';
+import { AGENT_TRACE, prepareAgentRequest, requestRepairAttempt, traceModelResponse } from './provenance.js';
 
 const safeJson = (s?: string): Record<string, unknown> => { try { return s ? (JSON.parse(s) as Record<string, unknown>) : {}; } catch { return {}; } };
 
@@ -52,6 +53,7 @@ function normalizeMessages(msgs: Anthropic.MessageParam[]): Anthropic.MessagePar
 }
 
 export class AnthropicModelClient implements ModelClient {
+  readonly identity: { provider: string; model: string };
   private readonly client: Anthropic;
   private readonly model: string;
   private readonly maxTokens: number;
@@ -65,6 +67,7 @@ export class AnthropicModelClient implements ModelClient {
     this.maxTokens = validMaxTokens(opts.maxTokens);
     this.timeoutMs = timeout;
     const provider = opts.provider ?? 'anthropic';
+    this.identity = { provider, model: this.model };
     this.callControl = new ProviderCallController({
       provider,
       circuitKey: `${provider}:${opts.baseURL ?? 'default'}:${this.model}`,
@@ -112,6 +115,7 @@ export class AnthropicModelClient implements ModelClient {
   }
 
   async proposeChangeSet(req: ProposeRequest, dialect: HostDialect, opts?: ModelCallOptions): Promise<ChangeSet> {
+    req = req[AGENT_TRACE] ? req : prepareAgentRequest(req, this.identity);
     const budget = new AgentLoopBudget(0);
     const res = await this.runProviderCall(budget, opts?.signal, (requestOptions) => this.client.messages.create({
       model: this.model,
@@ -128,18 +132,21 @@ export class AnthropicModelClient implements ModelClient {
     if (!block || block.type !== 'tool_use') {
       throw new Error(`AnthropicModelClient: model did not call ${dialect.toolName}`);
     }
-    const changeSet = dialect.buildChangeSet(req, block.input);
+    const tracedReq = traceModelResponse(req, { provider: this.identity.provider, model: res.model || this.model }, res.id, requestRepairAttempt(req));
+    const changeSet = dialect.buildChangeSet(tracedReq, block.input);
     assertChangeSet(changeSet);
     return changeSet;
   }
 
   /** Smart routing + multi-step loop: answer_user / read_range / aggregate; check proposals and feed failures back for repair (propose→observe→repair). */
   async respond(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Promise<AgentResponse> {
+    req = req[AGENT_TRACE] ? req : prepareAgentRequest(req, this.identity);
     const system = this.systemBlocks(dialect);
     const tools = this.toolset(req, dialect, opts);
     const messages = this.initMessages(req);
     const budget = new AgentLoopBudget(opts?.maxRepairs ?? 1);
     let nudged = false;
+    let repairAttempt = requestRepairAttempt(req);
 
     for (let step = 0; step < STEP_LIMIT; step++) {
       const res = await this.runProviderCall(
@@ -165,13 +172,15 @@ export class AnthropicModelClient implements ModelClient {
 
       const propose = toolUses.find((b) => b.name === dialect.toolName);
       if (propose) {
-        const cs = dialect.buildChangeSet(req, propose.input);
+        const tracedReq = traceModelResponse(req, { provider: this.identity.provider, model: res.model || this.model }, res.id, repairAttempt);
+        const cs = dialect.buildChangeSet(tracedReq, propose.input);
         assertChangeSet(cs);
         if (opts?.verify) {
           const v = await opts.verify(cs);
           budget.finishStep();
           if (!v.ok) {
             if (!budget.tryProposalRepair()) return { kind: 'answer', text: verificationFailureText(v) };
+            repairAttempt++;
             messages.push({ role: 'assistant', content: [{ type: 'tool_use', id: propose.id, name: propose.name, input: propose.input }] });
             messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: propose.id, content: v.report }] });
             continue;
@@ -199,12 +208,13 @@ export class AnthropicModelClient implements ModelClient {
 
   /** Streaming variant of respond: suppresses provider thinking and emits bounded public status events. */
   async respondStream(req: ProposeRequest, dialect: HostDialect, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
+    req = req[AGENT_TRACE] ? req : prepareAgentRequest(req, this.identity);
     const system = this.systemBlocks(dialect);
     const tools = this.toolset(req, dialect, opts);
     const messages = this.initMessages(req);
     const budget = new AgentLoopBudget(opts?.maxRepairs ?? 1);
     let nudged = false;
-    let repairAttempt = 0;
+    let repairAttempt = requestRepairAttempt(req);
     onEvent({ type: 'status', status: { phase: 'generating' } });
     const complete = (result: AgentResponse): AgentResponse => {
       if (result.kind === 'answer' && result.text) onEvent({ type: 'answer', delta: result.text });
@@ -224,9 +234,16 @@ export class AnthropicModelClient implements ModelClient {
       );
       let text = '';
       let outputChars = 0;
+      let responseId = '';
+      let responseModel = '';
       const acc: Record<number, { id: string; name: string; json: string }> = {};
       for await (const ev of this.callControl.monitorStream(stream, opts?.signal)) {
-        if (ev.type === 'content_block_start') {
+        if (ev.type === 'message_start') {
+          if (responseId && responseId !== ev.message.id) throw new Error('Anthropic stream response id changed mid-stream');
+          if (responseModel && responseModel !== ev.message.model) throw new Error('Anthropic stream model changed mid-stream');
+          responseId = ev.message.id;
+          responseModel = ev.message.model;
+        } else if (ev.type === 'content_block_start') {
           const cb = ev.content_block;
           if (cb.type === 'tool_use') {
             acc[ev.index] = { id: cb.id, name: cb.name, json: '' };
@@ -280,7 +297,8 @@ export class AnthropicModelClient implements ModelClient {
           messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: propose.id, content: TRUNCATED_FALLBACK }] });
           continue;
         }
-        const cs = dialect.buildChangeSet(req, salvagedProposalPayload(parsed));
+        const tracedReq = traceModelResponse(req, { provider: this.identity.provider, model: responseModel || this.model }, responseId, repairAttempt);
+        const cs = dialect.buildChangeSet(tracedReq, salvagedProposalPayload(parsed));
         assertChangeSet(cs);
         if (opts?.verify) {
           onEvent({ type: 'status', status: { phase: 'checking' } });

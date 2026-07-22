@@ -4,7 +4,8 @@
  * selected by ProposeRequest.format. Model implementations (Claude/OpenAI-compatible/Mock) only do
  * "call model per dialect → get raw proposal → dialect.buildChangeSet"; the model never emits OOXML/XML directly.
  */
-import { assertChangeSet, type AbstractStyle, type ChangeSet, type DocRev, type LogicalAnchor, type SheetCellValue, type VerifyReport } from '@otterpatch/core';
+import { assertChangeSet, uuidv7, type AbstractStyle, type ChangeSet, type DocRev, type LogicalAnchor, type SheetCellValue, type VerifyReport } from '@otterpatch/core';
+import { AGENT_TRACE, prepareAgentRequest, traceModelResponse, type AgentRequestTrace } from './provenance.js';
 
 export interface ProposeRequest {
   hostId: string;
@@ -14,6 +15,16 @@ export interface ProposeRequest {
   anchors: LogicalAnchor[]; // User selection (pixels already converted to anchors)
   context: string; // Read-only snapshot of the selection, fed to the model
   sessionId?: string;
+  /** Stable pseudonymous identity supplied by the trusted host boundary. */
+  userId?: string;
+  /** Stable document identity used to bind provenance to the signed proposal envelope. */
+  documentId?: string;
+  /** SHA-256 of the exact source bytes observed before this proposal, when available. */
+  sourceFileSha256?: string;
+  /** Previous signed proposal in the same conversation, when this proposal descends from one. */
+  parentProposalId?: string;
+  /** @internal Complete trace prepared by Agent and finalized by the model client. */
+  [AGENT_TRACE]?: AgentRequestTrace;
   /** Internal validator feedback for a retry. Kept separate from untrusted document context. */
   proposalFeedback?: string[];
   /** Full sheet data (passed locally to serve, not stuffed into the model prompt; consumed on demand by the read_range/aggregate tools). */
@@ -93,6 +104,8 @@ export interface RespondOptions extends ModelCallOptions {
 
 /** Any model implementation (real Claude / OpenAI-compatible / Mock). */
 export interface ModelClient {
+  /** Configured provider identity. Provider clients replace the model with the actual response model when available. */
+  readonly identity?: ModelIdentity;
   /** Produce a ChangeSet only (forced-execution path, kept for definitely-editing scenarios/tests). */
   proposeChangeSet(req: ProposeRequest, dialect: HostDialect, opts?: ModelCallOptions): Promise<ChangeSet>;
   /** Smart routing: model itself decides "answer" vs "propose changes" (tool_choice:auto). Optional; falls back to proposeChangeSet if absent. */
@@ -101,16 +114,32 @@ export interface ModelClient {
   respondStream?(req: ProposeRequest, dialect: HostDialect, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse>;
 }
 
+export interface ModelIdentity {
+  provider: string;
+  model: string;
+}
+
 /** For tests/offline: given a (req → raw proposal) function, deterministically builds the ChangeSet via the dialect. */
 export class MockModelClient implements ModelClient {
+  readonly identity: ModelIdentity = { provider: 'mock', model: 'deterministic-mock' };
   constructor(private readonly fn: (req: ProposeRequest) => unknown) {}
   async proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet> {
-    const changeSet = dialect.buildChangeSet(req, this.fn(req));
+    const traced = traceModelResponse(
+      prepareAgentRequest(req, this.identity, req[AGENT_TRACE]?.provenance.skillVersions),
+      this.identity,
+      uuidv7(),
+    );
+    const changeSet = dialect.buildChangeSet(traced, this.fn(traced));
     assertChangeSet(changeSet);
     return changeSet;
   }
   async respond(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Promise<AgentResponse> {
-    const cs = dialect.buildChangeSet(req, this.fn(req));
+    const traced = traceModelResponse(
+      prepareAgentRequest(req, this.identity, req[AGENT_TRACE]?.provenance.skillVersions),
+      this.identity,
+      uuidv7(),
+    );
+    const cs = dialect.buildChangeSet(traced, this.fn(traced));
     assertChangeSet(cs);
     if (opts?.verify) {
       const v = await opts.verify(cs);

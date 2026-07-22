@@ -12,9 +12,30 @@ export type EditId = string;
 export type CellValue = string | number | boolean | null;
 export type StyleScope = 'selection' | 'paragraph' | 'section' | 'document';
 
+export interface AgentSkillVersion {
+  readonly id: string;
+  readonly version: string;
+  readonly checksum: string;
+}
+
+export interface AgentProvenance {
+  readonly provider: string;
+  readonly model: string;
+  readonly modelRequestId: string;
+  readonly skillVersions: readonly AgentSkillVersion[];
+  readonly promptPolicyVersion: string;
+  readonly sourceFileSha256: string | null;
+  readonly parentProposalId: string | null;
+  readonly repairAttempt: number;
+  readonly actor: {
+    readonly userId: string;
+    readonly hostId: string;
+  };
+}
+
 export type ChangeOrigin =
   | { by: 'human' }
-  | { by: 'agent'; sessionId: string }
+  | { by: 'agent'; sessionId: string; provenance: AgentProvenance }
   | { by: 'skill'; skill: string; version: string }
   | { by: 'demonstration'; ref: string };
 

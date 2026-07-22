@@ -9,6 +9,7 @@
  * BYOK:export OtterPatch_API_KEY=...(非 --mock 时必需);--provider/--model 可选。
  */
 import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { docRevFromSha256, isResourceLimitError, type DocRev } from '@otterpatch/core';
 import { createModelClient, MockModelClient, type ModelClient, type Provider, type ProposeRequest } from '@otterpatch/agent';
 import { OtterPatchRuntime, sha256Bytes } from '@otterpatch/runtime';
@@ -52,7 +53,12 @@ try {
   const inputBytes = inPath ? readDocumentFile(inPath) : undefined;
   const sourceFileSha256 = inputBytes ? sha256Bytes(inputBytes) : undefined;
   const baseRev = sourceFileSha256 ? docRevFromSha256(sourceFileSha256) : 0 as DocRev;
-  const req: ProposeRequest = { hostId: 'cli', format, intent, baseRev, anchors: [], context };
+  const documentId = inPath ? resolve(inPath) : 'cli';
+  const userId = process.env.USER?.trim() || process.env.USERNAME?.trim() || 'local-cli-user';
+  const req: ProposeRequest = {
+    hostId: 'cli', format, intent, baseRev, anchors: [], context, documentId, userId,
+    ...(sourceFileSha256 ? { sourceFileSha256 } : {}),
+  };
   const cs = await rt.propose(req, client);
   await rt.diff(cs, {
     format,
@@ -64,8 +70,9 @@ try {
   if (inPath) {
     if (!confirmed) throw new Error('refusing to commit without explicit --yes after reviewing the emitted diff');
     const bytes = inputBytes!;
-    const proposal = rt.createProposal(cs, format, inPath, sourceFileSha256);
-    const reviewed = rt.reviewProposal(proposal, cs, cs.edits.map((edit) => edit.id), bytes, 'cli-explicit-yes');
+    const proposal = rt.createProposal(cs, format, documentId, sourceFileSha256);
+    const reviewerSessionId = cs.origin.by === 'agent' ? cs.origin.sessionId : 'cli-explicit-yes';
+    const reviewed = rt.reviewProposal(proposal, cs, cs.edits.map((edit) => edit.id), bytes, reviewerSessionId);
     const res = await rt.commit({ format, bytes, changeSet: cs, currentRev: baseRev, ...reviewed });
     if (outPath && res.ok) {
       writeFileSync(outPath, res.bytes);

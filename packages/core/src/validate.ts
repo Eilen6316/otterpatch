@@ -1,5 +1,7 @@
 import type { ChangeSet } from './changeset.js';
 import { RESOURCE_LIMITS, ResourceLimitError, assertA1RangeBudget, assertJsonBudget } from './limits.js';
+import { isSha256 } from './revision.js';
+import { isUuidV7 } from './uuid.js';
 
 const OP_FAMILIES: Record<string, string> = {
   setValue: 'value',
@@ -88,7 +90,7 @@ export function assertChangeSet(value: unknown): asserts value is ChangeSet {
   if (!nonEmpty(cs.hostId)) throw new Error('invalid ChangeSet: hostId required');
   if (!isSafeNonNegativeInt(cs.baseRev)) throw new Error('invalid ChangeSet: baseRev must be a non-negative integer');
   assertMeta(cs.meta);
-  assertOrigin(cs.origin);
+  assertOrigin(cs.origin, cs.id);
   if (!isRecord(cs.anchors)) throw new Error('invalid ChangeSet: anchors object required');
   const anchorEntries = Object.entries(cs.anchors);
   if (anchorEntries.length > RESOURCE_LIMITS.changeSetAnchors) {
@@ -135,9 +137,77 @@ function assertMeta(meta: unknown): void {
   if (meta.risk !== undefined && !['low', 'medium', 'high'].includes(String(meta.risk))) throw new Error('invalid ChangeSet: meta.risk invalid');
 }
 
-function assertOrigin(origin: unknown): void {
+function assertOrigin(origin: unknown, changeSetId: unknown): void {
   if (!isRecord(origin)) throw new Error('invalid ChangeSet: origin required');
-  if (!['human', 'agent', 'skill', 'demonstration'].includes(String(origin.by))) throw new Error('invalid ChangeSet: origin.by invalid');
+  switch (origin.by) {
+    case 'human':
+      assertOnlyKeys(origin, new Set(['by']), 'origin');
+      return;
+    case 'skill':
+      assertOnlyKeys(origin, new Set(['by', 'skill', 'version']), 'origin');
+      assertBoundedText(origin.skill, 'origin.skill');
+      assertBoundedText(origin.version, 'origin.version');
+      return;
+    case 'demonstration':
+      assertOnlyKeys(origin, new Set(['by', 'ref']), 'origin');
+      assertBoundedText(origin.ref, 'origin.ref');
+      return;
+    case 'agent':
+      assertOnlyKeys(origin, new Set(['by', 'sessionId', 'provenance']), 'origin');
+      assertBoundedText(origin.sessionId, 'origin.sessionId');
+      if (String(origin.sessionId).trim().toLowerCase() === 'mock') {
+        throw new Error('invalid ChangeSet: agent sessionId must not be "mock"');
+      }
+      if (!isUuidV7(changeSetId)) throw new Error('invalid ChangeSet: agent id must be UUIDv7');
+      assertAgentProvenance(origin.provenance);
+      return;
+    default:
+      throw new Error('invalid ChangeSet: origin.by invalid');
+  }
+}
+
+function assertAgentProvenance(value: unknown): void {
+  if (!isRecord(value)) throw new Error('invalid ChangeSet: agent provenance required');
+  assertOnlyKeys(value, new Set([
+    'provider', 'model', 'modelRequestId', 'skillVersions', 'promptPolicyVersion',
+    'sourceFileSha256', 'parentProposalId', 'repairAttempt', 'actor',
+  ]), 'origin.provenance');
+  assertBoundedText(value.provider, 'origin.provenance.provider');
+  assertBoundedText(value.model, 'origin.provenance.model');
+  assertBoundedText(value.modelRequestId, 'origin.provenance.modelRequestId');
+  assertBoundedText(value.promptPolicyVersion, 'origin.provenance.promptPolicyVersion');
+  if (value.sourceFileSha256 !== null && !isSha256(value.sourceFileSha256)) {
+    throw new Error('invalid ChangeSet: origin.provenance.sourceFileSha256 must be SHA-256 or null');
+  }
+  if (value.parentProposalId !== null) assertBoundedText(value.parentProposalId, 'origin.provenance.parentProposalId');
+  if (!isSafeNonNegativeInt(value.repairAttempt)) {
+    throw new Error('invalid ChangeSet: origin.provenance.repairAttempt must be a non-negative integer');
+  }
+  if (!Array.isArray(value.skillVersions) || value.skillVersions.length > 64) {
+    throw new Error('invalid ChangeSet: origin.provenance.skillVersions must be a bounded array');
+  }
+  const skillIds = new Set<string>();
+  for (const item of value.skillVersions) {
+    if (!isRecord(item)) throw new Error('invalid ChangeSet: agent skill version must be an object');
+    assertOnlyKeys(item, new Set(['id', 'version', 'checksum']), 'origin.provenance.skillVersions[]');
+    assertBoundedText(item.id, 'origin.provenance.skillVersions[].id');
+    assertBoundedText(item.version, 'origin.provenance.skillVersions[].version');
+    if (typeof item.checksum !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(item.checksum)) {
+      throw new Error('invalid ChangeSet: agent skill checksum must be sha256:<64 lowercase hex>');
+    }
+    if (skillIds.has(item.id)) throw new Error('invalid ChangeSet: duplicate agent skill id ' + item.id);
+    skillIds.add(item.id);
+  }
+  if (!isRecord(value.actor)) throw new Error('invalid ChangeSet: origin.provenance.actor required');
+  assertOnlyKeys(value.actor, new Set(['userId', 'hostId']), 'origin.provenance.actor');
+  assertBoundedText(value.actor.userId, 'origin.provenance.actor.userId');
+  assertBoundedText(value.actor.hostId, 'origin.provenance.actor.hostId');
+}
+
+function assertBoundedText(value: unknown, label: string): asserts value is string {
+  if (!nonBlank(value) || value.length > 2_048) {
+    throw new Error(`invalid ChangeSet: ${label} must be a non-blank string of at most 2048 characters`);
+  }
 }
 
 function assertAnchor(id: string, value: unknown, hostId: unknown, baseRev: unknown): void {

@@ -17,11 +17,11 @@ test('Electron proposal IPC accepts only the bounded local-service schema', () =
   const baseRev = Number.parseInt(sourceFileSha256.slice(0, 13), 16);
   const result = validateProposeInvocation({
     requestId: 'request_1',
-    payload: { format: 'excel', intent: 'set B1', context: '', baseRev, sourceFileSha256, documentId: `excel:sha256:${sourceFileSha256}`, provider: 'openai', apiKey: 'secret' },
+    payload: { format: 'excel', intent: 'set B1', context: '', baseRev, sourceFileSha256, documentId: `excel:sha256:${sourceFileSha256}`, sessionId: 'session-1', userId: 'user-1', parentProposalId: 'proposal-1', provider: 'openai', apiKey: 'secret' },
   });
   assert.equal(result.requestId, 'request_1');
   assert.deepEqual(JSON.parse(result.body), {
-    format: 'excel', intent: 'set B1', context: '', baseRev, sourceFileSha256, documentId: `excel:sha256:${sourceFileSha256}`, provider: 'openai', apiKey: 'secret',
+    format: 'excel', intent: 'set B1', context: '', baseRev, sourceFileSha256, documentId: `excel:sha256:${sourceFileSha256}`, sessionId: 'session-1', userId: 'user-1', parentProposalId: 'proposal-1', provider: 'openai', apiKey: 'secret',
   });
   assert.throws(
     () => validateProposeInvocation({ requestId: 'bad id', payload: { format: 'excel', intent: 'x' } }),
@@ -42,6 +42,14 @@ test('Electron proposal IPC accepts only the bounded local-service schema', () =
   assert.throws(
     () => validateProposeInvocation({ requestId: 'r', payload: { format: 'excel', intent: 'x', baseRev, sourceFileSha256, documentId: 'other' } }),
     /documentId must match/,
+  );
+  assert.throws(
+    () => validateProposeInvocation({ requestId: 'r', payload: { format: 'excel', intent: 'x', sessionId: 'mock' } }),
+    /reserved/,
+  );
+  assert.throws(
+    () => validateProposeInvocation({ requestId: 'r', payload: { format: 'excel', intent: 'x', userId: '   ' } }),
+    /must not be blank/,
   );
 });
 

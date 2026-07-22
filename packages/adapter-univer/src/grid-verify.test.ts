@@ -11,7 +11,7 @@ function makeCs(edits: Array<{ a1: string; op: EditOp }>): ChangeSet {
     anchors[aid] = { id: aid, hostId: 'h' as HostId, kind: 'grid', ref: null, baseRev: 0 as DocRev, portable: { kind: 'grid', sheet: 'Sheet1', a1: e.a1 } };
     return { id: 'e' + i, target: aid, op: e.op };
   });
-  return { id: 'cs', hostId: 'h', baseRev: 0 as DocRev, anchors, origin: { by: 'agent', sessionId: 't' }, meta: { intent: 't' }, edits: es };
+  return { id: 'cs', hostId: 'h', baseRev: 0 as DocRev, anchors, origin: { by: 'human' }, meta: { intent: 't' }, edits: es };
 }
 
 const SHEET: SheetSnapshot = {

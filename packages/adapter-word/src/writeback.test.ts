@@ -123,7 +123,7 @@ test('Word 红线写回:insertTable → 原生 w:tbl,仍只修改 document.xml',
     hostId: 'h',
     baseRev: 0 as DocRev,
     anchors: { [a0]: anchor },
-    origin: { by: 'agent', sessionId: 'table-test' },
+    origin: { by: 'human' },
     meta: { intent: 'insert a comparison table' },
     edits: [{
       id: 'e-table',

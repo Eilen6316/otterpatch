@@ -1,10 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { DocRev } from '@otterpatch/core';
-import { AnthropicModelClient, buildDocVerifier, wordDialect, type ProposeRequest, type StreamEvent } from './index.js';
+import { AnthropicModelClient, buildDocVerifier, prepareAgentRequest, wordDialect, type ProposeRequest, type StreamEvent } from './index.js';
 
 const DOC = '本报告分析吉林省财政收入的影响因素。全省财政收入逐年增长,增速略有放缓。';
-const reqFor = (): ProposeRequest => ({ hostId: 'h1', format: 'word', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: DOC });
+const reqFor = (): ProposeRequest => prepareAgentRequest(
+  { hostId: 'h1', format: 'word', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: DOC },
+  { provider: 'test', model: 'dialect-test' },
+);
 const cs = (edits: unknown[]) => wordDialect.buildChangeSet(reqFor(), { plan: 'p', edits } as never);
 
 test('Word 自检:quote 真实存在 → 通过', () => {
@@ -105,6 +108,7 @@ function fakeToolStream(id: string, input: unknown, thinking?: string, toolPream
   const json = JSON.stringify(input);
   return {
     async *[Symbol.asyncIterator]() {
+      yield { type: 'message_start', message: { id: `message-${id}`, model: 'provider-model' } };
       if (thinking) yield { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking } };
       if (toolPreamble) yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: toolPreamble } };
       yield { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id, name: 'propose_changeset' } };
@@ -170,6 +174,12 @@ test('Word 端到端:编造 quote → 校验失败回喂 → 同回合改对(真
   assert.ok(events.some((e) => e.type === 'status' && e.status.phase === 'repairing' && e.status.reason === 'check_failed'), '应发 repair 状态');
   assert.equal(result.kind, 'changeset');
   if (result.kind !== 'changeset') return;
+  assert.equal(result.changeSet.origin.by, 'agent');
+  if (result.changeSet.origin.by === 'agent') {
+    assert.equal(result.changeSet.origin.provenance.modelRequestId, 'message-t2');
+    assert.equal(result.changeSet.origin.provenance.model, 'provider-model');
+    assert.equal(result.changeSet.origin.provenance.repairAttempt, 1);
+  }
   // The finally adopted quote is the corrected one
   const anchor = Object.values(result.changeSet.anchors)[0]!;
   assert.equal(anchor.portable.kind === 'flow' ? anchor.portable.quote.text : '', '增速略有放缓');

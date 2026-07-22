@@ -63,11 +63,12 @@ export class ReviewAuthority {
     sourceFileSha256OrNow?: string | number,
     now = Date.now(),
   ): ProposalEnvelope {
-    const sourceFileSha256 = typeof sourceFileSha256OrNow === 'string' ? sourceFileSha256OrNow : undefined;
+    let sourceFileSha256 = typeof sourceFileSha256OrNow === 'string' ? sourceFileSha256OrNow : undefined;
     const createdAt = typeof sourceFileSha256OrNow === 'number' ? sourceFileSha256OrNow : now;
     assertChangeSet(changeSet);
     if (!format.trim()) throw new Error('proposal format is required');
     if (!documentId.trim()) throw new Error('proposal documentId is required');
+    sourceFileSha256 = bindAgentProvenance(changeSet, documentId, sourceFileSha256, true);
     if (sourceFileSha256 !== undefined) {
       if (!isSha256(sourceFileSha256)) throw new Error('proposal source file SHA-256 is invalid');
       if (changeSet.baseRev !== docRevFromSha256(sourceFileSha256)) {
@@ -172,6 +173,7 @@ export class ReviewAuthority {
     if (proposal.capabilityManifestVersion !== CAPABILITY_MANIFEST_VERSION) throw new Error('proposal capability manifest version is stale');
     if (proposal.format !== format || proposal.baseRev !== changeSet.baseRev) throw new Error('proposal format or revision mismatch');
     if (proposal.changeSetSha256 !== sha256Canonical(changeSet)) throw new Error('proposal ChangeSet hash mismatch');
+    bindAgentProvenance(changeSet, proposal.documentId, proposal.sourceFileSha256, false);
     if (requireSourceHash && !proposal.sourceFileSha256) throw new Error('proposal is not bound to a source file');
   }
 
@@ -185,6 +187,29 @@ export class ReviewAuthority {
     const actual = Buffer.from(signature, 'hex');
     return actual.byteLength === expected.byteLength && timingSafeEqual(actual, expected);
   }
+}
+
+function bindAgentProvenance(
+  changeSet: ChangeSet,
+  documentId: string,
+  sourceFileSha256: string | undefined,
+  rejectUnclaimedSource: boolean,
+): string | undefined {
+  if (changeSet.origin.by !== 'agent') return sourceFileSha256;
+  const provenance = changeSet.origin.provenance;
+  if (provenance.actor.hostId !== documentId) {
+    throw new Error('proposal documentId does not match agent provenance host identity');
+  }
+  if (sourceFileSha256 !== undefined) {
+    if (provenance.sourceFileSha256 && provenance.sourceFileSha256 !== sourceFileSha256) {
+      throw new Error('proposal source file SHA-256 does not match agent provenance');
+    }
+    if (rejectUnclaimedSource && provenance.sourceFileSha256 === null) {
+      throw new Error('agent provenance was not bound to the supplied source file SHA-256');
+    }
+    return sourceFileSha256;
+  }
+  return provenance.sourceFileSha256 ?? undefined;
 }
 
 export function sha256Bytes(bytes: Uint8Array): string {

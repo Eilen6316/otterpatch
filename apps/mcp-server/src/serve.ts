@@ -88,6 +88,32 @@ function proposalDocumentId(body: Record<string, unknown>, binding: ReturnType<t
     : String(body.documentId ?? fallback);
 }
 
+function optionalAuditId(body: Record<string, unknown>, key: 'sessionId' | 'userId' | 'parentProposalId'): string | undefined {
+  const value = body[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !value.trim() || value.length > 2_048) {
+    throw new HttpError(400, `${key} must be a non-blank string of at most 2048 characters`);
+  }
+  return value.trim();
+}
+
+function provenanceRequestFields(
+  body: Record<string, unknown>,
+  binding: ReturnType<typeof proposalBinding>,
+  documentId: string,
+): Pick<ProposeRequest, 'documentId' | 'sourceFileSha256' | 'sessionId' | 'userId' | 'parentProposalId'> {
+  const sessionId = optionalAuditId(body, 'sessionId');
+  const userId = optionalAuditId(body, 'userId');
+  const parentProposalId = optionalAuditId(body, 'parentProposalId');
+  return {
+    documentId,
+    ...(binding.sourceFileSha256 ? { sourceFileSha256: binding.sourceFileSha256 } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(userId ? { userId } : {}),
+    ...(parentProposalId ? { parentProposalId } : {}),
+  };
+}
+
 function hasValidToken(req: IncomingMessage): boolean {
   return matchesLocalToken(req.headers['x-otterpatch-token'], AUTH_TOKEN);
 }
@@ -202,6 +228,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       if (req.method === 'POST' && url === '/propose') {
         const a = await readBody(req);
         const binding = proposalBinding(a);
+        const documentId = proposalDocumentId(a, binding, 'serve');
         const model = createModelClient((a.provider as Provider) || 'claude', {
           apiKey: a.apiKey as string | undefined,
           ...(a.model ? { model: a.model as string } : {}),
@@ -217,6 +244,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               baseRev: binding.baseRev,
               anchors: [],
               context: String(a.context ?? ''),
+              ...provenanceRequestFields(a, binding, documentId),
               ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}),
               ...(a.board ? { board: a.board as BoardInput } : {}),
               ...(a.doc ? { doc: a.doc as { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> } } : {}),
@@ -234,13 +262,14 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         else send(req, res, 200, {
           changeSet: r.changeSet,
           diff: await rt.diff(r.changeSet, diffInput(a)),
-          proposal: rt.createProposal(r.changeSet, String(a.format), proposalDocumentId(a, binding, r.changeSet.hostId), binding.sourceFileSha256),
+          proposal: rt.createProposal(r.changeSet, String(a.format), documentId, binding.sourceFileSha256),
         });
         return;
       }
       if (req.method === 'POST' && url === '/propose-stream') {
         const a = await readBody(req);
         const binding = proposalBinding(a);
+        const documentId = proposalDocumentId(a, binding, 'serve');
         const model = createModelClient((a.provider as Provider) || 'claude', {
           apiKey: a.apiKey as string | undefined,
           ...(a.model ? { model: a.model as string } : {}),
@@ -261,6 +290,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               baseRev: binding.baseRev,
               anchors: [],
               context: String(a.context ?? ''),
+              ...provenanceRequestFields(a, binding, documentId),
               ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}),
               ...(a.board ? { board: a.board as BoardInput } : {}),
               ...(a.doc ? { doc: a.doc as { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> } } : {}),
@@ -284,7 +314,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               kind: 'changeset',
               changeSet: result.changeSet,
               diff: await rt.diff(result.changeSet, diffInput(a)),
-              proposal: rt.createProposal(result.changeSet, String(a.format), proposalDocumentId(a, binding, result.changeSet.hostId), binding.sourceFileSha256),
+              proposal: rt.createProposal(result.changeSet, String(a.format), documentId, binding.sourceFileSha256),
             });
           } else if (result.kind === 'clarify') {
             sse({ type: 'done', kind: 'clarify', questions: result.questions });

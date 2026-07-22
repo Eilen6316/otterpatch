@@ -31,7 +31,7 @@ try {
       id: 'bound-drawio',
       hostId: 'serve',
       baseRev: requestBody.baseRev,
-      origin: { by: 'agent', sessionId: 'test' },
+      origin: { by: 'human' },
       meta: { intent: 'rename node' },
       anchors: {
         a1: { id: 'a1', hostId: 'serve', kind: 'object', ref: null, baseRev: requestBody.baseRev, portable: { kind: 'object', slide: 0, elementId: '2' } },

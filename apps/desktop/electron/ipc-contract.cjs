@@ -9,7 +9,7 @@ const SHA256_RX = /^[a-f0-9]{64}$/;
 const FORMATS = new Set(['excel', 'xlsx', 'word', 'docx', 'drawio', 'pdf', 'ppt', 'pptx']);
 const PROPOSE_KEYS = new Set([
   'format', 'intent', 'context', 'baseRev', 'sourceFileSha256', 'provider', 'model', 'apiKey', 'documentId',
-  'sheet', 'board', 'doc', 'ppt', 'history',
+  'sessionId', 'userId', 'parentProposalId', 'sheet', 'board', 'doc', 'ppt', 'history',
 ]);
 const COMMIT_KEYS = new Set(['format', 'fileBase64', 'changeSet', 'proposal', 'acceptedEditIds']);
 const STREAM_EVENT_TYPES = new Set(['status', 'answer', 'draft', 'done', 'error']);
@@ -30,6 +30,12 @@ function validateProposeInvocation(value) {
   optionalString(payload.model, 'model', 256);
   optionalString(payload.apiKey, 'apiKey', MAX_API_KEY_CHARS);
   optionalString(payload.documentId, 'documentId', 2_048);
+  optionalNonBlankString(payload.sessionId, 'sessionId', 2_048);
+  if (typeof payload.sessionId === 'string' && payload.sessionId.trim().toLowerCase() === 'mock') {
+    throw new Error('sessionId "mock" is reserved');
+  }
+  optionalNonBlankString(payload.userId, 'userId', 2_048);
+  optionalNonBlankString(payload.parentProposalId, 'parentProposalId', 2_048);
   if (payload.baseRev !== undefined && (!Number.isSafeInteger(payload.baseRev) || payload.baseRev < 0)) {
     throw new Error('baseRev must be a non-negative safe integer');
   }
@@ -163,6 +169,12 @@ function boundedString(value, label, maxChars) {
 
 function optionalString(value, label, maxChars) {
   if (value !== undefined) boundedString(value, label, maxChars);
+}
+
+function optionalNonBlankString(value, label, maxChars) {
+  if (value === undefined) return;
+  const result = boundedString(value, label, maxChars);
+  if (!result.trim()) throw new Error(`${label} must not be blank`);
 }
 
 function optionalStringArray(value, label, maxItems, maxChars) {

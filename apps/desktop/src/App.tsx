@@ -86,6 +86,34 @@ const UniverSheet = lazy(() => import('./UniverSheet.js'));
 /** Word 文档工作区:自控富文本编辑器(懒加载,仅 Word 用)。 */
 const RichDoc = lazy(() => import('./RichDoc.js'));
 
+function freshLocalId(): string {
+  const value = globalThis.crypto?.randomUUID?.();
+  if (!value) throw new Error('secure UUID generation is unavailable');
+  return value;
+}
+
+function persistedLocalId(key: string): string {
+  try {
+    const existing = localStorage.getItem(key)?.trim();
+    if (existing && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(existing)) return existing;
+    const value = freshLocalId();
+    localStorage.setItem(key, value);
+    return value;
+  } catch {
+    return freshLocalId();
+  }
+}
+
+function latestProposalId(thread: readonly Turn[]): string | undefined {
+  for (let index = thread.length - 1; index >= 0; index--) {
+    const turn = thread[index];
+    if (!turn || turn.role !== 'assistant' || turn.kind !== 'diff' || !turn.proposal || typeof turn.proposal !== 'object') continue;
+    const proposalId = (turn.proposal as { proposalId?: unknown }).proposalId;
+    if (typeof proposalId === 'string' && proposalId.trim()) return proposalId;
+  }
+  return undefined;
+}
+
 /** 渐进披露驾驶舱。风格参照 Next AI Drawio:纯白、分区块、线性图标、无 emoji。五语 i18n(t 包裹显示文案)。 */
 
 /** 工作区格式:文件名 + 工具栏随之联动。 */
@@ -524,6 +552,8 @@ export function App() {
   const [sendErr, setSendErr] = useState<string | null>(null);
   const [answer, setAnswer] = useState<string | null>(null);
   const lsJson = <T,>(k: string, fb: T): T => { try { const v = JSON.parse(localStorage.getItem(k) ?? 'null'); return v == null ? fb : (v as T); } catch { return fb; } };
+  const [localUserId] = useState(() => persistedLocalId('oa.auditUserId'));
+  const [conversationSessionId, setConversationSessionId] = useState(() => persistedLocalId('oa.auditSessionId'));
   // Cursor 式连续对话流 + 模型历史,持久化到当前工作区(localStorage)
   const [thread, setThread] = useState<Turn[]>(() => sanitizeAppThread(lsJson<Turn[]>('oa.thread', [])));
   const [recent, setRecent] = useState<{ t: string; time: string }[]>([]);
@@ -739,6 +769,8 @@ export function App() {
           : `\n[当前选区·用户此刻圈选了这段(${selDesc})]:"${wordSel.text}"\n若指令含"这段/这句/这里/选中的/选中/它",优先针对它;quote 用这段真实原文定位。`) : '\n[未圈选文字]:请基于整篇文档理解。')
       : selectionContext();
     const proposalFile = fileSnapshot?.format === fmt ? fileSnapshot : null;
+    const proposalDocumentId = proposalFile ? fileSnapshotDocumentId(proposalFile) : `desktop:${fmt}`;
+    const parentProposalId = latestProposalId(thread);
     const proposalBoard = fmt === 'drawio' && boardSel?.board
       ? { ...boardSel.board, ...(proposalFile?.drawioSourceEncoding ? { sourceEncoding: proposalFile.drawioSourceEncoding } : {}) }
       : undefined;
@@ -769,7 +801,7 @@ export function App() {
         type StreamEvt = { type: string; status?: unknown; delta?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; proposal?: unknown; questions?: ClarifyQuestion[]; message?: string; error?: { kind?: string } };
         await streamPropose<StreamEvt>(
           ep,
-          { format: fmt, intent: theIntent, context: ctx, baseRev: proposalFile?.revision ?? 0, provider, model, apiKey, ...(proposalFile ? { documentId: fileSnapshotDocumentId(proposalFile), sourceFileSha256: proposalFile.sha256 } : {}), ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(proposalBoard ? { board: proposalBoard } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildAppHistory(thread) } : {}) },
+          { format: fmt, intent: theIntent, context: ctx, baseRev: proposalFile?.revision ?? 0, provider, model, apiKey, documentId: proposalDocumentId, sessionId: conversationSessionId, userId: localUserId, ...(proposalFile ? { sourceFileSha256: proposalFile.sha256 } : {}), ...(parentProposalId ? { parentProposalId } : {}), ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(proposalBoard ? { board: proposalBoard } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildAppHistory(thread) } : {}) },
           () => {
             if (theIntent.trim()) setRecent((rr) => [{ t: theIntent.trim(), time: t('刚刚') }, ...rr.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
             setSent(true);
@@ -919,6 +951,9 @@ export function App() {
   };
   /** 开启新对话:清空多轮历史 + 当前视图。 */
   const newConversation = (): void => {
+    const nextSessionId = freshLocalId();
+    try { localStorage.setItem('oa.auditSessionId', nextSessionId); } catch { /* persistence is best-effort */ }
+    setConversationSessionId(nextSessionId);
     setThread([]);
     resetDiff();
     setSendErr(null);

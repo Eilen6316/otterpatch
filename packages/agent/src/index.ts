@@ -3,6 +3,7 @@
  * Provider-agnostic ModelClient: native Claude + OpenAI-compatible (DeepSeek/GLM/Kimi/Doubao/MiniMax/Gemini/ChatGPT).
  */
 export * from './model.js';
+export * from './provenance.js';
 export * from './dialects.js';
 export * from './conventions.js';
 export * from './anthropic.js';

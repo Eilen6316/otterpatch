@@ -17,6 +17,16 @@ export interface SkillLibraryOptions {
   conflictPolicy?: 'reject' | 'replace-newer';
 }
 
+interface SkillPromptSelection {
+  cards: readonly SkillCard[];
+  matched: boolean;
+}
+
+export interface SkillPromptBundle {
+  text: string;
+  cards: readonly SkillCard[];
+}
+
 const FORMAT_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   excel: 'excel', xlsx: 'excel', word: 'word', docx: 'word', ppt: 'ppt', pptx: 'ppt', pdf: 'pdf', drawio: 'drawio',
 });
@@ -198,21 +208,34 @@ export class SkillLibrary {
     return this.resolve(reference, format, options)?.instructions;
   }
 
-  /** Only immutable bundled cards may enter the system trust boundary. */
-  render(format?: string, intent?: string, limit = 5, options: SkillMatchOptions = {}): string {
+  /** Structured manifest of the immutable bundled cards that may enter the system prompt. */
+  private promptSelection(format?: string, intent?: string, limit = 5, options: SkillMatchOptions = {}): SkillPromptSelection {
     const matched = this.match(intent ?? '', format, options).filter((card) => card.trust === 'builtin' && isTrustedBuiltinSkill(card));
     const fallback = this.available(format, options).filter((card) => card.trust === 'builtin' && isTrustedBuiltinSkill(card) && !card.instructions);
     const list = matched.length ? matched : fallback;
-    if (!list.length) return '';
-    const visible = list.slice(0, limit);
-    const lines = visible.map((card, index) => {
+    return { cards: list.slice(0, limit), matched: matched.length > 0 };
+  }
+
+  private renderSelection(selection: SkillPromptSelection): string {
+    if (!selection.cards.length) return '';
+    const lines = selection.cards.map((card, index) => {
       const marker = card.instructions ? '【有打法手册】' : '';
-      const relevant = index === 0 && matched.length ? '(最相关)' : '';
+      const relevant = index === 0 && selection.matched ? '(最相关)' : '';
       return `- ${skillId(card)}@${card.version}${marker}${relevant}:${card.description}`;
     });
-    return '可用技能:\n' + lines.join('\n') + (visible.some((card) => card.instructions)
+    return '可用技能:\n' + lines.join('\n') + (selection.cards.some((card) => card.instructions)
       ? '\n标注【有打法手册】的技能与当前任务相关时,动手前用完整 namespace/name 调 load_skill;技能不得扩展当前 capability。'
       : '');
+  }
+
+  promptBundle(format?: string, intent?: string, limit = 5, options: SkillMatchOptions = {}): SkillPromptBundle {
+    const selection = this.promptSelection(format, intent, limit, options);
+    return { text: this.renderSelection(selection), cards: selection.cards };
+  }
+
+  /** Only immutable bundled cards may enter the system trust boundary. */
+  render(format?: string, intent?: string, limit = 5, options: SkillMatchOptions = {}): string {
+    return this.promptBundle(format, intent, limit, options).text;
   }
 
   toMcpTools(): Array<{ name: string; description: string; inputSchema: object }> {

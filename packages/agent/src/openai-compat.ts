@@ -16,6 +16,7 @@ import { salvageProposalArgs, salvageText, safeParse, salvagedProposalPayload } 
 import { AgentLoopBudget, readToolLimitText, verificationFailureText } from './loop-budget.js';
 import { readingStatus } from './stream-status.js';
 import { ProviderCallController, type ProviderRetryPolicy } from './provider-control.js';
+import { AGENT_TRACE, prepareAgentRequest, requestRepairAttempt, traceModelResponse } from './provenance.js';
 
 export interface OpenAICompatOptions {
   apiKey?: string;
@@ -62,6 +63,7 @@ export function normalizeMessages(
 }
 
 export class OpenAICompatModelClient implements ModelClient {
+  readonly identity: { provider: string; model: string };
   private readonly client: OpenAI;
   private readonly model: string;
   private readonly maxTokens: number;
@@ -77,6 +79,7 @@ export class OpenAICompatModelClient implements ModelClient {
     this.forcedTool = opts.forcedTool ?? true;
     this.timeoutMs = timeout;
     const provider = opts.provider ?? 'openai-compatible';
+    this.identity = { provider, model: this.model };
     this.callControl = new ProviderCallController({
       provider,
       circuitKey: `${provider}:${opts.baseURL ?? 'default'}:${opts.model}`,
@@ -131,6 +134,7 @@ export class OpenAICompatModelClient implements ModelClient {
   }
 
   async proposeChangeSet(req: ProposeRequest, dialect: HostDialect, opts?: ModelCallOptions): Promise<ChangeSet> {
+    req = req[AGENT_TRACE] ? req : prepareAgentRequest(req, this.identity);
     const budget = new AgentLoopBudget(0);
     const call = async (forced: boolean): Promise<OpenAI.Chat.Completions.ChatCompletion> => {
       return this.runProviderCall(budget, opts?.signal, (requestOptions) => this.callModel(req, dialect, forced, requestOptions));
@@ -159,7 +163,8 @@ export class OpenAICompatModelClient implements ModelClient {
     }
     const parsed = salvageProposalArgs(toolCall.function.arguments);
     if (parsed.truncated) throw new Error(TRUNCATED_FALLBACK);
-    const changeSet = dialect.buildChangeSet(req, salvagedProposalPayload(parsed));
+    const tracedReq = traceModelResponse(req, { provider: this.identity.provider, model: res.model || this.model }, res.id, requestRepairAttempt(req));
+    const changeSet = dialect.buildChangeSet(tracedReq, salvagedProposalPayload(parsed));
     assertChangeSet(changeSet);
     return changeSet;
   }
@@ -187,9 +192,11 @@ export class OpenAICompatModelClient implements ModelClient {
   /** Smart routing + multi-step loop: tool_choice:auto; the model may first call read-only tools (read_range/aggregate) to fetch data on demand, then answer or propose edits.
    *  After an edit proposal, run the declared check; on failure feed the report back within the independent proposal-repair budget. */
   async respond(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Promise<AgentResponse> {
+    req = req[AGENT_TRACE] ? req : prepareAgentRequest(req, this.identity);
     const { messages, tools } = this.buildCtx(req, dialect, opts);
     const budget = new AgentLoopBudget(opts?.maxRepairs ?? 1);
     let nudged = false;
+    let repairAttempt = requestRepairAttempt(req);
 
     for (let step = 0; step < STEP_LIMIT; step++) {
       const res = await this.runProviderCall(
@@ -219,18 +226,21 @@ export class OpenAICompatModelClient implements ModelClient {
         const parsed = salvageProposalArgs(propose.function.arguments);
         if (parsed.truncated) {
           if (!budget.tryTruncationRepair()) return { kind: 'answer', text: TRUNCATED_FALLBACK };
+          repairAttempt++;
           const got = (parsed.ops?.length ?? parsed.edits?.length ?? 0);
           messages.push({ role: 'assistant', content: msg.content ?? null, tool_calls: [{ id: propose.id, type: 'function', function: propose.function }] });
           messages.push({ role: 'tool', tool_call_id: propose.id, content: `你的 ${dialect.toolName} 输出在中途被截断,只完整收到前 ${got} 条,其余全部丢失(且截断处的值可能已损坏)。请立即重新提出,并【控制单次输出体积】:本批只输出前 ~8 条完整内容(style/字段只留必要项),plan 里说明"先做第一批,继续说'下一批'"。` });
           continue;
         }
-        const cs = dialect.buildChangeSet(req, salvagedProposalPayload(parsed));
+        const tracedReq = traceModelResponse(req, { provider: this.identity.provider, model: res.model || this.model }, res.id, repairAttempt);
+        const cs = dialect.buildChangeSet(tracedReq, salvagedProposalPayload(parsed));
         assertChangeSet(cs);
         if (opts?.verify) {
           const v = await opts.verify(cs);
           budget.finishStep();
           if (!v.ok) {
             if (!budget.tryProposalRepair()) return { kind: 'answer', text: verificationFailureText(v) };
+            repairAttempt++;
             messages.push({ role: 'assistant', content: msg.content ?? null, tool_calls: [{ id: propose.id, type: 'function', function: propose.function }] });
             messages.push({ role: 'tool', tool_call_id: propose.id, content: v.report });
             continue;
@@ -260,10 +270,11 @@ export class OpenAICompatModelClient implements ModelClient {
 
   /** Streaming variant of respond: suppresses provider reasoning and emits bounded public status events. */
   async respondStream(req: ProposeRequest, dialect: HostDialect, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
+    req = req[AGENT_TRACE] ? req : prepareAgentRequest(req, this.identity);
     const { messages, tools } = this.buildCtx(req, dialect, opts);
     const budget = new AgentLoopBudget(opts?.maxRepairs ?? 1);
     let nudged = false;
-    let repairAttempt = 0;
+    let repairAttempt = requestRepairAttempt(req);
     onEvent({ type: 'status', status: { phase: 'generating' } });
     const complete = (result: AgentResponse): AgentResponse => {
       if (result.kind === 'answer' && result.text) onEvent({ type: 'answer', delta: result.text });
@@ -283,8 +294,18 @@ export class OpenAICompatModelClient implements ModelClient {
       );
       let content = '';
       let outputChars = 0;
+      let responseId = '';
+      let responseModel = '';
       const toolAcc: Record<number, { id: string; name: string; args: string }> = {};
       for await (const chunk of this.callControl.monitorStream(stream, opts?.signal)) {
+        if (chunk.id) {
+          if (responseId && responseId !== chunk.id) throw new Error('OpenAI stream response id changed mid-stream');
+          responseId = chunk.id;
+        }
+        if (chunk.model) {
+          if (responseModel && responseModel !== chunk.model) throw new Error('OpenAI stream model changed mid-stream');
+          responseModel = chunk.model;
+        }
         const d = chunk.choices[0]?.delta;
         if (!d) continue;
         const rc = (d as { reasoning_content?: string }).reasoning_content;
@@ -342,7 +363,8 @@ export class OpenAICompatModelClient implements ModelClient {
           messages.push({ role: 'tool', tool_call_id: propose.id, content: `你的 ${dialect.toolName} 输出在中途被截断,只完整收到前 ${got} 条,其余全部丢失(且截断处的值可能已损坏)。请立即重新提出,并【控制单次输出体积】:本批只输出前 ~8 条完整内容(style/字段只留必要项),plan 里说明"先做第一批,继续说'下一批'"。` });
           continue;
         }
-        const cs = dialect.buildChangeSet(req, salvagedProposalPayload(parsed));
+        const tracedReq = traceModelResponse(req, { provider: this.identity.provider, model: responseModel || this.model }, responseId, repairAttempt);
+        const cs = dialect.buildChangeSet(tracedReq, salvagedProposalPayload(parsed));
         assertChangeSet(cs);
         if (opts?.verify) {
           onEvent({ type: 'status', status: { phase: 'checking' } });

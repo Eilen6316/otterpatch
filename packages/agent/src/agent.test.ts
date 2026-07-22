@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RESOURCE_LIMITS, ResourceLimitError, STRICT_POLICY, type DocRev } from '@otterpatch/core';
-import { Agent, AnthropicModelClient, ConventionStack, EXCEL_OPS, MockModelClient, OpenAICompatModelClient, conventionFromMarkdown, createModelClient, excelDialect, normalizeMessages, PROVIDERS, wordDialect, type ModelClient, type Provider, type StreamEvent } from './index.js';
+import { RESOURCE_LIMITS, ResourceLimitError, STRICT_POLICY, docRevFromSha256, isUuidV7, type DocRev } from '@otterpatch/core';
+import { Agent, AnthropicModelClient, ConventionStack, EXCEL_OPS, MockModelClient, OpenAICompatModelClient, conventionFromMarkdown, createModelClient, excelDialect, normalizeMessages, prepareAgentRequest, PROVIDERS, wordDialect, type ModelClient, type Provider, type StreamEvent } from './index.js';
 import { defaultLibrary } from '@otterpatch/skills';
 import { AgentLoopBudget, validProposalRepairs } from './loop-budget.js';
 import { readingStatus, sanitizeStreamStatus } from './stream-status.js';
@@ -21,6 +21,16 @@ test('Agent excel: 意图 + Mock → grid setValue ChangeSet', async () => {
   assert.equal(e.op.kind, 'setValue');
   assert.equal(cs.anchors[e.target]!.portable.kind, 'grid');
   assert.equal(cs.meta.planSummary, '补 B1');
+  assert.equal(isUuidV7(cs.id), true);
+  assert.equal(cs.origin.by, 'agent');
+  if (cs.origin.by === 'agent') {
+    assert.equal(isUuidV7(cs.origin.sessionId), true);
+    assert.equal(cs.origin.provenance.provider, 'mock');
+    assert.equal(cs.origin.provenance.model, 'deterministic-mock');
+    assert.equal(isUuidV7(cs.origin.provenance.modelRequestId), true);
+    assert.equal(cs.origin.provenance.actor.hostId, 'h1');
+    assert.equal(cs.origin.provenance.repairAttempt, 0);
+  }
 });
 
 test('Agent drawio: 意图 + Mock → object ChangeSet(按 mxCell id)', async () => {
@@ -39,6 +49,27 @@ test('Agent drawio: 意图 + Mock → object ChangeSet(按 mxCell id)', async ()
   const anchor = cs.anchors[e.target]!;
   assert.equal(anchor.portable.kind, 'object');
   assert.equal(anchor.portable.kind === 'object' && anchor.portable.elementId, '2');
+});
+
+test('Agent provenance carries trusted request bindings and rejects the mock session placeholder', async () => {
+  const sourceFileSha256 = 'a'.repeat(64);
+  const mock = new MockModelClient(() => ({ plan: 'bound', edits: [{ cell: 'Sheet1!A1', op: 'setValue', value: 1 }] }));
+  const cs = await new Agent(mock).propose({
+    hostId: 'serve', format: 'excel', intent: 'x', baseRev: docRevFromSha256(sourceFileSha256), anchors: [], context: '',
+    sessionId: 'session-1', userId: 'user-1', documentId: 'document-1', sourceFileSha256, parentProposalId: 'proposal-1',
+  });
+  assert.equal(cs.origin.by, 'agent');
+  if (cs.origin.by === 'agent') {
+    assert.equal(cs.origin.sessionId, 'session-1');
+    assert.equal(cs.origin.provenance.sourceFileSha256, sourceFileSha256);
+    assert.equal(cs.origin.provenance.parentProposalId, 'proposal-1');
+    assert.deepEqual(cs.origin.provenance.actor, { userId: 'user-1', hostId: 'document-1' });
+    assert.equal(cs.origin.provenance.promptPolicyVersion, 'prompt-policy-v1');
+  }
+  await assert.rejects(
+    () => new Agent(mock).propose({ hostId: 'h', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '', sessionId: 'mock' }),
+    /reserved/,
+  );
 });
 
 test('Agent drawio rejects compressed source diagrams before calling the model', async () => {
@@ -107,7 +138,10 @@ test('Excel tool schema and builder discriminate operations without dangerous de
   ]);
   assert.ok(variants.every((variant) => variant.additionalProperties === false));
 
-  const request = { hostId: 'h1', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '', sheet: { name: 'Current', a1: 'A1', values: [[1]] } };
+  const request = prepareAgentRequest(
+    { hostId: 'h1', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '', sheet: { name: 'Current', a1: 'A1', values: [[1]] } },
+    { provider: 'test', model: 'dialect-test' },
+  );
   for (const edit of [
     { cell: 'A1', op: 'setValue' },
     { cell: 'A1', op: 'setFormula' },
@@ -175,6 +209,11 @@ test('Agent + SkillLibrary: 命中技能注入系统提示,不影响产出', asy
   });
   assert.equal(cs.edits.length, 1);
   assert.equal(lib.match('把金额列补齐', 'excel')[0]!.name, 'xlsx'); // library matches the Excel skill
+  assert.equal(cs.origin.by, 'agent');
+  if (cs.origin.by === 'agent') {
+    assert.ok(cs.origin.provenance.skillVersions.some((skill) => skill.id === 'otterpatch/xlsx'));
+    assert.ok(cs.origin.provenance.skillVersions.every((skill) => /^sha256:[a-f0-9]{64}$/.test(skill.checksum)));
+  }
 });
 
 test('Agent skill tools expose namespaced metadata and filter skills outside current capabilities', async () => {
@@ -187,12 +226,12 @@ test('Agent skill tools expose namespaced metadata and filter skills outside cur
     proposeChangeSet: async () => { throw new Error('unused'); },
     respond: async (_req, _dialect, opts) => {
       catalog = opts?.extraTools?.exec('find_skills', { query: 'charts' }) ?? '';
-      loaded = opts?.extraTools?.exec('load_skill', { name: 'otterpatch/chart-selection' }) ?? '';
+      loaded = opts?.extraTools?.exec('load_skill', { name: 'otterpatch/xlsx-authoring' }) ?? '';
       blocked = opts?.extraTools?.exec('load_skill', { name: 'user/chart-writer' }) ?? '';
-      return { kind: 'answer', text: 'ok' };
+      return { kind: 'changeset', changeSet: _dialect.buildChangeSet(_req, VALID_EXCEL_PROPOSAL) };
     },
   };
-  await new Agent(model, undefined, lib).respond({
+  const result = await new Agent(model, undefined, lib).respond({
     hostId: 'h', format: 'excel', intent: 'recommend charts', baseRev: 0 as DocRev, anchors: [], context: '',
   });
 
@@ -200,8 +239,12 @@ test('Agent skill tools expose namespaced metadata and filter skills outside cur
   assert.doesNotMatch(catalog, /user\/chart-writer/);
   assert.match(catalog, /sha256:[0-9a-f]{64}/);
   assert.match(loaded, /"untrusted_data":true/);
-  assert.match(loaded, /"allowedOps":\[\]/);
+  assert.match(loaded, /"allowedOps":\["setValue","setFormula","setStyle","setNumberFormat"\]/);
   assert.match(blocked, /capability 不兼容/);
+  assert.equal(result.kind, 'changeset');
+  if (result.kind === 'changeset' && result.changeSet.origin.by === 'agent') {
+    assert.ok(result.changeSet.origin.provenance.skillVersions.some((skill) => skill.id === 'otterpatch/xlsx-authoring'));
+  }
 });
 
 test('ConventionStack: 分层拼接,global→workspace→document(就近在后)', () => {
@@ -368,6 +411,8 @@ const VALID_EXCEL_PROPOSAL = { plan: 'x', edits: [{ cell: 'Sheet1!A1', op: 'setV
 
 function openAiToolResponse(name: string, args: string, id: string, completionTokens = 1): unknown {
   return {
+    id: `response-${id}`,
+    model: 'provider-model',
     choices: [{ message: { content: null, tool_calls: [{ id, type: 'function', function: { name, arguments: args } }] } }],
     usage: { completion_tokens: completionTokens },
   };
@@ -378,7 +423,7 @@ function openAiToolStream(name: string, args: string, id: string, reasoningConte
     async *[Symbol.asyncIterator]() {
       if (reasoningContent) yield { choices: [{ delta: { reasoning_content: reasoningContent } }] };
       if (toolPreamble) yield { choices: [{ delta: { content: toolPreamble } }] };
-      yield { choices: [{ delta: { tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: args } }] } }] };
+      yield { id: `response-${id}`, model: 'provider-model', choices: [{ delta: { tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: args } }] } }] };
     },
   };
 }
@@ -390,6 +435,18 @@ function openAiTextStream(content: string): AsyncIterable<unknown> {
     },
   };
 }
+
+test('OpenAI proposals fail closed when the provider omits its response id', async () => {
+  const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'test-model' });
+  (client as unknown as { client: { chat: { completions: { create: () => Promise<unknown> } } } }).client = {
+    chat: { completions: { create: async () => ({
+      model: 'provider-model',
+      choices: [{ message: { content: null, tool_calls: [{ id: 't1', type: 'function', function: { name: 'propose_changeset', arguments: JSON.stringify(VALID_EXCEL_PROPOSAL) } }] } }],
+      usage: { completion_tokens: 1 },
+    }) } },
+  };
+  await assert.rejects(() => client.respond(LOOP_REQ, excelDialect), /modelRequestId/);
+});
 
 test('OpenAI stream never exposes provider reasoning_content', async () => {
   const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'test-model' });
@@ -566,10 +623,15 @@ test('Anthropic non-stream repair budget is a strict retry ceiling', async () =>
   const client = new AnthropicModelClient({ apiKey: 'test-key', model: 'test-model' });
   let calls = 0;
   (client as unknown as { client: { messages: { create: () => Promise<unknown> } } }).client = {
-    messages: { create: async () => ({
-      content: [{ type: 'tool_use', id: `t${++calls}`, name: 'propose_changeset', input: VALID_EXCEL_PROPOSAL }],
-      usage: { output_tokens: 1 },
-    }) },
+    messages: { create: async () => {
+      const call = ++calls;
+      return {
+        id: `message-${call}`,
+        model: 'provider-model',
+        content: [{ type: 'tool_use', id: `t${call}`, name: 'propose_changeset', input: VALID_EXCEL_PROPOSAL }],
+        usage: { output_tokens: 1 },
+      };
+    } },
   };
   const result = await client.respond(LOOP_REQ, excelDialect, {
     maxRepairs: 1,
@@ -598,6 +660,11 @@ test('truncation and proposal repair budgets are independent', async () => {
   assert.equal(calls, 3);
   assert.equal(verifies, 2);
   assert.equal(result.kind, 'changeset');
+  if (result.kind === 'changeset' && result.changeSet.origin.by === 'agent') {
+    assert.equal(result.changeSet.origin.provenance.modelRequestId, 'response-t3');
+    assert.equal(result.changeSet.origin.provenance.model, 'provider-model');
+    assert.equal(result.changeSet.origin.provenance.repairAttempt, 2);
+  }
 });
 
 test('read-tool budget stops the loop before the ninth tool is executed', async () => {

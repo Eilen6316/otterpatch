@@ -1,11 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { DocRev } from '@otterpatch/core';
-import { buildDrawioVerifier, drawioDialect, type ProposeRequest } from './index.js';
+import { buildDrawioVerifier, drawioDialect, prepareAgentRequest, type ProposeRequest } from './index.js';
 
 // Board context already contains two nodes n1/n2 and one edge e1; ids are parsed as exact tokens.
 const BOARD = '节点 id=n1 label=开始; 节点 id=n2 label=处理; 边 id=e1 n1→n2';
-const reqFor = (): ProposeRequest => ({ hostId: 'h1', format: 'drawio', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: BOARD });
+const reqFor = (): ProposeRequest => prepareAgentRequest(
+  { hostId: 'h1', format: 'drawio', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: BOARD },
+  { provider: 'test', model: 'dialect-test' },
+);
 const cs = (ops: unknown[]) => drawioDialect.buildChangeSet(reqFor(), { plan: 'p', ops } as never);
 const verify = buildDrawioVerifier(BOARD);
 

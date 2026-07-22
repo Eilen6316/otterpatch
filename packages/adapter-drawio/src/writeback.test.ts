@@ -33,7 +33,7 @@ test('drawio 写回:只改目标 diagram 的目标 cell,另一 diagram 字节级
     hostId: 'h1',
     baseRev: 0 as DocRev,
     anchors: { a0: anchor('a0', 0, '2') } as Record<AnchorId, LogicalAnchor>,
-    origin: { by: 'agent', sessionId: 't' },
+    origin: { by: 'human' },
     meta: { intent: '改 d0 的 cell 2' },
     edits: [{ id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'setObjectProps', props: { value: '新' } } }],
   };
@@ -61,7 +61,7 @@ test('drawio 写回:add + delete 跨两个 diagram', async () => {
     hostId: 'h1',
     baseRev: 0 as DocRev,
     anchors: { a0: anchor('a0', 0, '1'), a1: anchor('a1', 1, '9') } as Record<AnchorId, LogicalAnchor>,
-    origin: { by: 'agent', sessionId: 't' },
+    origin: { by: 'human' },
     meta: { intent: 'add+delete' },
     edits: [
       { id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'addObject', payload: { id: 'n1', value: '新节点', vertex: true, parent: '1', geometry: { x: 10, y: 10, width: 80, height: 40 } } } },
@@ -83,7 +83,7 @@ test('drawio writeback: out-of-range diagram reports dropped edit', async () => 
     hostId: 'h1',
     baseRev: 0 as DocRev,
     anchors: { a0: anchor('a0', 99, '2') } as Record<AnchorId, LogicalAnchor>,
-    origin: { by: 'agent', sessionId: 't' },
+    origin: { by: 'human' },
     meta: { intent: 'bad page' },
     edits: [{ id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'setObjectProps', props: { value: 'x' } } }],
   };
@@ -99,7 +99,7 @@ test('drawio writeback: deleting a missing id is dropped, not applied', async ()
     hostId: 'h1',
     baseRev: 0 as DocRev,
     anchors: { a0: anchor('a0', 0, 'missing') } as Record<AnchorId, LogicalAnchor>,
-    origin: { by: 'agent', sessionId: 't' },
+    origin: { by: 'human' },
     meta: { intent: 'delete missing object' },
     edits: [{ id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'deleteObject' } }],
   };
@@ -119,7 +119,7 @@ test('drawio fidelity separates locality, package validity, and semantic verific
     hostId: 'h1',
     baseRev: 0 as DocRev,
     anchors: { a0: anchor('a0', 0, '2') } as Record<AnchorId, LogicalAnchor>,
-    origin: { by: 'agent', sessionId: 't' },
+    origin: { by: 'human' },
     meta: { intent: 'change one node' },
     edits: [{ id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'setObjectProps', props: { value: 'new' } } }],
   };
@@ -171,7 +171,7 @@ test('drawio writeback: validates ChangeSets at the commit boundary', async () =
     hostId: 'h1',
     baseRev: 0 as DocRev,
     anchors: { a0: anchor('a0', 0, '2'), a1: anchor('a1', 0, '1') } as Record<AnchorId, LogicalAnchor>,
-    origin: { by: 'agent' as const, sessionId: 't' },
+    origin: { by: 'human' as const },
     meta: { intent: 'unsafe' },
   };
   for (const name of ['id', 'parent', 'source', 'target']) {
@@ -217,7 +217,7 @@ test('drawio writeback: invalid add topology is dropped without changing the dia
       hostId: 'h1',
       baseRev: 0 as DocRev,
       anchors: { a0: anchor('a0', 0, '1') } as Record<AnchorId, LogicalAnchor>,
-      origin: { by: 'agent', sessionId: 't' },
+      origin: { by: 'human' },
       meta: { intent: 'invalid add' },
       edits: [{ id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'addObject', payload } }],
     };
@@ -233,7 +233,7 @@ test('drawio writeback: invalid add topology is dropped without changing the dia
     hostId: 'h1',
     baseRev: 0 as DocRev,
     anchors: { a0: anchor('a0', 0, '1'), a1: anchor('a1', 0, '1') } as Record<AnchorId, LogicalAnchor>,
-    origin: { by: 'agent', sessionId: 't' },
+    origin: { by: 'human' },
     meta: { intent: 'cycle' },
     edits: [
       { id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'addObject', payload: { id: 'n1', vertex: true, parent: 'n2' } } },

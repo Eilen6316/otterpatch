@@ -2,9 +2,10 @@
  * Host dialects: Excel (A1 + setValue/setFormula) and drawio (mxCell id + add/update/delete/move).
  * Each format has its own system prompt, tool schema, and raw-proposal → ChangeSet construction.
  */
-import { MAX_FORMULA_CHARS, RESOURCE_LIMITS, ResourceLimitError, assertA1RangeBudget, proposalOperationNamesFor } from '@otterpatch/core';
+import { MAX_FORMULA_CHARS, RESOURCE_LIMITS, ResourceLimitError, assertA1RangeBudget, proposalOperationNamesFor, uuidv7 } from '@otterpatch/core';
 import type { AnchorId, CellValue, ChangeSet, Edit, EditOp, EditOpKind, HostId, LogicalAnchor, StyleScope } from '@otterpatch/core';
 import type { HostDialect, ProposeRequest } from './model.js';
+import { requireAgentTrace } from './provenance.js';
 import {
   EXCEL_SYSTEM, EXCEL_TOOL_DESC, DRAWIO_SYSTEM, DRAWIO_TOOL_DESC,
   WORD_SYSTEM, WORD_TOOL_DESC, PDF_SYSTEM, PDF_TOOL_DESC, PPT_SYSTEM, PPT_TOOL_DESC,
@@ -16,12 +17,13 @@ function newChangeSet(
   anchors: Record<AnchorId, LogicalAnchor>,
   edits: Edit[],
 ): ChangeSet {
+  const trace = requireAgentTrace(req);
   return {
-    id: 'cs-' + Date.now(),
+    id: uuidv7(),
     hostId: req.hostId,
     baseRev: req.baseRev,
     anchors,
-    origin: { by: 'agent', sessionId: req.sessionId ?? 'mock' },
+    origin: { by: 'agent', sessionId: trace.sessionId, provenance: trace.provenance },
     meta: { intent: req.intent, planSummary: plan },
     edits,
   };

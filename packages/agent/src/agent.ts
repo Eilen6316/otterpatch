@@ -12,13 +12,15 @@ import {
   capabilityManifestFor,
   writebackOperationKindsFor,
   type ApprovalPolicy,
+  type AgentSkillVersion,
   type ChangeSet,
   type RiskLevel,
 } from '@otterpatch/core';
 import type { SkillLibrary } from '@otterpatch/skills';
 import type { ConventionStack } from './conventions.js';
 import { DIALECTS } from './dialects.js';
-import type { AgentResponse, HostDialect, ModelCallOptions, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
+import type { AgentResponse, HostDialect, ModelCallOptions, ModelClient, ModelIdentity, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
+import { prepareAgentRequest, recordAgentSkill } from './provenance.js';
 import { assertProposeRequestBudget } from './sheet-tools.js';
 import { validProposalRepairs } from './loop-budget.js';
 
@@ -87,20 +89,33 @@ export class Agent {
     private readonly opts: AgentOptions = {},
   ) {}
 
-  /** Builds the dialect with conventions/skills injected. */
-  private dialectFor(req: ProposeRequest): HostDialect {
+  private modelIdentity(): ModelIdentity {
+    return this.model.identity ?? { provider: 'custom', model: 'custom-model-client' };
+  }
+
+  /** Builds the dialect and the exact trusted skill manifest injected into its system prompt. */
+  private contextFor(req: ProposeRequest): { dialect: HostDialect; skillVersions: AgentSkillVersion[] } {
     const dialect = this.dialects[req.format];
     if (!dialect) throw new Error(`Agent: no dialect for format "${req.format}"`);
     const parts = [dialect.systemPrompt];
     const conv = this.conventions?.render();
     if (conv) parts.push(conv);
-    const skl = this.skills?.render(req.format, req.intent, 5, {
+    const matchOptions = {
       allowedOps: writebackOperationKindsFor(req.format),
-    });
+    };
+    const skillBundle = this.skills?.promptBundle(req.format, req.intent, 5, matchOptions);
+    const skl = skillBundle?.text ?? '';
     if (skl) parts.push(skl);
     const constraints = executionConstraints(req, this.opts);
     if (constraints) parts.push(constraints);
-    return parts.length > 1 ? { ...dialect, systemPrompt: parts.join('\n\n') } : dialect;
+    return {
+      dialect: parts.length > 1 ? { ...dialect, systemPrompt: parts.join('\n\n') } : dialect,
+      skillVersions: (skillBundle?.cards ?? []).map((card) => ({
+        id: `${card.namespace}/${card.name}`,
+        version: card.version,
+        checksum: card.checksum,
+      })),
+    };
   }
 
   /** Progressive skill disclosure L1: if the library has skills with playbooks, add a load_skill tool to the loop (fetch full text on hit instead of pre-stuffing the prompt). */
@@ -142,8 +157,9 @@ export class Agent {
         if (name !== 'load_skill') return null;
         const n = String((args as { name?: unknown } | null)?.name ?? '');
         const card = lib.resolve(n, req.format, matchOptions);
-        return card?.instructions
-          ? JSON.stringify({
+        if (card?.instructions) {
+          recordAgentSkill(req, { id: `${card.namespace}/${card.name}`, version: card.version, checksum: card.checksum });
+          return JSON.stringify({
             untrusted_data: true,
             kind: 'skill_instructions',
             id: `${card.namespace}/${card.name}`,
@@ -153,8 +169,9 @@ export class Agent {
             trust: card.trust,
             allowedOps: card.allowedOps,
             content: card.instructions,
-          })
-          : `(未找到技能 "${n}" 或技能与当前 capability 不兼容;带手册的技能: ${withBody.map((item) => `${item.namespace}/${item.name}`).join('、')})`;
+          });
+        }
+        return `(未找到技能 "${n}" 或技能与当前 capability 不兼容;带手册的技能: ${withBody.map((item) => `${item.namespace}/${item.name}`).join('、')})`;
       },
     };
     return { ...(opts ?? {}), extraTools };
@@ -164,14 +181,15 @@ export class Agent {
   async respond(req: ProposeRequest, opts?: RespondOptions): Promise<AgentResponse> {
     assertProposeRequestBudget(req);
     opts?.signal?.throwIfAborted();
-    const d = this.dialectFor(req);
+    const { dialect: d, skillVersions } = this.contextFor(req);
+    const modelReq = prepareAgentRequest(req, this.modelIdentity(), skillVersions);
     if (this.model.respond) {
-      const response = await this.model.respond(req, d, this.withSkillTools(req, opts));
+      const response = await this.model.respond(modelReq, d, this.withSkillTools(modelReq, opts));
       opts?.signal?.throwIfAborted();
       if (response.kind === 'changeset') assertChangeSet(response.changeSet);
       return response;
     }
-    const cs = await this.model.proposeChangeSet(req, d, opts?.signal ? { signal: opts.signal } : undefined);
+    const cs = await this.model.proposeChangeSet(modelReq, d, opts?.signal ? { signal: opts.signal } : undefined);
     opts?.signal?.throwIfAborted();
     assertChangeSet(cs);
     if (opts?.verify) {
@@ -185,9 +203,10 @@ export class Agent {
   async respondStream(req: ProposeRequest, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
     assertProposeRequestBudget(req);
     opts?.signal?.throwIfAborted();
-    const d = this.dialectFor(req);
+    const { dialect: d, skillVersions } = this.contextFor(req);
+    const modelReq = prepareAgentRequest(req, this.modelIdentity(), skillVersions);
     if (this.model.respondStream) {
-      const response = await this.model.respondStream(req, d, onEvent, this.withSkillTools(req, opts));
+      const response = await this.model.respondStream(modelReq, d, onEvent, this.withSkillTools(modelReq, opts));
       opts?.signal?.throwIfAborted();
       if (response.kind === 'changeset') assertChangeSet(response.changeSet);
       return response;
@@ -195,10 +214,10 @@ export class Agent {
     onEvent({ type: 'status', status: { phase: 'generating' } });
     let r: AgentResponse;
     if (this.model.respond) {
-      r = await this.model.respond(req, d, this.withSkillTools(req, opts));
+      r = await this.model.respond(modelReq, d, this.withSkillTools(modelReq, opts));
       opts?.signal?.throwIfAborted();
     } else {
-      const cs = await this.model.proposeChangeSet(req, d, opts?.signal ? { signal: opts.signal } : undefined);
+      const cs = await this.model.proposeChangeSet(modelReq, d, opts?.signal ? { signal: opts.signal } : undefined);
       opts?.signal?.throwIfAborted();
       assertChangeSet(cs);
       if (opts?.verify) {
@@ -218,15 +237,17 @@ export class Agent {
   async propose(req: ProposeRequest, opts?: ModelCallOptions): Promise<ChangeSet> {
     assertProposeRequestBudget(req);
     opts?.signal?.throwIfAborted();
-    const d = this.dialectFor(req);
+    const { dialect: d, skillVersions } = this.contextFor(req);
+    const baseReq = prepareAgentRequest(req, this.modelIdentity(), skillVersions);
 
     const validator = this.opts.validator;
     const maxRetries = validProposalRepairs(this.opts.maxRetries ?? 0);
     let errors: string[] = [];
     for (let attempt = 0; ; attempt++) {
+      const attemptReq = prepareAgentRequest(baseReq, this.modelIdentity(), skillVersions, attempt);
       const r: ProposeRequest = errors.length
-        ? { ...req, proposalFeedback: errors }
-        : req;
+        ? { ...attemptReq, proposalFeedback: errors }
+        : attemptReq;
       const cs = await this.model.proposeChangeSet(r, d, opts);
       opts?.signal?.throwIfAborted();
       assertChangeSet(cs);

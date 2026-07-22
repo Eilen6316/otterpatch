@@ -115,6 +115,9 @@ server.registerTool(
       baseRev: z.number().int().nonnegative().optional().describe('document revision used as the ChangeSet base revision; derived when sourceFileSha256 is present'),
       sourceFileSha256: z.string().regex(/^[a-f0-9]{64}$/).optional().describe('SHA-256 of the exact source bytes this proposal reviews'),
       documentId: z.string().optional().describe('stable host document identity used for single-writer commit serialization'),
+      sessionId: z.string().min(1).max(2048).optional().describe('stable conversation session identity'),
+      userId: z.string().min(1).max(2048).optional().describe('pseudonymous identity of the requesting user'),
+      parentProposalId: z.string().min(1).max(2048).optional().describe('proposalId of the previous proposal in this conversation'),
       provider: z.string().default('claude').describe('claude | openai | deepseek | glm | kimi | doubao | minimax | gemini'),
       model: z.string().optional(),
       apiKey: z.string().optional(),
@@ -130,6 +133,9 @@ server.registerTool(
       const derivedRev = a.sourceFileSha256 ? docRevFromSha256(a.sourceFileSha256) : 0 as DocRev;
       const baseRev = (a.baseRev ?? derivedRev) as DocRev;
       if (a.sourceFileSha256 && baseRev !== derivedRev) throw new Error('baseRev does not match sourceFileSha256');
+      const documentId = a.sourceFileSha256
+        ? `${a.format.toLowerCase()}:sha256:${a.sourceFileSha256}`
+        : a.documentId ?? 'mcp';
       const model = createModelClient((a.provider as Provider) || 'claude', {
         apiKey: a.apiKey ?? process.env.OtterPatch_API_KEY,
         ...(a.model ? { model: a.model } : {}),
@@ -142,6 +148,11 @@ server.registerTool(
           baseRev,
           anchors: [],
           context: a.context ?? '',
+          documentId,
+          ...(a.sourceFileSha256 ? { sourceFileSha256: a.sourceFileSha256 } : {}),
+          ...(a.sessionId ? { sessionId: a.sessionId } : {}),
+          ...(a.userId ? { userId: a.userId } : {}),
+          ...(a.parentProposalId ? { parentProposalId: a.parentProposalId } : {}),
           ...(a.sheet ? { sheet: a.sheet } : {}),
           ...(a.board ? { board: a.board } : {}),
           ...(a.doc ? { doc: a.doc } : {}),
@@ -161,7 +172,7 @@ server.registerTool(
           ...(a.doc ? { doc: a.doc } : {}),
           ...(a.ppt ? { ppt: a.ppt } : {}),
         }),
-        proposal: rt.createProposal(r.changeSet, a.format, a.documentId ?? r.changeSet.hostId, a.sourceFileSha256),
+        proposal: rt.createProposal(r.changeSet, a.format, documentId, a.sourceFileSha256),
       });
     } catch (e) {
       return failWith('propose', e);
