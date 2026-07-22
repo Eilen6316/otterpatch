@@ -64,7 +64,7 @@ test('drawio 写回:add + delete 跨两个 diagram', async () => {
   const out = dec.decode(res.bytes);
 
   assert.deepEqual(res.touchedParts.sort(), ['d0', 'd1']);
-  assert.match(out, /id="n1"[^>]*value="新节点"/); // added to d0; parent taken from anchor cell '1'
+  assert.match(out, /id="n1"[^>]*value="新节点"/);
   assert.match(out, /id="n1"[^>]*parent="1"/);
   assert.doesNotMatch(out, /id="9"/); // the cell in d1 is deleted
 });
@@ -118,4 +118,50 @@ test('drawio writeback: validates ChangeSets at the commit boundary', async () =
     () => new DrawioSurgicalWriteback().commit(invalidGeometry, { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev }),
     /must be finite/,
   );
+});
+
+test('drawio writeback: invalid add topology is dropped without changing the diagram', async () => {
+  const cases = [
+    { payload: { id: '2', vertex: true, parent: '1' }, error: /duplicate cell id/ },
+    { payload: { id: 'n1', vertex: true, parent: 'ghost' }, error: /parent "ghost".*not found/ },
+    { payload: { id: 'e2', edge: true, parent: '1', source: 'ghost', target: '2' }, error: /source "ghost".*not found/ },
+    { payload: { id: 'e2', edge: true, parent: '1', source: '2', target: 'ghost' }, error: /target "ghost".*not found/ },
+    { payload: { id: 'n1', vertex: true, parent: 'n1' }, error: /references itself/ },
+    { payload: { id: 'e2', edge: true, parent: '1', source: 'e2', target: '2' }, error: /references itself/ },
+    { payload: { id: 'e2', edge: true, parent: '1', source: '2', target: 'e2' }, error: /references itself/ },
+    { payload: { id: 'e2', edge: true, parent: '1', source: '2', target: '2' }, error: /source and target must differ/ },
+  ];
+  for (const [index, { payload, error }] of cases.entries()) {
+    const cs: ChangeSet = {
+      id: `cs-bad-add-${index}`,
+      hostId: 'h1',
+      baseRev: 0 as DocRev,
+      anchors: { a0: anchor('a0', 0, '1') } as Record<AnchorId, LogicalAnchor>,
+      origin: { by: 'agent', sessionId: 't' },
+      meta: { intent: 'invalid add' },
+      edits: [{ id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'addObject', payload } }],
+    };
+    const res = await new DrawioSurgicalWriteback().commit(cs, { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev });
+    assert.equal(res.ok, false);
+    assert.deepEqual(res.appliedEditIds, []);
+    assert.equal(dec.decode(res.bytes), FILE);
+    assert.match(res.droppedEdits?.[0]?.reason ?? '', error);
+  }
+
+  const cycle: ChangeSet = {
+    id: 'cs-cycle',
+    hostId: 'h1',
+    baseRev: 0 as DocRev,
+    anchors: { a0: anchor('a0', 0, '1'), a1: anchor('a1', 0, '1') } as Record<AnchorId, LogicalAnchor>,
+    origin: { by: 'agent', sessionId: 't' },
+    meta: { intent: 'cycle' },
+    edits: [
+      { id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'addObject', payload: { id: 'n1', vertex: true, parent: 'n2' } } },
+      { id: 'e1', target: 'a1' as AnchorId, op: { family: 'object', kind: 'addObject', payload: { id: 'n2', vertex: true, parent: 'n1' } } },
+    ],
+  };
+  const res = await new DrawioSurgicalWriteback().commit(cycle, { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev });
+  assert.equal(res.ok, false);
+  assert.equal(dec.decode(res.bytes), FILE);
+  assert.match(res.droppedEdits?.[0]?.reason ?? '', /parent cycle/);
 });

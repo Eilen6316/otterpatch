@@ -32,6 +32,46 @@ test('add: 追加新节点', () => {
   assert.match(out, /id="4"[\s\S]*?<mxGeometry x="40" y="200"/);
 });
 
+test('add validates ids and object relationships before writing', () => {
+  const invalid = [
+    { edit: { cellId: '', op: { kind: 'add', spec: { id: '2', vertex: true, parent: '1' } } }, error: /duplicate cell id "2"/ },
+    { edit: { cellId: '', op: { kind: 'add', spec: { id: '4', vertex: true, parent: 'ghost' } } }, error: /parent "ghost".*not found/ },
+    { edit: { cellId: '', op: { kind: 'add', spec: { id: 'e2', edge: true, parent: '1', source: 'ghost', target: '3' } } }, error: /source "ghost".*not found/ },
+    { edit: { cellId: '', op: { kind: 'add', spec: { id: 'e2', edge: true, parent: '1', source: '2', target: 'ghost' } } }, error: /target "ghost".*not found/ },
+    { edit: { cellId: '', op: { kind: 'add', spec: { id: '4', vertex: true, parent: '4' } } }, error: /references itself/ },
+    { edit: { cellId: '', op: { kind: 'add', spec: { id: 'e2', edge: true, parent: '1', source: 'e2', target: '3' } } }, error: /references itself/ },
+    { edit: { cellId: '', op: { kind: 'add', spec: { id: 'e2', edge: true, parent: '1', source: '2', target: 'e2' } } }, error: /references itself/ },
+    { edit: { cellId: '', op: { kind: 'add', spec: { id: 'e2', edge: true, parent: '1', source: '2', target: '2' } } }, error: /source and target must differ/ },
+  ] as const;
+  for (const { edit, error } of invalid) {
+    assert.throws(() => applyEditsToModel(MODEL, [edit]), error);
+  }
+
+  assert.throws(
+    () => applyEditsToModel(MODEL, [
+      { cellId: '', op: { kind: 'add', spec: { id: '4', vertex: true, parent: '1' } } },
+      { cellId: '', op: { kind: 'add', spec: { id: '4', vertex: true, parent: '1' } } },
+    ]),
+    /duplicate cell id "4"/,
+  );
+  assert.throws(
+    () => applyEditsToModel(MODEL, [
+      { cellId: '', op: { kind: 'add', spec: { id: '4', vertex: true, parent: '5' } } },
+      { cellId: '', op: { kind: 'add', spec: { id: '5', vertex: true, parent: '4' } } },
+    ]),
+    /parent cycle/,
+  );
+});
+
+test('add accepts valid forward references within one batch', () => {
+  const out = applyEditsToModel(MODEL, [
+    { cellId: '', op: { kind: 'add', spec: { id: 'e2', edge: true, parent: '1', source: '4', target: '5' } } },
+    { cellId: '', op: { kind: 'add', spec: { id: '4', vertex: true, parent: '1' } } },
+    { cellId: '', op: { kind: 'add', spec: { id: '5', vertex: true, parent: '1' } } },
+  ]);
+  assert.match(out, /id="e2"[^>]*source="4"[^>]*target="5"/);
+});
+
 test('delete: 级联删引用它的边', () => {
   const out = applyEditsToModel(MODEL, [{ cellId: '2', op: { kind: 'delete' } }]);
   assert.doesNotMatch(out, /id="2"/);

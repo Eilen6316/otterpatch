@@ -37,6 +37,8 @@ interface Cell {
   parent?: string;
   source?: string;
   target?: string;
+  vertex: boolean;
+  edge: boolean;
   raw: string;
 }
 
@@ -62,6 +64,8 @@ const meta = (raw: string): Cell => ({
   parent: attr(raw, 'parent'),
   source: attr(raw, 'source'),
   target: attr(raw, 'target'),
+  vertex: attr(raw, 'vertex') === '1',
+  edge: attr(raw, 'edge') === '1',
   raw,
 });
 
@@ -130,8 +134,82 @@ function collectDescendants(id: string, cells: Cell[], set: Set<string>): void {
   for (const c of cells) if (c.parent === id && !set.has(c.id)) collectDescendants(c.id, cells, set);
 }
 
+function requireRef(spec: DrawioObjectSpec, key: 'parent' | 'source' | 'target'): string | undefined {
+  const value = spec[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`drawio: add ${spec.id} has invalid ${key}`);
+  return value;
+}
+
+function assertTopology(cells: Cell[], subjectIds: ReadonlySet<string>): void {
+  const byId = new Map(cells.map((cell) => [cell.id, cell]));
+  for (const id of subjectIds) {
+    const cell = byId.get(id);
+    if (!cell) continue;
+    if (cell.parent === id || cell.source === id || cell.target === id) {
+      throw new Error(`drawio: cell "${id}" references itself`);
+    }
+    if (!cell.parent || !byId.has(cell.parent)) throw new Error(`drawio: parent "${cell.parent ?? ''}" for "${id}" not found`);
+    if (byId.get(cell.parent)!.edge) throw new Error(`drawio: parent "${cell.parent}" for "${id}" is an edge`);
+    if (cell.edge) {
+      if (!cell.source || !byId.has(cell.source)) throw new Error(`drawio: source "${cell.source ?? ''}" for "${id}" not found`);
+      if (!cell.target || !byId.has(cell.target)) throw new Error(`drawio: target "${cell.target ?? ''}" for "${id}" not found`);
+      if (cell.source === cell.target) throw new Error(`drawio: edge "${id}" source and target must differ`);
+      if (byId.get(cell.source)!.edge || byId.get(cell.target)!.edge) {
+        throw new Error(`drawio: edge "${id}" endpoints must be vertices`);
+      }
+    }
+
+    const seen = new Set<string>();
+    let cursor: Cell | undefined = cell;
+    while (cursor) {
+      if (seen.has(cursor.id)) throw new Error(`drawio: parent cycle involving "${id}"`);
+      seen.add(cursor.id);
+      cursor = cursor.parent ? byId.get(cursor.parent) : undefined;
+    }
+  }
+}
+
+function assertValidAdditions(cells: Cell[], edits: DrawioEdit[]): Set<string> {
+  const knownIds = new Set(cells.map((cell) => cell.id));
+  const addedIds = new Set<string>();
+  const planned: Cell[] = [];
+  for (const edit of edits) {
+    if (edit.op.kind !== 'add') continue;
+    const spec = edit.op.spec;
+    if (typeof spec.id !== 'string' || !spec.id.trim()) throw new Error('drawio: add requires a non-empty id');
+    if (knownIds.has(spec.id)) throw new Error(`drawio: duplicate cell id "${spec.id}"`);
+    if ((spec.vertex === true) === (spec.edge === true)) {
+      throw new Error(`drawio: add "${spec.id}" must be exactly one of vertex or edge`);
+    }
+    if ((spec.vertex !== undefined && typeof spec.vertex !== 'boolean') || (spec.edge !== undefined && typeof spec.edge !== 'boolean')) {
+      throw new Error(`drawio: add "${spec.id}" has invalid vertex/edge flags`);
+    }
+    const parent = requireRef(spec, 'parent');
+    const source = requireRef(spec, 'source');
+    const target = requireRef(spec, 'target');
+    if (spec.edge && (!source || !target)) throw new Error(`drawio: edge "${spec.id}" requires source and target`);
+    if (spec.vertex && (source || target)) throw new Error(`drawio: vertex "${spec.id}" cannot have edge endpoints`);
+
+    knownIds.add(spec.id);
+    addedIds.add(spec.id);
+    planned.push({
+      id: spec.id,
+      ...(parent ? { parent } : {}),
+      ...(source ? { source } : {}),
+      ...(target ? { target } : {}),
+      vertex: spec.vertex === true,
+      edge: spec.edge === true,
+      raw: '',
+    });
+  }
+  assertTopology([...cells, ...planned], addedIds);
+  return addedIds;
+}
+
 /** Apply a batch of edits to the cell list (pure function; returns a new list). */
 export function applyEdits(cells: Cell[], edits: DrawioEdit[]): Cell[] {
+  const addedIds = assertValidAdditions(cells, edits);
   let arr = cells.slice();
   for (const ed of edits) {
     if (ed.op.kind === 'add') {
@@ -165,6 +243,7 @@ export function applyEdits(cells: Cell[], edits: DrawioEdit[]): Cell[] {
     }
     arr[i] = meta(raw);
   }
+  assertTopology(arr, addedIds);
   return arr;
 }
 
