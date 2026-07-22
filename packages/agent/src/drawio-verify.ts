@@ -1,90 +1,322 @@
-/**
- * drawio shadow verifier — the core of graph self-checking is "topological integrity":
- * target ids of update/delete/move must actually exist (otherwise they silently no-op);
- * a new edge's source/target must point to an existing node or a node created in the same
- * proposal (dangling edges are the most common form of graph corruption);
- * new ids must not collide with existing ids nor repeat within the proposal.
- * Isomorphic to word-verify: pure string/structural checks, zero adapter dependencies,
- * with a structured report fed back into propose→observe→repair.
- */
+/** drawio topology simulation with exact object identity. */
 import type { ChangeSet, VerifyReport } from '@otterpatch/core';
 
-/** Build a self-check verifier from the board topology context (the context fed to the model at propose time). */
-export function buildDrawioVerifier(boardContext: string): (cs: ChangeSet) => VerifyReport {
-  const known = (id: string): boolean => !!id && boardContext.includes(id);
-  return (cs: ChangeSet): VerifyReport => {
-    const errors: string[] = [];
-    const warnings: string[] = [];
-    // Collect ids created in this proposal (edges may point to nodes created in the same proposal)
-    const created = new Set<string>();
-    for (const e of cs.edits) {
-      if (e.op.kind === 'addObject') {
-        const id = String((e.op.payload as { id?: unknown })?.id ?? '');
-        if (id) {
-          if (created.has(id)) errors.push(`新建对象 id "${id}" 在本提案里重复出现 —— 后者会覆盖/冲突,请换唯一 id`);
-          if (known(id)) warnings.push(`新建对象 id "${id}" 与画板已有元素撞名,可能覆盖既有对象`);
-          created.add(id);
-        }
-      }
+export interface DrawioVerificationSnapshot {
+  nodes: Array<{ id: string; parent?: string; x?: number; y?: number; width?: number; height?: number }>;
+  edges: Array<{ id: string; source: string; target: string; parent?: string }>;
+}
+
+interface GraphObject {
+  id: string;
+  kind: 'node' | 'edge' | 'unknown';
+  parent?: string;
+  source?: string;
+  target?: string;
+}
+
+interface Issue {
+  code: string;
+  editId?: string;
+  message: string;
+}
+
+const SUPPORTED_DRAWIO_OPS = new Set(['setValue', 'setObjectProps', 'moveObject', 'addObject', 'deleteObject']);
+const ROOT_IDS = new Set(['0', '1']);
+const DRAWIO_CELL_PROPS = new Set(['id', 'value', 'style', 'vertex', 'edge', 'parent', 'source', 'target']);
+const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
+
+function contextObjects(context: string): Map<string, GraphObject> {
+  const objects = new Map<string, GraphObject>();
+  const add = (id: string, kind: GraphObject['kind'] = 'unknown'): void => {
+    const normalized = id.trim();
+    if (!normalized || normalized === '文字') return;
+    const current = objects.get(normalized);
+    if (!current || current.kind === 'unknown') objects.set(normalized, { id: normalized, kind });
+  };
+
+  for (const match of context.matchAll(/\bid\s*=\s*([A-Za-z0-9_.:-]+)/g)) add(match[1]!);
+  const nodeLine = /节点\(id=文字\):\s*([^\n]+)/.exec(context)?.[1];
+  if (nodeLine) {
+    for (const entry of nodeLine.split(/[、,;]/)) add(entry.split('=')[0] ?? '', 'node');
+  }
+  for (const match of context.matchAll(/([A-Za-z0-9_.:-]+)\s*→\s*([A-Za-z0-9_.:-]+)/g)) {
+    add(match[1]!, 'node');
+    add(match[2]!, 'node');
+  }
+  return objects;
+}
+
+function snapshotObjects(snapshot: DrawioVerificationSnapshot, issues: Issue[]): Map<string, GraphObject> {
+  const objects = new Map<string, GraphObject>();
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    issues.push({ code: 'VERIFIER_INVALID_SNAPSHOT', message: 'drawio snapshot must be an object' });
+    return objects;
+  }
+  const input = snapshot as unknown as { nodes?: unknown; edges?: unknown };
+  if (!Array.isArray(input.nodes) || !Array.isArray(input.edges)) {
+    issues.push({ code: 'VERIFIER_INVALID_SNAPSHOT', message: 'drawio snapshot must contain nodes and edges arrays' });
+    return objects;
+  }
+  const put = (object: GraphObject): void => {
+    if (!object.id) {
+      issues.push({ code: 'VERIFIER_INVALID_OBJECT_ID', message: 'drawio snapshot contains an empty id' });
+      return;
     }
-    // 容器标题区遮挡:parent 子节点的 y 是【相对容器】的,y < 40 会压住容器标题(渲染层容器标题贴顶)
-    const boxes: Array<{ id: string; parent?: string; x: number; y: number; w: number; h: number }> = [];
-    for (const e of cs.edits) {
-      if (e.op.kind !== 'addObject') continue;
-      const p = e.op.payload as { id?: string; edge?: boolean; parent?: string; geometry?: { x?: number; y?: number; width?: number; height?: number } };
-      if (p.edge || !p.geometry || p.geometry.x == null || p.geometry.y == null) continue;
-      boxes.push({ id: String(p.id ?? '?'), ...(p.parent && p.parent !== '1' ? { parent: p.parent } : {}), x: p.geometry.x, y: p.geometry.y, w: p.geometry.width ?? 0, h: p.geometry.height ?? 0 });
+    if (objects.has(object.id)) {
+      issues.push({ code: 'VERIFIER_DUPLICATE_OBJECT_ID', message: `drawio snapshot contains duplicate id "${object.id}"` });
+      return;
     }
-    for (const b of boxes) {
-      if (b.parent && boxes.some((a) => a.id === b.parent) && b.y < 36) warnings.push(`子节点 "${b.id}" 的相对 y=${Math.round(b.y)} 太小,会压住容器 "${b.parent}" 的标题 —— 子节点 y 请从 40 起排`);
+    objects.set(object.id, object);
+  };
+  for (const candidate of input.nodes) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      issues.push({ code: 'VERIFIER_INVALID_SNAPSHOT', message: 'drawio snapshot contains a non-object node' });
+      continue;
     }
-    // 无 parent 的绝对坐标节点:几何包含 + 顶边太近同样提醒
-    for (const a of boxes) for (const b of boxes) {
-      if (a.id === b.id || a.parent || b.parent) continue;
-      const inside = b.x >= a.x && b.y >= a.y && b.x + b.w <= a.x + a.w && b.y + b.h <= a.y + a.h && b.w * b.h < a.w * a.h * 0.8;
-      if (inside && b.y - a.y < 36) warnings.push(`子节点 "${b.id}" 顶边距容器 "${a.id}" 顶部仅 ${Math.round(b.y - a.y)}px,会压住容器标题 —— 子节点 y 请从容器顶 +40 起排`);
+    const node = candidate as { id?: unknown; parent?: unknown };
+    if (typeof node.id !== 'string' || (node.parent != null && typeof node.parent !== 'string')) {
+      issues.push({ code: 'VERIFIER_INVALID_SNAPSHOT', message: 'drawio snapshot node id/parent must be strings' });
+      continue;
     }
-    // 连线穿越:同组(同 parent,坐标可比)内,边的中心直线横穿第三方节点 → 视觉断线像"相邻串联",提醒改星型布局
-    for (const e of cs.edits) {
-      if (e.op.kind !== 'addObject') continue;
-      const p = e.op.payload as { id?: string; edge?: boolean; source?: string; target?: string };
-      if (!(p.edge || (p.source && p.target))) continue;
-      const s = boxes.find((x) => x.id === p.source); const t = boxes.find((x) => x.id === p.target);
-      if (!s || !t || (s.parent ?? '1') !== (t.parent ?? '1')) continue;
-      const cross = boxes.find((n) => n.id !== s.id && n.id !== t.id && (n.parent ?? '1') === (s.parent ?? '1') && n.w >= 40 && n.h >= 40 && (() => {
-        const ax = s.x + s.w / 2, ay = s.y + s.h / 2, bx = t.x + t.w / 2, by = t.y + t.h / 2;
-        for (let k = 0.08; k < 0.95; k += 0.04) { const x = ax + (bx - ax) * k, y = ay + (by - ay) * k; if (x > n.x && x < n.x + n.w && y > n.y && y < n.y + n.h) return true; }
-        return false;
-      })());
-      if (cross) warnings.push(`连线 "${p.id ?? '?'}" (${p.source}→${p.target}) 会横穿节点 "${cross.id}",视觉上像相邻串联 —— hub 节点建议放单独一行居中(星型布局),或调整节点顺序`);
+    put({ id: node.id, kind: 'node', ...(node.parent ? { parent: node.parent } : {}) });
+  }
+  for (const candidate of input.edges) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      issues.push({ code: 'VERIFIER_INVALID_SNAPSHOT', message: 'drawio snapshot contains a non-object edge' });
+      continue;
     }
-    const touched = new Set<string>();
-    for (const e of cs.edits) {
-      const a = cs.anchors[e.target];
-      const elementId = a?.portable.kind === 'object' ? a.portable.elementId : '';
-      if (e.op.kind === 'addObject') {
-        const p = e.op.payload as { edge?: boolean; source?: string; target?: string; parent?: string };
-        if (p.edge || p.source || p.target) {
-          for (const [end, v] of [['source', p.source], ['target', p.target]] as const) {
-            if (!v) { errors.push(`新建边缺少 ${end} —— 悬空边不可落地,请补上端点节点 id`); continue; }
-            if (!known(v) && !created.has(v)) errors.push(`新建边的 ${end}="${v}" 既不在画板中、也不是本提案新建的节点 —— 会成为悬空边。请改成真实存在的节点 id`);
-          }
-        }
-        if (p.parent && p.parent !== '1' && !known(p.parent) && !created.has(p.parent)) warnings.push(`新建对象的 parent="${p.parent}" 不在画板中,将落到默认层`);
+    const edge = candidate as { id?: unknown; source?: unknown; target?: unknown; parent?: unknown };
+    if (typeof edge.id !== 'string' || typeof edge.source !== 'string' || typeof edge.target !== 'string'
+      || (edge.parent != null && typeof edge.parent !== 'string')) {
+      issues.push({ code: 'VERIFIER_INVALID_SNAPSHOT', message: 'drawio snapshot edge id/source/target/parent must be strings' });
+      continue;
+    }
+    put({
+      id: edge.id,
+      kind: 'edge',
+      source: edge.source,
+      target: edge.target,
+      ...(edge.parent ? { parent: edge.parent } : {}),
+    });
+  }
+  return objects;
+}
+
+function removeCascade(objects: Map<string, GraphObject>, id: string): void {
+  const removing = new Set([id]);
+  const children = new Map<string, string[]>();
+  for (const object of objects.values()) {
+    if (!object.parent) continue;
+    const siblings = children.get(object.parent) ?? [];
+    siblings.push(object.id);
+    children.set(object.parent, siblings);
+  }
+  const queue = [id];
+  for (let index = 0; index < queue.length; index++) {
+    for (const child of children.get(queue[index]!) ?? []) {
+      if (removing.has(child)) continue;
+      removing.add(child);
+      queue.push(child);
+    }
+  }
+  for (const object of [...objects.values()]) {
+    if (removing.has(object.id) || (object.source && removing.has(object.source)) || (object.target && removing.has(object.target))) {
+      objects.delete(object.id);
+    }
+  }
+}
+
+function validateTopology(objects: Map<string, GraphObject>, issues: Issue[]): void {
+  for (const object of objects.values()) {
+    if (object.parent && !ROOT_IDS.has(object.parent)) {
+      const parent = objects.get(object.parent);
+      if (!parent) issues.push({ code: 'VERIFIER_MISSING_PARENT', message: `对象 "${object.id}" 的 parent="${object.parent}" 不存在` });
+      else if (parent.kind === 'edge') issues.push({ code: 'VERIFIER_INVALID_PARENT', message: `对象 "${object.id}" 的 parent="${object.parent}" 是一条边` });
+    }
+    if (object.kind === 'edge') {
+      if (!object.source || !object.target) {
+        issues.push({ code: 'VERIFIER_DANGLING_EDGE', message: `边 "${object.id}" 缺少 source 或 target` });
         continue;
       }
-      // update/delete/move: the target must actually exist
-      if (!elementId) { errors.push(`有一条 ${e.op.kind} 改动没有目标 id,无法落地`); continue; }
-      if (!known(elementId)) { errors.push(`${e.op.kind} 的目标 id "${elementId}" 不在画板中 —— 这条改动会静默失效。请用上下文里真实的 cell id`); continue; }
-      if (e.op.kind === 'deleteObject' && touched.has(elementId)) warnings.push(`id "${elementId}" 在本提案里先被修改又被删除,前面的修改将被浪费`);
-      if (touched.has(elementId) && e.op.kind !== 'deleteObject') warnings.push(`id "${elementId}" 被多条改动重复命中,注意先后覆盖`);
-      touched.add(elementId);
+      if (object.source === object.target) {
+        issues.push({ code: 'VERIFIER_SELF_REFERENCE', message: `边 "${object.id}" 引用了自身节点 "${object.source}"` });
+      }
+      const source = objects.get(object.source);
+      const target = objects.get(object.target);
+      if (!source || !target || source.kind === 'edge' || target.kind === 'edge') {
+        issues.push({ code: 'VERIFIER_DANGLING_EDGE', message: `边 "${object.id}" 的端点 ${object.source}→${object.target} 没有完整着落` });
+      }
     }
-    const parts: string[] = [];
-    if (errors.length) parts.push('发现以下拓扑问题(会导致改动失效或图损坏):\n' + errors.map((s) => '- ' + s).join('\n'));
-    if (warnings.length) parts.push('另外这些地方请留意:\n' + warnings.map((s) => '- ' + s).join('\n'));
-    const ok = errors.length === 0;
-    const tail = ok ? '' : '\n请据此修正后重新调用 propose_changeset。';
-    return { ok, report: (parts.join('\n') || '自检通过:所有目标 id 真实存在,边的两端都有着落。') + tail };
+  }
+
+  const done = new Set<string>();
+  for (const object of objects.values()) {
+    if (done.has(object.id)) continue;
+    const path: string[] = [];
+    const local = new Set<string>();
+    let cursor: GraphObject | undefined = object;
+    while (cursor && !done.has(cursor.id) && !ROOT_IDS.has(cursor.id)) {
+      if (local.has(cursor.id)) {
+        issues.push({ code: 'VERIFIER_PARENT_CYCLE', message: `对象 "${object.id}" 的 parent 链形成循环` });
+        break;
+      }
+      local.add(cursor.id);
+      path.push(cursor.id);
+      cursor = cursor.parent && !ROOT_IDS.has(cursor.parent) ? objects.get(cursor.parent) : undefined;
+    }
+    for (const id of path) done.add(id);
+  }
+}
+
+function report(level: 'lint' | 'simulation', issues: Issue[], warnings: string[], objectCount: number): VerifyReport {
+  if (issues.length) {
+    const payload = { ok: false, level, code: issues[0]!.code, issues, warnings };
+    return { ok: false, level, code: issues[0]!.code, details: { issues, warnings }, report: JSON.stringify(payload) };
+  }
+  const warningText = warnings.length ? '\n另外这些地方请留意:\n' + warnings.map((warning) => '- ' + warning).join('\n') : '';
+  return {
+    ok: true,
+    level,
+    report: `${level === 'simulation' ? '拓扑模拟' : '拓扑检查'}通过:${objectCount} 个对象,id 精确匹配且所有关系完整。${warningText}`,
+    details: { objectCount, warnings },
+  };
+}
+
+/** Structured snapshots get simulation; legacy text contexts get exact-token lint only. */
+export function buildDrawioVerifier(source: string | DrawioVerificationSnapshot): (cs: ChangeSet) => VerifyReport {
+  const level = typeof source === 'string' ? 'lint' as const : 'simulation' as const;
+  return (cs: ChangeSet): VerifyReport => {
+    const issues: Issue[] = [];
+    const warnings: string[] = [];
+    const objects = typeof source === 'string' ? contextObjects(source) : snapshotObjects(source, issues);
+    const futureAdds = new Set<string>();
+    for (const edit of cs.edits) {
+      if (edit.op.kind !== 'addObject') continue;
+      const payload = edit.op.payload;
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        issues.push({ code: 'VERIFIER_INVALID_OBJECT_PAYLOAD', editId: edit.id, message: '新建对象 payload 必须是对象' });
+        continue;
+      }
+      const id = (payload as { id?: unknown }).id;
+      if (typeof id !== 'string' || !id.trim()) issues.push({ code: 'VERIFIER_INVALID_OBJECT_ID', editId: edit.id, message: '新建对象缺少非空字符串 id' });
+      else if (ROOT_IDS.has(id)) issues.push({ code: 'VERIFIER_DUPLICATE_OBJECT_ID', editId: edit.id, message: `新建对象 id "${id}" 与 drawio 根对象冲突` });
+      else if (futureAdds.has(id)) issues.push({ code: 'VERIFIER_DUPLICATE_OBJECT_ID', editId: edit.id, message: `新建对象 id "${id}" 在提案中重复` });
+      else if (objects.has(id)) issues.push({ code: 'VERIFIER_DUPLICATE_OBJECT_ID', editId: edit.id, message: `新建对象 id "${id}" 与现有对象冲突` });
+      else futureAdds.add(id);
+    }
+
+    const touched = new Set<string>();
+    for (const edit of cs.edits) {
+      if (!SUPPORTED_DRAWIO_OPS.has(edit.op.kind)) {
+        issues.push({ code: 'VERIFIER_UNSUPPORTED_OPERATION', editId: edit.id, message: `drawio topology simulation does not support ${edit.op.kind}` });
+        continue;
+      }
+      const anchor = cs.anchors[edit.target];
+      const targetId = anchor?.portable.kind === 'object' ? anchor.portable.elementId : '';
+
+      if (edit.op.kind === 'addObject') {
+        if (!edit.op.payload || typeof edit.op.payload !== 'object' || Array.isArray(edit.op.payload)) continue;
+        const payload = edit.op.payload as Record<string, unknown>;
+        const id = typeof payload.id === 'string' ? payload.id : '';
+        if (!id) continue;
+        if (ROOT_IDS.has(id) || objects.has(id)) {
+          if (!issues.some((issue) => issue.editId === edit.id && issue.code === 'VERIFIER_DUPLICATE_OBJECT_ID')) {
+            issues.push({ code: 'VERIFIER_DUPLICATE_OBJECT_ID', editId: edit.id, message: `新建对象 id "${id}" 在执行位置已存在` });
+          }
+          continue;
+        }
+        const relationship = (key: 'parent' | 'source' | 'target'): string | undefined => {
+          const value = payload[key];
+          if (value == null) return undefined;
+          if (typeof value !== 'string') {
+            issues.push({ code: 'VERIFIER_INVALID_OBJECT_PAYLOAD', editId: edit.id, message: `新建对象 ${key} 必须是字符串` });
+            return undefined;
+          }
+          if (!value) {
+            issues.push({ code: 'VERIFIER_INVALID_OBJECT_PAYLOAD', editId: edit.id, message: `新建对象 ${key} 不能是空字符串` });
+            return undefined;
+          }
+          return value;
+        };
+        const explicitParent = relationship('parent');
+        const sourceId = relationship('source');
+        const target = relationship('target');
+        if (issues.some((issue) => issue.editId === edit.id && issue.code === 'VERIFIER_INVALID_OBJECT_PAYLOAD')) continue;
+        const parent = (explicitParent ?? targetId) || undefined;
+        const isEdge = Boolean(payload.edge || sourceId || target);
+        objects.set(id, {
+          id,
+          kind: isEdge ? 'edge' : 'node',
+          ...(parent ? { parent } : {}),
+          ...(sourceId ? { source: sourceId } : {}),
+          ...(target ? { target } : {}),
+        });
+        continue;
+      }
+
+      if (!targetId || !objects.has(targetId)) {
+        issues.push({ code: 'VERIFIER_TARGET_NOT_FOUND', editId: edit.id, message: `${edit.op.kind} 的目标 id "${targetId}" 不在画板中` });
+        continue;
+      }
+      if (touched.has(targetId)) {
+        warnings.push(edit.op.kind === 'deleteObject'
+          ? `id "${targetId}" 在本提案里先被修改又被删除,前面的修改不会保留`
+          : `id "${targetId}" 被多条改动重复命中,请确认执行顺序`);
+      }
+      touched.add(targetId);
+
+      if (edit.op.kind === 'deleteObject') {
+        removeCascade(objects, targetId);
+        continue;
+      }
+      if (edit.op.kind !== 'setObjectProps') continue;
+
+      const object = objects.get(targetId)!;
+      const props = edit.op.props;
+      const unsupportedProps = Object.keys(props).filter((key) => !DRAWIO_CELL_PROPS.has(key));
+      if (unsupportedProps.length) {
+        issues.push({
+          code: 'VERIFIER_UNSUPPORTED_OBJECT_PROPERTY',
+          editId: edit.id,
+          message: `drawio 写回不支持属性 ${unsupportedProps.join(', ')}`,
+        });
+        continue;
+      }
+      const unsupportedTopologyProps = ['edge', 'vertex'].filter((key) => hasOwn(props, key));
+      if (unsupportedTopologyProps.length) {
+        issues.push({
+          code: 'VERIFIER_UNSUPPORTED_OBJECT_PROPERTY',
+          editId: edit.id,
+          message: `drawio 拓扑模拟不支持修改属性 ${unsupportedTopologyProps.join(', ')}`,
+        });
+        continue;
+      }
+      const prop = (key: string, fallback?: string): string | undefined => hasOwn(props, key) ? String(props[key]) : fallback;
+      const nextId = prop('id', targetId) ?? targetId;
+      if (!nextId) {
+        issues.push({ code: 'VERIFIER_INVALID_OBJECT_ID', editId: edit.id, message: '对象 id 不能改为空字符串' });
+        continue;
+      }
+      if (hasOwn(props, 'parent') && !prop('parent')) {
+        issues.push({ code: 'VERIFIER_INVALID_OBJECT_PROPERTY', editId: edit.id, message: '对象 parent 不能改为空字符串' });
+        continue;
+      }
+      if (nextId !== targetId && (ROOT_IDS.has(nextId) || objects.has(nextId))) {
+        issues.push({ code: 'VERIFIER_DUPLICATE_OBJECT_ID', editId: edit.id, message: `对象 id "${nextId}" 已存在` });
+        continue;
+      }
+      const updated: GraphObject = {
+        ...object,
+        id: nextId,
+        ...(hasOwn(props, 'parent') ? { parent: prop('parent')! } : {}),
+        ...(hasOwn(props, 'source') ? { source: prop('source')! } : {}),
+        ...(hasOwn(props, 'target') ? { target: prop('target')! } : {}),
+      };
+      if (nextId !== targetId) objects.delete(targetId);
+      objects.set(nextId, updated);
+    }
+
+    validateTopology(objects, issues);
+    return report(level, issues, warnings, objects.size);
   };
 }

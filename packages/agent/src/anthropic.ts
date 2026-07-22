@@ -2,7 +2,7 @@
  * AnthropicModelClient — real Claude (BYOK).
  * proposeChangeSet: forced tool call producing a constrained ChangeSet (when a sheet edit is certain / for tests).
  * respond / respondStream: multi-step agentic loop, isomorphic to the OpenAI-compatible channel —
- *   answer_user routing + on-demand data fetching via read_range/aggregate + shadow verification
+ *   answer_user routing + on-demand data fetching via read_range/aggregate + declared pre-commit checks
  *   (propose→observe→repair), so the default Claude channel is no longer "strongest model, blindest".
  *   Shared pieces live in ./sheet-tools.
  * Default model claude-opus-4-8; if apiKey is omitted, reads ANTHROPIC_API_KEY; baseURL can be overridden for China routes.
@@ -98,7 +98,7 @@ export class AnthropicModelClient implements ModelClient {
     return changeSet;
   }
 
-  /** Smart routing + multi-step loop: answer_user / read_range / aggregate; shadow-verify proposals and feed failures back for repair (propose→observe→repair). */
+  /** Smart routing + multi-step loop: answer_user / read_range / aggregate; check proposals and feed failures back for repair (propose→observe→repair). */
   async respond(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Promise<AgentResponse> {
     const system = this.systemBlocks(dialect);
     const tools = this.toolset(req, dialect, opts);
@@ -150,7 +150,7 @@ export class AnthropicModelClient implements ModelClient {
     return { kind: 'answer', text: TOO_MANY_STEPS_MSG };
   }
 
-  /** Streaming variant of respond: emits answer deltas for text (and reasoning deltas when extended thinking is on). Multi-step loop + shadow verification same as respond. */
+  /** Streaming variant of respond: emits answer deltas for text (and reasoning deltas when extended thinking is on). Multi-step loop + pre-commit checks same as respond. */
   async respondStream(req: ProposeRequest, dialect: HostDialect, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
     const system = this.systemBlocks(dialect);
     const tools = this.toolset(req, dialect, opts);

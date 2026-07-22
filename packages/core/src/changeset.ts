@@ -127,15 +127,16 @@ export interface ValidationReport {
   }>;
 }
 
-/**
- * Shadow-verification result — the "observation" fed back to the model after applying the proposal
- * to the shadow and recalculating: ok=true ⇒ no obvious issues, no repair needed; ok=false ⇒ report
- * contains recalculated values + issue list for the model to fix against.
- * Supports the propose→observe→repair loop.
- */
+/** Result from a declared lint, simulation, or output-verification pass. The report can
+ * be fed back to the model in a propose→observe→repair loop. */
 export interface VerifyReport {
   ok: boolean;
   report: string;
+  /** What was actually performed; callers must not present lint as simulation or verification. */
+  level?: 'lint' | 'simulation' | 'verification';
+  /** Stable machine-readable failure category for repair loops and clients. */
+  code?: string;
+  details?: unknown;
 }
 export interface EffectPreview {
   recalculated?: CellValue[][];

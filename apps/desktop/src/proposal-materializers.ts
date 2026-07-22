@@ -40,7 +40,7 @@ export interface AgentStyle {
 }
 
 export type AgentPreviewValue =
-  | { kind: 'cell'; value: string | number | boolean | null; formula?: string }
+  | { kind: 'cell'; value: string | number | boolean | null; formula?: string; style?: AgentStyle }
   | { kind: 'text'; runs: Array<{ text: string; marks?: unknown[] }> }
   | { kind: 'object'; box: { left: number; top: number; width: number; height: number; rotate: number }; props?: Record<string, unknown> };
 

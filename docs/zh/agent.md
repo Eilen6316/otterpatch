@@ -40,15 +40,15 @@ Word 的上下文与快照按段标注图片（`[图片 alt 宽×高]`），Agen
 - **diff 标签补全**：行距/段落样式/分栏/边距/纸张方向不再塌缩成"套用格式"；`deleteRange`
   与图片操作有中文标签；空 quote 的 flow 引用显示"第N段"。
 
-## 影子校验：propose → observe → repair
+## 检查分级：lint → simulation → output verification
 
-每个 `propose_changeset` 在成为 diff 之前都会先被校验（校验器注册表位于 `packages/runtime/src/runtime.ts`，`registerVerifier(format, make)`）：
+每个 `propose_changeset` 在成为 diff 前，都会执行该格式当前能提供的最高等级检查（注册表位于 `packages/runtime/src/runtime.ts`，`registerVerifier(format, make)`）。报告显式携带 `level`（`lint`、`simulation` 或 `verification`）和稳定错误码：
 
-- **Excel**（`buildGridVerifier`）—— 重算 + 边界 + 重复命中检查
-- **Word**（`buildDocVerifier`）—— 每条引文必须在源文本中存在**且唯一**；空编辑与重复命中会被标记
-- **drawio**（`buildDrawioVerifier`）—— 拓扑完整性：`update/delete/move` 的目标必须存在；新增的边必须连接到已有节点或同一提案内的节点（不允许悬空边）；不允许重复 id
+- **Excel simulation**（`buildGridVerifier`）—— 展开范围内每个单元格，真实应用受支持的值、公式、清空和样式操作，再重算受支持公式。必须提供完整公式矩阵；未知函数、循环引用、缺失样式观测、冲突性重叠编辑和快照越界都会失败关闭。
+- **Word lint**（`buildDocVerifier`）—— quote 必须唯一命中，或携带在结构化文档快照中真实存在的段落索引。重复 quote 是阻断性歧义，不再只是 warning。
+- **drawio topology simulation**（`buildDrawioVerifier`）—— 有结构化画板快照时，会重放新增、关系修改、移动和级联删除，再拒绝重复 id、缺失 parent、parent 循环、自引用与悬空边。旧文本上下文只做精确 token lint，不再用 substring 判断。
 
-校验失败会在同一轮以结构化报告的形式返回给模型；模型最多可修复 `maxRepairs = 2` 次。
+失败会在同一轮以结构化报告返回给模型。能力清单不再把只有写回能力的格式宣称为支持预览或验证。
 
 **最终自检**（`withFinalSelfCheck`）：当一个*大型*变更集（≥5 条编辑）通过结构校验后，模型会获得恰好一轮"整体审阅自己的工作"的机会——完整性、冲突、更优做法——然后重新提交（若满意则原样提交）。小型变更集跳过此步。
 

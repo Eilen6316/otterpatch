@@ -18,7 +18,7 @@ OtterPatch 是位于 LLM Agent 与你的 Office 文档之间的**安全提交层
 ┌─────────────────┐
 │ ChangeSet       │  format-agnostic: anchors (quote / A1 / cell-id) + edit ops
 └───────┬─────────┘
-        │ shadow verification (per-format verifier registry)
+        │ declared check: lint / simulation / output verification
         │   fail → structured report fed back → model repairs (propose→observe→repair, ≤2 rounds)
         │   pass + large changeset → one final semantic self-check round
         ▼

@@ -42,6 +42,20 @@ const verified = (input: CapabilityInput): OperationCapability => ({
   ...input,
 });
 
+const writebackOnly = (input: CapabilityInput): OperationCapability => verified({
+  ...input,
+  preview: false,
+  verify: false,
+  maturity: 'preview',
+});
+
+const topologyChecked = (input: CapabilityInput): OperationCapability => verified({
+  ...input,
+  preview: false,
+  verify: true,
+  maturity: 'preview',
+});
+
 const manifests = [
   {
     version: CAPABILITY_MANIFEST_VERSION,
@@ -49,9 +63,9 @@ const manifests = [
     aliases: ['excel', 'xlsx'],
     operations: [
       verified({ op: 'setValue', maxScope: 'range', risk: 'safe', backend: ['surgical-ooxml'] }),
-      verified({ op: 'setFormula', maxScope: 'range', risk: 'safe', backend: ['surgical-ooxml'] }),
-      verified({ op: 'setStyle', maxScope: 'range', risk: 'safe', backend: ['surgical-ooxml'] }),
-      verified({ op: 'setNumberFormat', maxScope: 'range', risk: 'safe', backend: ['surgical-ooxml'] }),
+      verified({ op: 'setFormula', maxScope: 'range', risk: 'safe', backend: ['surgical-ooxml'], maturity: 'preview' }),
+      verified({ op: 'setStyle', maxScope: 'range', risk: 'safe', backend: ['surgical-ooxml'], maturity: 'preview' }),
+      verified({ op: 'setNumberFormat', maxScope: 'range', risk: 'safe', backend: ['surgical-ooxml'], maturity: 'preview' }),
       verified({ op: 'deleteRange', proposalName: 'clear', maxScope: 'range', risk: 'destructive', backend: ['surgical-ooxml'] }),
     ],
   },
@@ -60,11 +74,11 @@ const manifests = [
     format: 'word',
     aliases: ['word', 'docx'],
     operations: [
-      verified({ op: 'replaceText', maxScope: 'range', risk: 'safe', backend: ['word-redline'] }),
-      verified({ op: 'setStyle', maxScope: 'document', risk: 'safe', backend: ['word-redline'] }),
-      verified({ op: 'deleteRange', maxScope: 'range', risk: 'destructive', backend: ['word-redline'] }),
-      verified({ op: 'setObjectProps', maxScope: 'object', risk: 'caution', backend: ['word-redline'] }),
-      verified({ op: 'insertTable', maxScope: 'document', risk: 'caution', backend: ['word-redline'] }),
+      writebackOnly({ op: 'replaceText', maxScope: 'range', risk: 'safe', backend: ['word-redline'] }),
+      writebackOnly({ op: 'setStyle', maxScope: 'document', risk: 'safe', backend: ['word-redline'] }),
+      writebackOnly({ op: 'deleteRange', maxScope: 'range', risk: 'destructive', backend: ['word-redline'] }),
+      writebackOnly({ op: 'setObjectProps', maxScope: 'object', risk: 'caution', backend: ['word-redline'] }),
+      writebackOnly({ op: 'insertTable', maxScope: 'document', risk: 'caution', backend: ['word-redline'] }),
     ],
   },
   {
@@ -72,11 +86,11 @@ const manifests = [
     format: 'drawio',
     aliases: ['drawio'],
     operations: [
-      verified({ op: 'setValue', maxScope: 'object', risk: 'safe', backend: ['drawio-surgical'] }),
-      verified({ op: 'setObjectProps', maxScope: 'object', risk: 'caution', backend: ['drawio-surgical'] }),
-      verified({ op: 'moveObject', maxScope: 'object', risk: 'safe', backend: ['drawio-surgical'] }),
-      verified({ op: 'addObject', maxScope: 'object', risk: 'caution', backend: ['drawio-surgical'] }),
-      verified({ op: 'deleteObject', maxScope: 'object', risk: 'destructive', backend: ['drawio-surgical'] }),
+      topologyChecked({ op: 'setValue', maxScope: 'object', risk: 'safe', backend: ['drawio-surgical'] }),
+      topologyChecked({ op: 'setObjectProps', maxScope: 'object', risk: 'caution', backend: ['drawio-surgical'] }),
+      topologyChecked({ op: 'moveObject', maxScope: 'object', risk: 'safe', backend: ['drawio-surgical'] }),
+      topologyChecked({ op: 'addObject', maxScope: 'object', risk: 'caution', backend: ['drawio-surgical'] }),
+      topologyChecked({ op: 'deleteObject', maxScope: 'object', risk: 'destructive', backend: ['drawio-surgical'] }),
     ],
   },
   {
@@ -84,7 +98,7 @@ const manifests = [
     format: 'pdf',
     aliases: ['pdf'],
     operations: [
-      verified({ op: 'setValue', maxScope: 'field', risk: 'safe', backend: ['pdf-form'] }),
+      writebackOnly({ op: 'setValue', maxScope: 'field', risk: 'safe', backend: ['pdf-form'] }),
     ],
   },
   {
@@ -92,7 +106,7 @@ const manifests = [
     format: 'ppt',
     aliases: ['ppt', 'pptx'],
     operations: [
-      verified({ op: 'replaceText', maxScope: 'slide', risk: 'safe', backend: ['surgical-ooxml'] }),
+      writebackOnly({ op: 'replaceText', maxScope: 'slide', risk: 'safe', backend: ['surgical-ooxml'] }),
     ],
   },
 ] as const satisfies readonly FormatCapabilityManifest[];

@@ -34,13 +34,34 @@ const failWith = (stage: string, error: unknown) => isResourceLimitError(error)
 
 const server = new McpServer({ name: 'otterpatch', version: '0.0.1' });
 
+const sheetStyleSchema = z.object({
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+  underline: z.boolean().optional(),
+  color: z.string().optional(),
+  bgColor: z.string().optional(),
+  font: z.string().optional(),
+  size: z.number().finite().optional(),
+  align: z.enum(['left', 'center', 'right', 'justify']).optional(),
+  numberFormat: z.string().optional(),
+}).strict();
+
 const sheetSchema = z.object({
   a1: z.string(),
   values: z.array(z.array(z.unknown())),
   formulas: z.array(z.array(z.string().nullable())).optional(),
+  styles: z.array(z.array(sheetStyleSchema.nullable())).optional(),
   name: z.string().optional(),
   names: z.array(z.string()).optional(),
 });
+
+const boardSchema = z.object({
+  nodes: z.array(z.object({
+    id: z.string(), parent: z.string().optional(), x: z.number().finite().optional(), y: z.number().finite().optional(),
+    width: z.number().finite().optional(), height: z.number().finite().optional(),
+  }).strict()),
+  edges: z.array(z.object({ id: z.string(), source: z.string(), target: z.string(), parent: z.string().optional() }).strict()),
+}).strict();
 
 server.registerTool(
   'otterpatch_skills',
@@ -63,6 +84,7 @@ server.registerTool(
       model: z.string().optional(),
       apiKey: z.string().optional(),
       sheet: sheetSchema.optional(),
+      board: boardSchema.optional(),
       doc: z.object({ blocks: z.array(z.object({ style: z.string(), text: z.string(), font: z.string().optional(), size: z.number().optional(), align: z.string().optional(), lineSpacing: z.number().optional() })) }).optional(),
       history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).optional(),
     },
@@ -82,6 +104,7 @@ server.registerTool(
           anchors: [],
           context: a.context ?? '',
           ...(a.sheet ? { sheet: a.sheet } : {}),
+          ...(a.board ? { board: a.board } : {}),
           ...(a.doc ? { doc: a.doc } : {}),
           ...(a.history ? { history: a.history } : {}),
         },

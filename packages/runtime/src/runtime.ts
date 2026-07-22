@@ -16,7 +16,6 @@ import {
   DEFAULT_POLICY,
   RESOURCE_LIMITS,
   ResourceLimitError,
-  a1RangeCellCount,
   assertChangeSet,
   assertFormatCapabilities,
   assertJsonBudget,
@@ -28,10 +27,15 @@ import {
 import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
 import {
   GridChangeSetEngine,
+  GridSimulationError,
   buildXlsxCompiler,
   buildGridVerifier,
+  expandGridRange,
+  gridEngineSupports,
   gridShadowFromSnapshot,
   sheetSnapshotContains,
+  sheetSnapshotHasCompleteFormulaState,
+  sheetSnapshotHasStyleAt,
   type GridShadow,
   type SheetSnapshot,
 } from '@otterpatch/adapter-univer';
@@ -110,9 +114,9 @@ export class OtterPatchRuntime {
     this.verifiers = {
       excel: (req) => (req.sheet ? buildGridVerifier(req.sheet) : undefined),
       xlsx: (req) => (req.sheet ? buildGridVerifier(req.sheet) : undefined),
-      word: (req) => (req.context.trim() ? buildDocVerifier(req.context) : undefined),
-      docx: (req) => (req.context.trim() ? buildDocVerifier(req.context) : undefined),
-      drawio: (req) => (req.context.trim() ? buildDrawioVerifier(req.context) : undefined),
+      word: (req) => (req.doc ? buildDocVerifier(req.doc) : req.context.trim() ? buildDocVerifier(req.context) : undefined),
+      docx: (req) => (req.doc ? buildDocVerifier(req.doc) : req.context.trim() ? buildDocVerifier(req.context) : undefined),
+      drawio: (req) => (req.board ? buildDrawioVerifier(req.board) : req.context.trim() ? buildDrawioVerifier(req.context) : undefined),
     };
     this.backends = {
       excel: () => new SurgicalOoxmlWriteback(buildXlsxCompiler()),
@@ -151,7 +155,7 @@ export class OtterPatchRuntime {
   registerWritebackFallback(format: string, make: () => WritebackBackend): void {
     (this.fallbackBackends[format] ??= []).push(make);
   }
-  /** Register/override the shadow verifier for a format (same registry pattern as backends; ppt/pdf etc. later). */
+  /** Register/override the pre-commit checker for a format (lint, simulation, or output verification). */
   registerVerifier(format: string, make: (req: ProposeRequest) => ChangeSetVerifier | undefined): void {
     this.verifiers[format] = make;
   }
@@ -182,8 +186,8 @@ export class OtterPatchRuntime {
     }
   }
 
-  /** Shadow verification after a proposal is produced (routed by format via the registry): Excel recalculation/out-of-bounds; Word anchors resolvable; drawio topology intact.
-   *  Wrapped in an outer final semantic self-check (withFinalSelfCheck). */
+  /** Format check after a proposal: Excel performs simulation; Word performs anchor lint;
+   *  drawio simulates topology when a structured board snapshot is supplied. */
   private verifyOpts(req: ProposeRequest): RespondOptions | undefined {
     const structural = this.verifiers[req.format]?.(req);
     if (!structural) return undefined;
@@ -439,8 +443,6 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-const GRID_PREVIEW_OPS = new Set(['setValue', 'setFormula', 'deleteRange']);
-
 function inferFormat(cs: ChangeSet): string {
   const kinds = new Set(Object.values(cs.anchors).map((anchor) => anchor.portable.kind));
   if (kinds.size === 1 && kinds.has('grid')) return 'excel';
@@ -460,7 +462,7 @@ async function buildDiffObservation(
     ...(riskContext ? { riskContext } : {}),
   };
   if (format !== 'excel' && format !== 'xlsx') {
-    return { ...base, unavailableReason: `No ${format} shadow preview engine is registered.` };
+    return { ...base, unavailableReason: `No ${format} preview simulation is registered.` };
   }
   if (!sheet) {
     return { ...base, unavailableReason: 'Excel diff requires a read-only sheet snapshot.' };
@@ -469,14 +471,32 @@ async function buildDiffObservation(
   const supportByEdit: Record<string, DiffSupport> = {};
   for (const edit of cs.edits) {
     const anchor = cs.anchors[edit.target];
-    const cellCount = anchor?.portable.kind === 'grid' ? a1RangeCellCount(anchor.portable.a1) : null;
+    const gridAnchor = anchor?.portable.kind === 'grid' ? anchor.portable : undefined;
+    let refs: string[] = [];
+    if (gridAnchor) {
+      try {
+        refs = expandGridRange(gridAnchor.a1);
+      } catch {
+        refs = [];
+      }
+    }
+    const snapshotCoversTargets = Boolean(gridAnchor
+      && refs.length > 0
+      && refs.every((ref) => sheetSnapshotContains(sheet, ref, gridAnchor.sheet)));
+    const needsStyleSnapshot = edit.op.kind === 'setStyle' || edit.op.kind === 'setNumberFormat';
+    const needsFormulaSnapshot = edit.op.kind === 'setValue' || edit.op.kind === 'setFormula' || edit.op.kind === 'deleteRange';
+    const snapshotCoversStyles = !needsStyleSnapshot || (
+      gridAnchor
+      && refs.every((ref) => sheetSnapshotHasStyleAt(sheet, ref, gridAnchor.sheet))
+    );
+    const snapshotCoversFormulas = !needsFormulaSnapshot || sheetSnapshotHasCompleteFormulaState(sheet);
     if (!supportsFormatOperation(format, edit.op.kind, 'preview') || !supportsFormatOperation(format, edit.op.kind, 'writeback')) {
       supportByEdit[edit.id] = 'unsupported';
     } else if (
-      GRID_PREVIEW_OPS.has(edit.op.kind)
-      && cellCount === 1
-      && anchor?.portable.kind === 'grid'
-      && sheetSnapshotContains(sheet, anchor.portable.a1, anchor.portable.sheet)
+      gridEngineSupports(edit.op.kind)
+      && snapshotCoversTargets
+      && snapshotCoversStyles
+      && snapshotCoversFormulas
     ) {
       supportByEdit[edit.id] = 'verified';
     } else {
@@ -489,14 +509,13 @@ async function buildDiffObservation(
     return {
       ...base,
       supportByEdit,
-      unavailableReason: 'The Excel shadow engine did not simulate any proposed operations.',
+      unavailableReason: 'The Excel simulation engine did not simulate any proposed operations.',
     };
   }
 
   try {
-    const initial = gridShadowFromSnapshot(sheet);
-    const beforeGrid = cloneGrid(initial);
-    const afterGrid = cloneGrid(initial);
+    const beforeGrid = gridShadowFromSnapshot(sheet);
+    const afterGrid = gridShadowFromSnapshot(sheet);
     const engine = new GridChangeSetEngine();
     const beforeResult = await engine.shadowApply({ ...cs, edits: [] }, beforeGrid);
     const shadow = await engine.shadowApply({ ...cs, edits: executable }, afterGrid);
@@ -504,7 +523,7 @@ async function buildDiffObservation(
       cs,
       executable.map((edit) => edit.id),
       sheet,
-      initial,
+      beforeGrid,
       afterGrid,
       beforeResult.effects.recalculated ?? [],
       shadow.effects.recalculated ?? [],
@@ -524,13 +543,9 @@ async function buildDiffObservation(
     return {
       ...base,
       supportByEdit,
-      unavailableReason: `Excel shadow preview failed: ${errMsg(error)}`,
+      unavailableReason: `Excel simulation failed: ${error instanceof GridSimulationError ? error.code + ': ' : ''}${errMsg(error)}`,
     };
   }
-}
-
-function cloneGrid(grid: GridShadow): GridShadow {
-  return new Map([...grid].map(([ref, cell]) => [ref, { ...cell }]));
 }
 
 function bareGridRef(value: string): string {
@@ -548,10 +563,11 @@ function formulaEffects(
 ): OtterPatchDiffEffect[] {
   const directTargets = new Set(
     cs.edits
-      .filter((edit) => editIds.includes(edit.id))
+      .filter((edit) => editIds.includes(edit.id)
+        && (edit.op.kind === 'setValue' || edit.op.kind === 'setFormula' || edit.op.kind === 'deleteRange'))
       .map((edit) => cs.anchors[edit.target])
       .filter((anchor) => anchor?.portable.kind === 'grid')
-      .map((anchor) => bareGridRef(anchor!.portable.kind === 'grid' ? anchor!.portable.a1 : '')),
+      .flatMap((anchor) => anchor?.portable.kind === 'grid' ? expandGridRange(anchor.portable.a1).map(bareGridRef) : []),
   );
   const before = recalculatedMap(beforeRows);
   const after = recalculatedMap(afterRows);
@@ -606,6 +622,8 @@ export function withFinalSelfCheck(structural: ChangeSetVerifier, minEdits = 5):
       selfChecked = true;
       return {
         ok: false,
+        level: 'lint',
+        code: 'FINAL_SEMANTIC_SELF_CHECK_REQUIRED',
         report: '结构自检通过。收尾自检(最后一步):请把这组改动作为【整体】复盘 —— ①是否完整达成用户意图,有没有漏掉同类问题;②各条改动之间是否冲突/重复命中同一处;③有没有专业上更优的做法。' +
           '全部满意就【原样重新提交同一组改动】;发现问题就提交修正版。这是收尾确认,不要因此缩减本来正确的改动。',
       };

@@ -5,7 +5,7 @@ Documentation for contributors and integrators. Start with the architecture, the
 | Doc | What it covers |
 |---|---|
 | [architecture.md](./architecture.md) | The propose → diff → review → commit pipeline, package map, core invariants |
-| [agent.md](./agent.md) | The agent loop: routing, read tools, shadow verification & repair, self-check, prompt caching, batching |
+| [agent.md](./agent.md) | The agent loop: routing, read tools, lint/simulation checks and repair, self-check, prompt caching, batching |
 | [skills.md](./skills.md) | Skill system: capability cards vs. playbooks, progressive disclosure (`load_skill`), external SKILL.md install |
 | [review-ux.md](./review-ux.md) | The review experience: the shared DiffToggle across all three workspaces, Word inline tracked changes (flatten-on-accept), Excel tri-state compare & before-state replay, drawio per-hunk review |
 | [testing.md](./testing.md) | Test pyramid: package unit tests, headless e2e harness, live evals, capability bench, acceptance telemetry |

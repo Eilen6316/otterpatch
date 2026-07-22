@@ -18,7 +18,7 @@ as opening a pull request against an `.xlsx` / `.docx` / `.drawio` file.
 ┌─────────────────┐
 │ ChangeSet       │  format-agnostic: anchors (quote / A1 / cell-id) + edit ops
 └───────┬─────────┘
-        │ shadow verification (per-format verifier registry)
+        │ declared check: lint / simulation / output verification
         │   fail → structured report fed back → model repairs (propose→observe→repair, ≤2 rounds)
         │   pass + large changeset → one final semantic self-check round
         ▼

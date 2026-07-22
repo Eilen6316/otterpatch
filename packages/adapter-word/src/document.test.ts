@@ -105,6 +105,19 @@ test('fmt + 段号锚:空段落也能套段落格式(quote 为空)', () => {
   assert.match(xml, /<w:pPrChange/); // 段落格式修订可审
 });
 
+test('paraIdx constrains non-text edits when the same quote appears in multiple paragraphs', () => {
+  const duplicate =
+    '<w:document><w:body>' +
+    '<w:p><w:r><w:t>same</w:t></w:r></w:p>' +
+    '<w:p><w:r><w:t>same</w:t></w:r></w:p>' +
+    '</w:body></w:document>';
+  const { xml, changed } = redlineDocumentXml(duplicate, [
+    { kind: 'fmt', quote: 'same', paraIdx: 1, char: { bold: true } },
+  ], { author: 'A', date: 'D' });
+  assert.equal(changed, 1);
+  assert.match(xml, /<w:p><w:r><w:t>same<\/w:t><\/w:r><\/w:p><w:p>.*<w:b\/>/s);
+});
+
 test('insertTable: 在末级 sectPr 前插入原生表格,表头和每行均保留修订语义', () => {
   const doc =
     '<w:document><w:body>' +

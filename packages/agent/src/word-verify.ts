@@ -1,69 +1,159 @@
-/**
- * Shadow verifier for Word documents — Word has no grid to recompute, so the core
- * self-check is "can each anchor land": every text/format edit's quote must exist
- * literally and uniquely in the source text, otherwise optimistic apply silently
- * no-ops (the user thinks it changed but it didn't). Issues are fed back to the
- * model in structured form → fixed in the same propose→observe→repair round.
- * Uses only core types + plain string matching; zero adapter dependencies.
- */
+/** Word anchor linting. This resolves targets but does not claim document simulation. */
 import type { ChangeSet, VerifyReport } from '@otterpatch/core';
 
-const clip = (s: string): string => (s.length > 40 ? s.slice(0, 40) + '…' : s);
+export interface WordVerificationSnapshot {
+  blocks: Array<{ text: string }>;
+}
 
-/**
- * Build a verifier from the full document text (the context fed to the model at propose time).
- * Returned signature is compatible with @otterpatch/agent's ChangeSetVerifier.
- */
-export function buildDocVerifier(docText: string): (cs: ChangeSet) => VerifyReport {
+type Source = string | WordVerificationSnapshot;
+
+const SUPPORTED_WORD_OPS = new Set(['replaceText', 'setStyle', 'deleteRange', 'setObjectProps', 'insertTable']);
+const clip = (value: string): string => (value.length > 40 ? value.slice(0, 40) + '…' : value);
+
+interface Issue {
+  code: string;
+  editId: string;
+  message: string;
+}
+
+function occurrences(text: string, quote: string): number[] {
+  const hits: number[] = [];
+  let from = 0;
+  while (from <= text.length - quote.length) {
+    const index = text.indexOf(quote, from);
+    if (index < 0) break;
+    hits.push(index);
+    from = index + Math.max(1, quote.length);
+  }
+  return hits;
+}
+
+function result(errors: Issue[], warnings: string[]): VerifyReport {
+  if (errors.length) {
+    const payload = {
+      ok: false,
+      level: 'lint',
+      code: errors[0]!.code,
+      issues: errors,
+      warnings,
+    };
+    return { ok: false, level: 'lint', code: errors[0]!.code, details: { issues: errors, warnings }, report: JSON.stringify(payload) };
+  }
+  const warningText = warnings.length ? '\n另外这些地方请留意:\n' + warnings.map((warning) => '- ' + warning).join('\n') : '';
+  return { ok: true, level: 'lint', report: '锚点检查通过:每条改动都有唯一、可解析的目标。' + warningText, details: { warnings } };
+}
+
+/** Build a target-resolution lint pass from a structured document snapshot or plain text. */
+export function buildDocVerifier(source: Source): (cs: ChangeSet) => VerifyReport {
+  const blocks = typeof source === 'string' ? undefined : source.blocks;
+  const documentText = typeof source === 'string' ? source : source.blocks.map((block) => block.text).join('\n');
+
   return (cs: ChangeSet): VerifyReport => {
-    const errors: string[] = [];
+    const errors: Issue[] = [];
     const warnings: string[] = [];
-    const seen = new Set<string>();
-    const paraCount = docText.split('\n').filter((s) => s.trim() !== '').length; // getText 的清样投影:一行一段
-    for (const e of cs.edits) {
-      const a = cs.anchors[e.target];
-      const quote = a?.portable.kind === 'flow' ? a.portable.quote.text : '';
-      const paraIdx = a?.portable.kind === 'flow' ? a.portable.path[0] : undefined;
-      const isPageStyle = e.op.kind === 'setStyle'
-        && Object.keys(e.op.style).length > 0
-        && Object.keys(e.op.style).every((key) => key === 'columns' || key === 'margin' || key === 'orient');
-      const isEndTable = e.op.kind === 'insertTable' && e.op.at === 'end';
-      // Appending a table to the document body has no source anchor by design.
-      if (isEndTable) continue;
-      // 段号锚定(para):不依赖 quote。getText 清样投影会滤掉空段,段数只是下限,越界只提醒不拦截
-      if (paraIdx != null) {
-        if (paraIdx < 0) errors.push('para 段号必须 ≥ 1');
-        else if (paraIdx >= paraCount * 2 + 50) warnings.push(`para=${paraIdx + 1} 远超全文段数(约 ${paraCount} 段),请核对上下文里的"第N段"编号`);
+    const targeted = new Set<string>();
+
+    for (const edit of cs.edits) {
+      if (!SUPPORTED_WORD_OPS.has(edit.op.kind)) {
+        errors.push({
+          code: 'VERIFIER_UNSUPPORTED_OPERATION',
+          editId: edit.id,
+          message: `Word anchor lint does not support ${edit.op.kind}`,
+        });
         continue;
       }
-      // Page settings land in sectPr and intentionally use a document-level empty anchor.
-      if (isPageStyle && !quote) continue;
-      if (!quote) {
-        errors.push('有一条改动没有可定位的原文片段(quote 为空)也没有 para 段号,无法落地;空段落/无法唯一引用时请给 para=段号');
+      const anchor = cs.anchors[edit.target];
+      if (!anchor || anchor.portable.kind !== 'flow') {
+        errors.push({ code: 'VERIFIER_INVALID_TARGET', editId: edit.id, message: '改动没有 flow 锚点' });
         continue;
       }
-      const first = docText.indexOf(quote);
-      if (first < 0) {
-        errors.push(`“${clip(quote)}” 不在文档原文中 —— 这条改动会静默失效(不会生效)。请把 quote 换成文档里真实存在的原文片段`);
-        continue;
+      const { quote, path } = anchor.portable;
+      const paragraph = path[0];
+      const isPageStyle = edit.op.kind === 'setStyle'
+        && Object.keys(edit.op.style).length > 0
+        && Object.keys(edit.op.style).every((key) => key === 'columns' || key === 'margin' || key === 'orient');
+      const isEndTable = edit.op.kind === 'insertTable' && edit.op.at === 'end';
+
+      if (isEndTable || (isPageStyle && paragraph === undefined && !quote.text)) continue;
+
+      let targetKey: string;
+      if (paragraph !== undefined) {
+        if (!blocks) {
+          errors.push({
+            code: 'VERIFIER_INSUFFICIENT_SNAPSHOT',
+            editId: edit.id,
+            message: `段落锚点 para=${paragraph + 1} 需要结构化 doc.blocks 快照`,
+          });
+          continue;
+        }
+        if (!Number.isSafeInteger(paragraph) || paragraph < 0 || paragraph >= blocks.length) {
+          errors.push({
+            code: 'VERIFIER_ANCHOR_OUT_OF_BOUNDS',
+            editId: edit.id,
+            message: `para=${paragraph + 1} 超出文档 ${blocks.length} 个块的范围`,
+          });
+          continue;
+        }
+        if (quote.text) {
+          const hits = occurrences(blocks[paragraph]!.text, quote.text);
+          if (!hits.length) {
+            errors.push({
+              code: 'VERIFIER_ANCHOR_MISMATCH',
+              editId: edit.id,
+              message: `第 ${paragraph + 1} 块不包含原文“${clip(quote.text)}”`,
+            });
+            continue;
+          }
+          if (hits.length > 1) {
+            errors.push({
+              code: 'VERIFIER_AMBIGUOUS_ANCHOR',
+              editId: edit.id,
+              message: `“${clip(quote.text)}”在第 ${paragraph + 1} 块中出现 ${hits.length} 次;当前写回器无法在同一块内唯一定位`,
+            });
+            continue;
+          }
+        }
+        targetKey = `paragraph:${paragraph}`;
+      } else {
+        if (!quote.text) {
+          errors.push({
+            code: 'VERIFIER_MISSING_ANCHOR',
+            editId: edit.id,
+            message: '改动没有 quote 或 para 段号,无法唯一定位',
+          });
+          continue;
+        }
+        const hits = occurrences(documentText, quote.text);
+        if (!hits.length) {
+          errors.push({
+            code: 'VERIFIER_ANCHOR_NOT_FOUND',
+            editId: edit.id,
+            message: `“${clip(quote.text)}”不在文档原文中,这条改动不会生效`,
+          });
+          continue;
+        }
+        if (hits.length > 1) {
+          errors.push({
+            code: 'VERIFIER_AMBIGUOUS_ANCHOR',
+            editId: edit.id,
+            message: `“${clip(quote.text)}”在原文中出现 ${hits.length} 次;请提供 para 段号`,
+          });
+          continue;
+        }
+        targetKey = `offset:${hits[0]}`;
       }
-      // Uniqueness: multiple occurrences → anchor may land at the wrong spot (matches system-prompt rule ②)
-      if (docText.indexOf(quote, first + 1) >= 0) {
-        warnings.push(`“${clip(quote)}” 在原文中出现多次,定位可能不唯一;请带上足够上下文使其唯一`);
+
+      if (edit.op.kind === 'replaceText' && edit.op.text === quote.text) {
+        errors.push({
+          code: 'VERIFIER_NO_OP',
+          editId: edit.id,
+          message: `“${clip(quote.text)}”的改后文字与原文相同,这是空改动`,
+        });
       }
-      // Empty edit: replacement text is identical to the original
-      if (e.op.kind === 'replaceText' && e.op.text === quote) {
-        errors.push(`“${clip(quote)}” 的改后文字与原文完全相同 —— 这是一次空改动,没有任何效果`);
-      }
-      // Same quote hit by multiple edits → they may overwrite each other
-      if (seen.has(quote)) warnings.push(`“${clip(quote)}” 被多条改动重复命中,可能相互覆盖`);
-      seen.add(quote);
+      if (targeted.has(targetKey)) warnings.push(`${targetKey} 被多条改动重复命中,请确认执行顺序不会互相覆盖`);
+      targeted.add(targetKey);
     }
-    const parts: string[] = [];
-    if (errors.length) parts.push('发现以下问题(会导致改动无法生效):\n' + errors.map((s) => '- ' + s).join('\n'));
-    if (warnings.length) parts.push('另外这些地方请留意:\n' + warnings.map((s) => '- ' + s).join('\n'));
-    const ok = errors.length === 0;
-    const tail = ok ? '' : '\n请据此修正后重新调用 propose_changeset。';
-    return { ok, report: (parts.join('\n') || '自检通过:每条改动的锚点都能在原文中唯一定位。') + tail };
+
+    return result(errors, warnings);
   };
 }

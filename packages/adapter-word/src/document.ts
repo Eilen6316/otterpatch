@@ -160,6 +160,7 @@ function imgXml(para: string, edit: ImgEdit, ctx: Ctx): string | null {
  *  the workspace importer) — anchors paraIdx-based edits (empty paragraphs have no quote to match). */
 function tryApply(para: string, edit: DocEdit, ctx: Ctx, blkIdx?: number): string | null {
   const quote = isText(edit) ? edit.old : (edit.quote ?? '');
+  if (edit.paraIdx != null && edit.paraIdx !== blkIdx) return null;
   const idxHit = !isText(edit) && edit.paraIdx != null && edit.paraIdx === blkIdx;
   if (isTable(edit)) {
     if (edit.at === 'end') return null;
@@ -183,7 +184,6 @@ function tryApply(para: string, edit: DocEdit, ctx: Ctx, blkIdx?: number): strin
     return open + mergePPr(pPr, paraElems(edit.para), ctx.id++, ctx.author, ctx.date) + body + '</w:p>';
   }
   if (!quote) return null;
-  if (isText(edit) && edit.paraIdx != null && edit.paraIdx !== blkIdx) return null;
   const full = paraText(para);
   if (!full.includes(quote)) return null;
 

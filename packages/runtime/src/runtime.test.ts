@@ -64,7 +64,7 @@ test('runtime: propose → diff → commit(excel) 端到端 + 事件流', async 
   const model = new MockModelClient(() => ({ plan: '把 B1 改成 99', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] }));
   const request: ProposeRequest = {
     hostId: 'h1', format: 'excel', intent: '把 B1 改成 99', baseRev: 0 as DocRev, anchors: [], context: 'B1=20',
-    sheet: { a1: 'Sheet1!B1', name: 'Sheet1', values: [[20]] },
+    sheet: { a1: 'Sheet1!B1', name: 'Sheet1', values: [[20]], formulas: [[null]] },
   };
   const cs = await rt.propose(
     request,
@@ -114,6 +114,54 @@ test('runtime diff reports shadow before/after and indirect formula recalculatio
   assert.deepEqual(diff.expectedTouchedParts, ['worksheet[Sheet1]']);
 });
 
+test('runtime diff exposes complete range details and observed style state', async () => {
+  const rangeAnchor = 'range' as AnchorId;
+  const rangeChangeSet: ChangeSet = {
+    id: 'range-preview', hostId: 'h', baseRev: 0 as DocRev,
+    anchors: { [rangeAnchor]: { id: rangeAnchor, hostId: 'h' as HostId, kind: 'grid', ref: null, baseRev: 0 as DocRev, portable: { kind: 'grid', sheet: 'Sheet1', a1: 'A1:B2' } } },
+    origin: { by: 'human' }, meta: { intent: 'range' },
+    edits: [{ id: 'e0', target: rangeAnchor, op: { family: 'value', kind: 'setValue', value: 9 } }],
+  };
+  const runtime = new OtterPatchRuntime();
+  const range = await runtime.diff(rangeChangeSet, {
+    format: 'excel', sheet: { a1: 'Sheet1!A1:B2', name: 'Sheet1', values: [[1, 2], [3, 4]], formulas: [[null, null], [null, null]] },
+  });
+  assert.equal(range.previewStatus, 'verified');
+  assert.equal(range.items[0]?.affectedCount, 4);
+  assert.equal(range.items[0]?.directEffects.length, 4);
+  assert.deepEqual(range.items[0]?.directEffects.map((effect) => (effect.before as { value: unknown }).value), [1, 2, 3, 4]);
+  assert.deepEqual(range.items[0]?.directEffects.map((effect) => (effect.after as { value: unknown }).value), [9, 9, 9, 9]);
+
+  const styleChangeSet = singleCellChangeSet('style-preview', { family: 'style', kind: 'setStyle', style: { bold: false } });
+  const style = await runtime.diff(styleChangeSet, {
+    format: 'excel',
+    sheet: { a1: 'Sheet1!B1', name: 'Sheet1', values: [[10]], styles: [[{ bold: true }]] },
+  });
+  assert.equal(style.previewStatus, 'verified');
+  assert.deepEqual(style.items[0]?.before, { kind: 'cell', value: 10, style: { bold: true } });
+  assert.deepEqual(style.items[0]?.after, { kind: 'cell', value: 10, style: { bold: false } });
+});
+
+test('runtime diff marks unsupported formula simulation unavailable instead of inventing zero', async () => {
+  const changeSet = singleCellChangeSet('unsupported-formula', { family: 'value', kind: 'setFormula', formula: '=XLOOKUP(1,A1:A3,C1:C3)' });
+  const diff = await new OtterPatchRuntime().diff(changeSet, {
+    format: 'excel', sheet: { a1: 'Sheet1!A1:B3', name: 'Sheet1', values: [[1, 2], [3, 4], [5, 6]], formulas: [[null, null], [null, null], [null, null]] },
+  });
+  assert.equal(diff.previewStatus, 'unavailable');
+  assert.match(diff.unavailableReason ?? '', /VERIFIER_UNSUPPORTED_FORMULA/);
+  assert.equal(diff.items[0]?.before, undefined);
+  assert.equal(diff.items[0]?.after, undefined);
+});
+
+test('runtime diff fails closed when a formula dependency is outside the snapshot', async () => {
+  const changeSet = singleCellChangeSet('outside-formula-dependency', { family: 'value', kind: 'setFormula', formula: '=C1+1' });
+  const diff = await new OtterPatchRuntime().diff(changeSet, {
+    format: 'excel', sheet: { a1: 'Sheet1!A1:B1', name: 'Sheet1', values: [[1, 2]], formulas: [[null, null]] },
+  });
+  assert.equal(diff.previewStatus, 'unavailable');
+  assert.match(diff.unavailableReason ?? '', /VERIFIER_INSUFFICIENT_SNAPSHOT/);
+});
+
 test('runtime diff is explicit when the source snapshot is missing', async () => {
   const diff = await new OtterPatchRuntime().diff(singleCellChangeSet('no-snapshot'), { format: 'excel' });
   assert.equal(diff.previewStatus, 'unavailable');
@@ -152,7 +200,7 @@ test('runtime diff preserves explicit format removal and null proposal semantics
   assert.equal(cleared.items[0]?.proposalSummary, 'null');
 });
 
-test('runtime: verifyOpts 给 word/drawio 挂上影子自检、未注册格式不挂', async () => {
+test('runtime: verifyOpts 给 word/drawio 挂上分级检查、未注册格式不挂', async () => {
   const rt = new OtterPatchRuntime();
   const captured: Array<RespondOptions | undefined> = [];
   const cap: ModelClient = {

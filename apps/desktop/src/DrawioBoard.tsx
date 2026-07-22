@@ -257,7 +257,15 @@ function roundedPath(pts: XY[], r = 8): string {
   const last = pts[pts.length - 1]!;
   return d + ` L ${last.x} ${last.y}`;
 }
-export interface BoardSel { count: number; chip: string; context: string }
+export interface BoardSel {
+  count: number;
+  chip: string;
+  context: string;
+  board: {
+    nodes: Array<{ id: string; x: number; y: number; width: number; height: number }>;
+    edges: Array<{ id: string; source: string; target: string }>;
+  };
+}
 /** App ↔ DrawioBoard 命令式句柄:把 Agent 提案的节点/连线落到画板、移除、或高亮某个对象供审阅。 */
 export interface BoardHandle {
   addObjects(nodes: BNode[], edges: BEdge[]): void;
@@ -557,7 +565,15 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
       : selEdge
         ? '选中 1 条连线'
         : `流程图 ${nodes.length} 节点 · ${edges.length} 连线`;
-    cb.current?.({ count: sn.length, chip, context: ctx.join('\n') });
+    cb.current?.({
+      count: sn.length,
+      chip,
+      context: ctx.join('\n'),
+      board: {
+        nodes: nodes.map((node) => ({ id: node.id, x: node.x, y: node.y, width: node.w, height: node.h })),
+        edges: edges.map((edge) => ({ id: edge.id, source: edge.from, target: edge.to })),
+      },
+    });
   }, [selIds, selEdge, nodes, edges]);
 
   // 屏幕坐标 → 画布坐标(扣除平移/缩放),所有节点/连线都用画布坐标

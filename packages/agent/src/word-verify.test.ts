@@ -32,7 +32,7 @@ test('Word 自检:页面设置使用空 quote → 跳过定位、通过', () => 
 test('Word 自检:不支持无锚点的全文字符格式', () => {
   const v = buildDocVerifier(DOC)(cs([{ quote: '', font: '宋体', size: 10.5 }]));
   assert.equal(v.ok, false);
-  assert.match(v.report, /没有可定位的原文片段/);
+  assert.equal(v.code, 'VERIFIER_MISSING_ANCHOR');
 });
 
 test('Word 表格:文档末尾插入结构化表格无需源锚点', () => {
@@ -53,10 +53,32 @@ test('Word 表格:文档末尾插入结构化表格无需源锚点', () => {
   assert.equal(buildDocVerifier(DOC)(changeSet).ok, true);
 });
 
-test('Word 自检:quote 多次出现 → 通过但给唯一性告警', () => {
+test('Word 自检:quote 多次出现 → 阻断并要求唯一锚点', () => {
   const v = buildDocVerifier(DOC)(cs([{ quote: '财政收入', replacement: '一般公共预算收入' }]));
-  assert.equal(v.ok, true); // warning does not block
-  assert.match(v.report, /出现多次/);
+  assert.equal(v.ok, false);
+  assert.equal(v.code, 'VERIFIER_AMBIGUOUS_ANCHOR');
+  assert.match(v.report, /出现.*次/);
+});
+
+test('Word 结构化快照:para 必须真实存在且 quote 必须属于该段', () => {
+  const structured = buildDocVerifier({ blocks: [{ text: '第一段' }, { text: '重复文字在第二段' }] });
+  const valid = structured(cs([{ quote: '重复文字', para: 2, replacement: '唯一目标' }]));
+  assert.equal(valid.ok, true);
+  assert.equal(valid.level, 'lint');
+
+  const wrongBlock = structured(cs([{ quote: '重复文字', para: 1, replacement: '错误目标' }]));
+  assert.equal(wrongBlock.ok, false);
+  assert.equal(wrongBlock.code, 'VERIFIER_ANCHOR_MISMATCH');
+
+  const outOfBounds = structured(cs([{ quote: '', para: 99, deletePara: true }]));
+  assert.equal(outOfBounds.ok, false);
+  assert.equal(outOfBounds.code, 'VERIFIER_ANCHOR_OUT_OF_BOUNDS');
+
+  const repeatedInBlock = buildDocVerifier({ blocks: [{ text: '重复文字,再次重复文字' }] })(
+    cs([{ quote: '重复文字', para: 1, replacement: '唯一目标' }]),
+  );
+  assert.equal(repeatedInBlock.ok, false);
+  assert.equal(repeatedInBlock.code, 'VERIFIER_AMBIGUOUS_ANCHOR');
 });
 
 // ── End-to-end: actually run AnthropicModelClient.respondStream's repair loop (SDK stubbed, no real key needed) ──

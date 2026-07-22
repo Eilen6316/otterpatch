@@ -10,6 +10,7 @@ import { decodeDocumentBase64 } from './document-input.js';
 
 const rt = new OtterPatchRuntime();
 type SheetInput = NonNullable<ProposeRequest['sheet']>;
+type BoardInput = NonNullable<ProposeRequest['board']>;
 const PORT = Number(process.env.OtterPatch_PORT ?? 4319);
 const HOST = '127.0.0.1';
 const DEFAULT_MAX_BODY_BYTES = RESOURCE_LIMITS.httpBodyBytes;
@@ -152,6 +153,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
             anchors: [],
             context: String(a.context ?? ''),
             ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}),
+            ...(a.board ? { board: a.board as BoardInput } : {}),
             ...(a.doc ? { doc: a.doc as { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> } } : {}),
             ...(Array.isArray(a.history) ? { history: a.history as Array<{ role: 'user' | 'assistant'; content: string }> } : {}),
           },
@@ -184,6 +186,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               anchors: [],
               context: String(a.context ?? ''),
               ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}),
+              ...(a.board ? { board: a.board as BoardInput } : {}),
               ...(a.doc ? { doc: a.doc as { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> } } : {}),
               ...(Array.isArray(a.history) ? { history: a.history as Array<{ role: 'user' | 'assistant'; content: string }> } : {}),
             },

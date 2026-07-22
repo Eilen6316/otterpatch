@@ -6,6 +6,7 @@
 import type { LogicalAnchor } from './anchor.js';
 import type {
   BoxRect,
+  AbstractStyle,
   CellValue,
   ChangeSet,
   ChangeSetId,
@@ -19,7 +20,7 @@ export type DiffDecision = 'pending' | 'accepted' | 'rejected';
 export type DiffNodeId = string & { readonly __brand: 'DiffNodeId' };
 
 export type PreviewValue =
-  | { kind: 'cell'; value: CellValue; formula?: string }
+  | { kind: 'cell'; value: CellValue; formula?: string; style?: AbstractStyle }
   | { kind: 'text'; runs: Array<{ text: string; marks?: MarkSpec[] }> }
   | { kind: 'object'; box: BoxRect; props?: Record<string, unknown> };
 

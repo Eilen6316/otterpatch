@@ -41,6 +41,13 @@ test('capability manifest exposes only verified Excel writeback operations', () 
   }
 });
 
+test('capability manifest does not advertise writeback-only formats as preview or verification', () => {
+  assert.ok(capabilityManifestFor('excel')?.operations.every((operation) => operation.preview && operation.verify));
+  assert.ok(capabilityManifestFor('word')?.operations.every((operation) => !operation.preview && !operation.verify));
+  assert.ok(capabilityManifestFor('drawio')?.operations.every((operation) => !operation.preview && operation.verify));
+  assert.ok(capabilityManifestFor('pdf')?.operations.every((operation) => !operation.preview && !operation.verify));
+});
+
 test('capability gate rejects unsupported Excel structure operations', () => {
   const cs = flowChangeSet({ bold: true });
   const edit = { ...cs.edits[0]!, op: { family: 'structure' as const, kind: 'insertRows' as const, count: 1, before: true } };

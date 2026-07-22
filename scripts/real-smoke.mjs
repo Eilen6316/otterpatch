@@ -30,7 +30,7 @@ const model = createModelClient(provider, { apiKey: process.env.OtterPatch_API_K
 
 const request = {
   hostId: 'smoke', format: 'excel', intent: '把单元格 Sheet1!B1 的值改成 99', baseRev: 0, anchors: [], context: 'Sheet1!B1 = 20',
-  sheet: { a1: 'Sheet1!B1', name: 'Sheet1', values: [[20]] },
+  sheet: { a1: 'Sheet1!B1', name: 'Sheet1', values: [[20]], formulas: [[null]] },
 };
 const cs = await rt.propose(
   request,

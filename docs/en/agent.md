@@ -51,19 +51,25 @@ tools — they are not pasted into the prompt. Word context/snapshots annotate i
   orientation no longer collapse into a generic "apply format" label; `deleteRange` and image ops
   get proper labels; flow refs with an empty quote display as "第N段".
 
-## Shadow verification: propose → observe → repair
+## Checks: lint → simulation → output verification
 
-Every `propose_changeset` is verified before it becomes a diff (verifier registry in
-`packages/runtime/src/runtime.ts`, `registerVerifier(format, make)`):
+Every `propose_changeset` runs the strongest check supported by its format before it becomes a
+diff (registry in `packages/runtime/src/runtime.ts`, `registerVerifier(format, make)`). Reports
+carry an explicit `level` (`lint`, `simulation`, or `verification`) and a stable failure `code`:
 
-- **Excel** (`buildGridVerifier`) — recompute + bounds + duplicate-hit checks
-- **Word** (`buildDocVerifier`) — every quote must exist **and be unique** in the source text; empty
-  edits and duplicate hits are flagged
-- **drawio** (`buildDrawioVerifier`) — topology integrity: `update/delete/move` targets must exist;
-  new edges must connect to existing or same-proposal nodes (no dangling edges); no duplicate ids
+- **Excel simulation** (`buildGridVerifier`) — expands every range cell, applies supported value,
+  formula, clear, and style operations, then recalculates supported formulas. A complete formula
+  matrix is required; unknown functions, cycles, missing style observations, conflicting overlaps, and
+  out-of-snapshot targets fail closed.
+- **Word lint** (`buildDocVerifier`) — every quote must resolve uniquely, or the edit must carry a
+  valid structured paragraph index. Duplicate quotes are blocking ambiguity, not warnings.
+- **drawio topology simulation** (`buildDrawioVerifier`) — with a structured board snapshot it
+  replays additions, relationship edits, moves, and cascading deletes, then rejects duplicate ids,
+  missing parents, parent cycles, self references, and dangling edges. Legacy text context gets
+  exact-token lint only, never substring matching.
 
-Failures are returned to the model as a structured report in the same turn; it may repair up to
-`maxRepairs = 2` times.
+Failures are returned to the model as a structured report in the same turn. The capability
+manifest no longer advertises preview or verification for formats that only have writeback support.
 
 **Final self-check** (`withFinalSelfCheck`): once a *large* changeset (≥5 edits) passes structural
 verification, the model gets exactly one "review your own work as a whole" round — completeness,

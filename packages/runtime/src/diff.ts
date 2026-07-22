@@ -276,24 +276,28 @@ function touchedPartsFor(format: string, edit: Edit, anchor: LogicalAnchor | und
 function defaultSupport(format: string, edit: Edit, hasObservedNode: boolean): DiffSupport {
   const preview = supportsFormatOperation(format, edit.op.kind, 'preview');
   const writeback = supportsFormatOperation(format, edit.op.kind, 'writeback');
-  if (!preview || !writeback) return 'unsupported';
-  return hasObservedNode ? 'verified' : 'partial';
+  if (!writeback) return 'unsupported';
+  return hasObservedNode && preview ? 'verified' : 'partial';
 }
 
 function mergeRiskContext(
   cs: ChangeSet,
   observation: DiffObservation,
-  nodesByEdit: ReadonlyMap<string, ShadowResult['diff']['root']>,
+  nodesByEdit: ReadonlyMap<string, Array<ShadowResult['diff']['root']>>,
 ): ChangeSetRiskContext {
   const supplied = observation.riskContext ?? {};
   const byEdit: NonNullable<ChangeSetRiskContext['byEdit']> = { ...(supplied.byEdit ?? {}) };
   for (const edit of cs.edits) {
-    const node = nodesByEdit.get(edit.id);
-    if (!node || node.before.kind !== 'cell') continue;
+    const nodes = nodesByEdit.get(edit.id) ?? [];
+    const beforeCells = nodes.map((node) => node.before).filter((value) => value.kind === 'cell');
+    if (!beforeCells.length) continue;
     const existing = byEdit[edit.id] ?? {};
+    const first = beforeCells[0]!;
     byEdit[edit.id] = {
-      beforeState: { value: node.before.value, ...(node.before.formula !== undefined ? { formula: node.before.formula } : {}) },
-      destinationOccupied: node.before.formula !== undefined || node.before.value !== null,
+      beforeState: beforeCells.length === 1
+        ? { value: first.value, ...(first.formula !== undefined ? { formula: first.formula } : {}), ...(first.style ? { style: first.style } : {}) }
+        : { sample: beforeCells.slice(0, 12), affectedCount: beforeCells.length },
+      destinationOccupied: beforeCells.some((value) => value.formula !== undefined || value.value !== null),
       ...existing,
     };
   }
@@ -309,8 +313,14 @@ function supportSummary(values: readonly DiffSupport[]): DiffSupport {
 
 export function buildDiff(cs: ChangeSet, observation: DiffObservation): OtterPatchDiff {
   const leaves = flattenLeaves(observation.shadow);
-  const nodesByEdit = new Map<string, ShadowResult['diff']['root']>();
-  for (const node of leaves) for (const editId of node.editIds) nodesByEdit.set(editId, node);
+  const nodesByEdit = new Map<string, Array<ShadowResult['diff']['root']>>();
+  for (const node of leaves) {
+    for (const editId of node.editIds) {
+      const nodes = nodesByEdit.get(editId) ?? [];
+      nodes.push(node);
+      nodesByEdit.set(editId, nodes);
+    }
+  }
 
   const riskByEdit = new Map(
     assessChangeSet(cs, mergeRiskContext(cs, observation, nodesByEdit)).byEdit.map((risk) => [risk.editId, risk]),
@@ -322,18 +332,17 @@ export function buildDiff(cs: ChangeSet, observation: DiffObservation): OtterPat
     const anchor = cs.anchors[edit.target];
     const ref = edit.op.kind === 'insertTable' && edit.op.at === 'end' ? '文档末尾' : refOf(anchor, edit.target);
     const description = describe(edit.op);
-    const node = nodesByEdit.get(edit.id);
-    const backendSupport = observation.supportByEdit?.[edit.id] ?? defaultSupport(observation.format, edit, Boolean(node));
-    const directEffects: OtterPatchDiffEffect[] = node
-      ? [{
-          target: ref,
+    const nodes = nodesByEdit.get(edit.id) ?? [];
+    const node = nodes[0];
+    const backendSupport = observation.supportByEdit?.[edit.id] ?? defaultSupport(observation.format, edit, nodes.length > 0);
+    const directEffects: OtterPatchDiffEffect[] = nodes.map((observed) => ({
+          target: refOf(observed.anchor, ref),
           kind: 'direct',
-          summary: node.render.label ?? description.label,
-          before: node.before,
-          after: node.after,
+          summary: observed.render.label ?? description.label,
+          before: observed.before,
+          after: observed.after,
           editIds: [edit.id],
-        }]
-      : [];
+        }));
     const itemIndirect = indirectEffects.filter((effect) => effect.editIds?.includes(edit.id));
     const conflicts = shadowConflicts.filter((conflict) => conflict.anchor === edit.target);
     const affectedCount = affectedCountOf(edit, anchor);
@@ -359,7 +368,7 @@ export function buildDiff(cs: ChangeSet, observation: DiffObservation): OtterPat
       risk: { level: risk.level, reasons: [...risk.reasons] },
       expectedTouchedParts,
     };
-    if (node) {
+    if (nodes.length === 1 && node) {
       item.before = node.before;
       item.after = node.after;
     }
@@ -372,7 +381,7 @@ export function buildDiff(cs: ChangeSet, observation: DiffObservation): OtterPat
 
   const supports = items.map((item) => item.backendSupport);
   const backendSupport = supportSummary(supports);
-  const observedItems = items.filter((item) => item.before !== undefined && item.after !== undefined).length;
+  const observedItems = items.filter((item) => item.directEffects.length > 0).length;
   const previewStatus: DiffPreviewStatus = observedItems === 0
     ? 'unavailable'
     : observedItems === items.length && backendSupport === 'verified'

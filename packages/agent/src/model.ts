@@ -4,7 +4,7 @@
  * selected by ProposeRequest.format. Model implementations (Claude/OpenAI-compatible/Mock) only do
  * "call model per dialect → get raw proposal → dialect.buildChangeSet"; the model never emits OOXML/XML directly.
  */
-import { assertChangeSet, type ChangeSet, type DocRev, type LogicalAnchor, type VerifyReport } from '@otterpatch/core';
+import { assertChangeSet, type AbstractStyle, type ChangeSet, type DocRev, type LogicalAnchor, type VerifyReport } from '@otterpatch/core';
 
 export interface ProposeRequest {
   hostId: string;
@@ -17,7 +17,12 @@ export interface ProposeRequest {
   /** Internal validator feedback for a retry. Kept separate from untrusted document context. */
   proposalFeedback?: string[];
   /** Full sheet data (passed locally to serve, not stuffed into the model prompt; consumed on demand by the read_range/aggregate tools). */
-  sheet?: { a1: string; values: unknown[][]; formulas?: Array<Array<string | null>>; name?: string; names?: string[] };
+  sheet?: { a1: string; values: unknown[][]; formulas?: Array<Array<string | null>>; styles?: Array<Array<AbstractStyle | null>>; name?: string; names?: string[] };
+  /** Structured drawio topology. Context remains display text and is not used for fuzzy id checks. */
+  board?: {
+    nodes: Array<{ id: string; parent?: string; x?: number; y?: number; width?: number; height?: number }>;
+    edges: Array<{ id: string; source: string; target: string; parent?: string }>;
+  };
   /** Full Word document snapshot (per-paragraph text + styles; likewise not in the prompt, fetched on demand via read_blocks/find_text/get_outline/get_style_usage). */
   doc?: { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> };
   /** Multi-turn conversation history (user messages + agent answers/change summaries) so this request carries context. */
@@ -53,12 +58,12 @@ export type StreamEvent =
   | { type: 'tool'; name: string }
   | { type: 'done'; result: AgentResponse };
 
-/** Shadow verifier: applies the proposal to a shadow copy, recalculates, and produces feedable observations (for propose→observe→repair). */
+/** Pre-commit checker: runs the format's declared lint, simulation, or output verification and returns model-feedable observations. */
 export type ChangeSetVerifier = (cs: ChangeSet) => VerifyReport | Promise<VerifyReport>;
 
-/** Options for respond/respondStream: shadow verification + repair round cap + host-supplied extra tools. */
+/** Options for respond/respondStream: pre-commit checks + repair round cap + host-supplied extra tools. */
 export interface RespondOptions {
-  /** Run one shadow verification after a proposal; when ok=false, feed the report back to the model so it can fix. Omit = no verification. */
+  /** Check each proposal; when ok=false, feed the structured report back to the model so it can fix it. Omit = no check. */
   verify?: ChangeSetVerifier;
   /** Max number of re-proposal attempts when verification fails (default 1). */
   maxRepairs?: number;

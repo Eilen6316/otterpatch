@@ -137,7 +137,7 @@ export interface UniSel {
   rows: number;
   cols: number;
   text: string; // 喂给模型 prompt 的全局概览 + 选区焦点(廉价)
-  sheet?: { a1: string; values: unknown[][]; formulas?: Array<Array<string | null>>; name?: string; names?: string[] }; // 整表全量(本地传给 serve,供 read_range/aggregate 按需取数)
+  sheet?: { a1: string; values: unknown[][]; formulas?: Array<Array<string | null>>; styles?: Array<Array<SnapshotStyle | null>>; name?: string; names?: string[] }; // 整表全量(本地传给 serve,供 read_range/aggregate 按需取数)
 }
 
 const HEADERS = ['日期', '产品', '销量', '单价', '金额', '毛利率'];
@@ -168,11 +168,25 @@ function parseStart(a1: string): { c: number; r: number } {
   return { c: c - 1, r: parseInt(m[2]!, 10) - 1 };
 }
 
-type CellStyle = { bold?: boolean; italic?: boolean; underline?: unknown; fontSize?: number } | null;
+type UniverColor = { rgb?: string | null; th?: unknown };
+type CellStyle = {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: { show?: boolean };
+  fontSize?: number;
+  fontFamily?: string | null;
+  color?: UniverColor | string | null;
+  background?: UniverColor | string | null;
+  numberFormat?: { pattern?: string } | string | null;
+} | null;
+type SnapshotStyle = { bold?: boolean; italic?: boolean; color?: string; bgColor?: string; numberFormat?: string; align?: 'left' | 'center' | 'right' };
 interface FRangeLike {
   getA1Notation(): string;
   getValues(): unknown[][];
   getCellStyles(): CellStyle[][];
+  getFormulas?(): Array<Array<string | null>>;
+  getNumberFormats?(): string[][];
+  getHorizontalAlignments?(): string[][];
 }
 interface FWorkbookLike {
   getActiveRange(): FRangeLike | null;
@@ -199,25 +213,72 @@ function colStat(colVals: unknown[]): string {
   return `文本·${nonEmpty.length}项`;
 }
 
+function colorValue(value: UniverColor | string | null | undefined): string | undefined {
+  return typeof value === 'string' ? value : typeof value?.rgb === 'string' ? value.rgb : undefined;
+}
+
+function snapshotStyles(
+  styles: CellStyle[][] | undefined,
+  formats: string[][] | undefined,
+  alignments: string[][] | undefined,
+  rows: number,
+  columns: number,
+): Array<Array<SnapshotStyle | null>> | undefined {
+  if (!styles && !formats && !alignments) return undefined;
+  let complete = true;
+  const matrix = Array.from({ length: rows }, (_, row) => Array.from({ length: columns }, (_, column) => {
+    const source = styles?.[row]?.[column];
+    const rawFormat = formats?.[row]?.[column] || source?.numberFormat;
+    const numberFormat = typeof rawFormat === 'string' ? rawFormat : rawFormat?.pattern;
+    const align = alignments?.[row]?.[column];
+    if (!source && !numberFormat && !align) return null;
+    const color = colorValue(source?.color);
+    const bgColor = colorValue(source?.background);
+    if ((source?.color && !color) || (source?.background && !bgColor)) complete = false;
+    const normalizedColor = color?.replace(/\s/g, '').toLowerCase();
+    const cell: SnapshotStyle = {
+      ...(source?.bold ? { bold: true } : {}),
+      ...(source?.italic ? { italic: true } : {}),
+      ...(color && !['#000', '#000000', 'rgb(0,0,0)'].includes(normalizedColor ?? '') ? { color } : {}),
+      ...(bgColor ? { bgColor } : {}),
+      ...(numberFormat && numberFormat.toLowerCase() !== 'general' ? { numberFormat } : {}),
+      ...(align === 'left' || align === 'center' || align === 'right' ? { align } : {}),
+    };
+    return Object.keys(cell).length ? cell : null;
+  }));
+  return complete ? matrix : undefined;
+}
+
 // 全局上下文:整张表的廉价概览(列名+类型+统计 + 数据/采样)+ 当前选区焦点。
 // 让 Agent 像人一样"先扫一眼全表",再聚焦选区,而不是盲人摸象。
 function snap(wb: FWorkbookLike | null | undefined): UniSel | null {
   try {
     const range = wb?.getActiveRange() ?? null;
     // 整张表(used range)—— 与选区无关,始终构建,这样没圈选也能"看全局"
-    const ws = (wb as unknown as { getActiveSheet?: () => { getName?: () => string; getDataRange?: () => { getA1Notation?: () => string; getValues?: () => unknown[][]; getFormulas?: () => Array<Array<string | null>> } } | null } | null)?.getActiveSheet?.();
+    const ws = (wb as unknown as { getActiveSheet?: () => { getName?: () => string; getDataRange?: () => { getA1Notation?: () => string; getValues?: () => unknown[][]; getFormulas?: () => Array<Array<string | null>>; getCellStyles?: () => CellStyle[][]; getNumberFormats?: () => string[][]; getHorizontalAlignments?: () => string[][] } } | null } | null)?.getActiveSheet?.();
     const dr = ws?.getDataRange?.();
     const sheetA1 = dr?.getA1Notation?.();
     const sheetVals = dr?.getValues?.() as unknown[][] | undefined;
     const sheetFormulas = dr?.getFormulas?.();
+    const sheetCellStyles = dr?.getCellStyles?.();
+    const sheetNumberFormats = dr?.getNumberFormats?.();
+    const sheetAlignments = dr?.getHorizontalAlignments?.();
     if ((!sheetA1 || !sheetVals || !sheetVals.length) && !range) return null; // 空表且无选区
     const sA1 = sheetA1 ?? range!.getA1Notation();
     const sVals = sheetVals && sheetVals.length ? sheetVals : range!.getValues();
+    const rangeMatchesSheet = range?.getA1Notation() === sA1;
     const sFormulas = sheetFormulas?.length
       ? sheetFormulas
-      : (range as FRangeLike & { getFormulas?: () => Array<Array<string | null>> }).getFormulas?.();
+      : rangeMatchesSheet ? range?.getFormulas?.() : undefined;
     const R = sVals.length;
     const C = sVals[0]?.length ?? 0;
+    const sStyles = snapshotStyles(
+      sheetCellStyles?.length ? sheetCellStyles : rangeMatchesSheet ? range?.getCellStyles() : undefined,
+      sheetNumberFormats?.length ? sheetNumberFormats : rangeMatchesSheet ? range?.getNumberFormats?.() : undefined,
+      sheetAlignments?.length ? sheetAlignments : rangeMatchesSheet ? range?.getHorizontalAlignments?.() : undefined,
+      R,
+      C,
+    );
     const sStart = parseStart(sA1);
     const sCols = Array.from({ length: C }, (_, i) => colName(sStart.c + i));
     const header = (sVals[0] ?? []).map((v) => (v == null ? '' : String(v)));
@@ -269,6 +330,7 @@ function snap(wb: FWorkbookLike | null | undefined): UniSel | null {
         a1: sA1,
         values: sVals.slice(0, 3000),
         ...(sFormulas?.length ? { formulas: sFormulas.slice(0, 3000) } : {}),
+        ...(sStyles ? { styles: sStyles.slice(0, 3000) } : {}),
         ...(ws?.getName?.() ? { name: ws.getName() } : {}),
       },
     };

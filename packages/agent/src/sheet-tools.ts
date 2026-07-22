@@ -77,6 +77,7 @@ export function assertProposeRequestBudget(req: ProposeRequest): void {
     assertSheetSnapshotBudget(req.sheet);
   }
   if (req.doc) assertJsonBudget(req.doc, 'document_snapshot');
+  if (req.board) assertJsonBudget(req.board, 'drawio_snapshot');
   const feedback = req.proposalFeedback?.length
     ? '\n\n受信任的提案校验反馈:\n' + req.proposalFeedback.map((e) => '- ' + e).join('\n')
     : '';
@@ -220,16 +221,16 @@ export function parseClarify(input: unknown): ClarifyQuestion[] {
 
 // ─────────────── Data-fetch execution (read_range / aggregate) ───────────────
 
-export type SheetData = { a1: string; values: unknown[][]; formulas?: Array<Array<string | null>>; name?: string; names?: string[] };
+export type SheetData = { a1: string; values: unknown[][]; formulas?: Array<Array<string | null>>; styles?: Array<Array<unknown>>; name?: string; names?: string[] };
 
 export function assertSheetSnapshotBudget(sheet: SheetData): void {
-  const rows = Math.max(sheet.values.length, sheet.formulas?.length ?? 0);
+  const rows = Math.max(sheet.values.length, sheet.formulas?.length ?? 0, sheet.styles?.length ?? 0);
   if (rows > RESOURCE_LIMITS.totalTouchedCells) {
     throw new ResourceLimitError('sheet_snapshot_rows', RESOURCE_LIMITS.totalTouchedCells, rows);
   }
   let cells = 0;
   for (let index = 0; index < rows; index++) {
-    cells += Math.max(sheet.values[index]?.length ?? 0, sheet.formulas?.[index]?.length ?? 0);
+    cells += Math.max(sheet.values[index]?.length ?? 0, sheet.formulas?.[index]?.length ?? 0, sheet.styles?.[index]?.length ?? 0);
     if (cells > RESOURCE_LIMITS.totalTouchedCells) {
       throw new ResourceLimitError('sheet_snapshot_cells', RESOURCE_LIMITS.totalTouchedCells, cells);
     }

@@ -5,7 +5,7 @@
 | 文档 | 涵盖内容 |
 |---|---|
 | [architecture.md](./architecture.md) | propose → diff → review → commit 流水线、包结构图、核心不变式 |
-| [agent.md](./agent.md) | Agent 循环：路由、只读工具、影子校验与修复、自检、提示词缓存、批处理 |
+| [agent.md](./agent.md) | Agent 循环：路由、只读工具、分级检查与修复、自检、提示词缓存、批处理 |
 | [skills.md](./skills.md) | 技能系统：能力卡片与操作手册（playbook）的区别、渐进式披露（`load_skill`）、外部 SKILL.md 安装 |
 | [review-ux.md](./review-ux.md) | 审阅体验：三工作区统一的 DiffToggle、Word 行内修订（接受即扁平化 flatten-on-accept）、Excel 三态对照与前置状态回放、drawio 逐条审阅 |
 | [testing.md](./testing.md) | 测试金字塔：包级单元测试、无头 e2e 测试框架、live eval、能力基准测试、验收遥测 |
@@ -13,7 +13,7 @@
 ## 一段话简介
 
 Agent 不应直接编辑你的文件。在 OtterPatch 中，Agent 只**提议**一个结构化的
-`ChangeSet`；系统会在影子副本上对其进行校验（并让模型自行修复自己的
+`ChangeSet`；系统会执行该格式声明的 lint、模拟或输出验证（并让模型自行修复自己的
 错误），展示一个**可审阅的差异（diff）** —— 工作区中呈现为行内修订，侧栏中呈现为
 git 风格的 diff —— 只有在人工逐项批准之后，才以**外科手术式**的方式写回：文件中只有
 被触及的部分发生变化，其余内容保持逐字节一致。
