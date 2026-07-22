@@ -3,10 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomBytes } from 'node:crypto';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
 import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, isResourceLimitError } from '@otterpatch/core';
-import { createModelClient, sanitizeStreamStatus, type ProposeRequest, type Provider } from '@otterpatch/agent';
+import { ProviderCallError, createModelClient, sanitizeStreamStatus, type AgentResponse, type ProposeRequest, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
 import { OtterPatchRuntime, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
 import { decodeDocumentBase64 } from './document-input.js';
+import { observeClientAbort } from './client-abort.js';
 
 const rt = new OtterPatchRuntime();
 type SheetInput = NonNullable<ProposeRequest['sheet']>;
@@ -116,6 +117,16 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
 
 const emsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+function providerHttpStatus(error: ProviderCallError): number {
+  if (error.kind === 'authentication') return 401;
+  if (error.kind === 'permission') return 403;
+  if (error.kind === 'invalid_request') return 400;
+  if (error.kind === 'rate_limit') return 429;
+  if (error.kind === 'timeout') return 504;
+  if (error.kind === 'aborted') return 408;
+  return 503;
+}
+
 const server = createServer((req: IncomingMessage, res: ServerResponse) => {
   void (async () => {
     try {
@@ -145,22 +156,29 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
           apiKey: a.apiKey as string | undefined,
           ...(a.model ? { model: a.model as string } : {}),
         });
-        const r = await rt.respond(
-          {
-            hostId: 'serve',
-            format: String(a.format),
-            intent: String(a.intent ?? ''),
-            baseRev: readDocRev(a.baseRev, 0),
-            anchors: [],
-            context: String(a.context ?? ''),
-            ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}),
-            ...(a.board ? { board: a.board as BoardInput } : {}),
-            ...(a.doc ? { doc: a.doc as { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> } } : {}),
-            ...(a.ppt ? { ppt: a.ppt as PptInput } : {}),
-            ...(Array.isArray(a.history) ? { history: a.history as Array<{ role: 'user' | 'assistant'; content: string }> } : {}),
-          },
-          model,
-        );
+        const client = observeClientAbort(req, res);
+        let r: AgentResponse;
+        try {
+          r = await rt.respond(
+            {
+              hostId: 'serve',
+              format: String(a.format),
+              intent: String(a.intent ?? ''),
+              baseRev: readDocRev(a.baseRev, 0),
+              anchors: [],
+              context: String(a.context ?? ''),
+              ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}),
+              ...(a.board ? { board: a.board as BoardInput } : {}),
+              ...(a.doc ? { doc: a.doc as { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> } } : {}),
+              ...(a.ppt ? { ppt: a.ppt as PptInput } : {}),
+              ...(Array.isArray(a.history) ? { history: a.history as Array<{ role: 'user' | 'assistant'; content: string }> } : {}),
+            },
+            model,
+            { signal: client.signal },
+          );
+        } finally {
+          client.dispose();
+        }
         if (r.kind === 'answer') send(req, res, 200, { answer: r.text });
         else if (r.kind === 'clarify') send(req, res, 200, { questions: r.questions });
         else send(req, res, 200, {
@@ -177,7 +195,12 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
           ...(a.model ? { model: a.model as string } : {}),
         });
         res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-        const sse = (e: unknown): void => { res.write(`data: ${JSON.stringify(e)}\n\n`); };
+        const client = observeClientAbort(req, res);
+        const sse = (e: unknown): void => {
+          if (!client.signal.aborted && !res.destroyed && !res.writableEnded) {
+            res.write(`data: ${JSON.stringify(e)}\n\n`);
+          }
+        };
         try {
           const result = await rt.respondStream(
             {
@@ -202,6 +225,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
                 sse(e);
               }
             },
+            { signal: client.signal },
           );
           if (result.kind === 'changeset') {
             sse({
@@ -217,9 +241,13 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
             sse({ type: 'done', kind: 'answer', text: result.text });
           }
         } catch (err) {
-          sse({ type: 'error', message: emsg(err) });
+          if (!client.signal.aborted && !res.destroyed) {
+            sse({ type: 'error', message: emsg(err), ...(err instanceof ProviderCallError ? { error: err.toJSON() } : {}) });
+          }
+        } finally {
+          client.dispose();
         }
-        res.end();
+        if (!res.destroyed) res.end();
         return;
       }
       if (req.method === 'POST' && url === '/review') {
@@ -255,8 +283,11 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       }
       send(req, res, 404, { error: 'not found' });
     } catch (e) {
+      if (res.destroyed) return;
       if (isResourceLimitError(e)) {
         send(req, res, e.resource === 'concurrent_model_requests' ? 429 : 413, { error: emsg(e), ...e.toJSON() });
+      } else if (e instanceof ProviderCallError) {
+        send(req, res, providerHttpStatus(e), { error: emsg(e), details: e.toJSON() });
       } else {
         send(req, res, e instanceof HttpError ? e.status : 500, { error: emsg(e) });
       }

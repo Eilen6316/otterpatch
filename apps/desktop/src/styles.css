@@ -765,6 +765,8 @@ svg { display: block; }
 .send:hover { background: #1d4fd0; }
 .send:active { transform: scale(0.94); }
 .send:disabled { background: var(--line-2); color: var(--faint); box-shadow: none; cursor: default; }
+.send.cancel { background: var(--del); box-shadow: 0 2px 8px rgba(207, 34, 46, 0.22); }
+.send.cancel:hover { background: #a91d27; }
 
 /* ── 审阅区:逐条过改动(Cursor/Copilot 式),配合左侧工作区高亮 ── */
 .reviewbox { border: 1px solid var(--line-2); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); padding: 12px 13px; }

@@ -6,7 +6,7 @@
  */
 import type { MutableRefObject, ReactNode } from 'react';
 import { useT } from './i18n.js';
-import { IconPlus, IconChevron, IconSend, IconHelp } from './icons.js';
+import { IconPlus, IconChevron, IconSend, IconHelp, IconX } from './icons.js';
 
 export interface ComposerProvider { id: string; label: string; model: string }
 
@@ -30,6 +30,7 @@ export interface ComposerProps {
   placeholder: string;
   busy: boolean;
   onSend(): void;
+  onCancel(): void;
   fileRef: MutableRefObject<HTMLInputElement | null>;
   fileName: string;
   onFile(f: File | undefined): void;
@@ -90,7 +91,14 @@ export function Composer(p: ComposerProps): ReactNode {
           <button className={'model' + (p.cfgOpen ? ' on' : '')} onClick={p.onToggleCfg}>
             {p.providerLabel} <IconChevron size={13} />
           </button>
-          <button className="send" title={t('发送')} onClick={p.onSend} disabled={p.busy}><IconSend size={16} /></button>
+          <button
+            className={'send' + (p.busy ? ' cancel' : '')}
+            title={t(p.busy ? '取消本轮请求' : '发送')}
+            aria-label={t(p.busy ? '取消本轮请求' : '发送')}
+            onClick={p.busy ? p.onCancel : p.onSend}
+          >
+            {p.busy ? <IconX size={16} /> : <IconSend size={16} />}
+          </button>
         </div>
       </div>
     </div>

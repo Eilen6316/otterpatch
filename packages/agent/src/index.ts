@@ -14,3 +14,4 @@ export * from './doc-tools.js';
 export * from './drawio-verify.js';
 export * from './sheet-tools.js';
 export * from './stream-status.js';
+export * from './provider-control.js';

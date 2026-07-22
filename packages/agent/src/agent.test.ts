@@ -393,18 +393,26 @@ function openAiTextStream(content: string): AsyncIterable<unknown> {
 
 test('OpenAI stream never exposes provider reasoning_content', async () => {
   const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'test-model' });
+  const controller = new AbortController();
   const secret = 'PRIVATE_OPENAI_CHAIN_OF_THOUGHT';
   const preamble = 'PRIVATE_OPENAI_TOOL_PREAMBLE';
-  (client as unknown as { client: { chat: { completions: { create: () => Promise<AsyncIterable<unknown>> } } } }).client = {
-    chat: { completions: { create: async () => openAiToolStream('propose_changeset', JSON.stringify(VALID_EXCEL_PROPOSAL), 't1', secret, preamble) } },
+  let requestOptions: { signal?: AbortSignal; timeout?: number; maxRetries?: number } | undefined;
+  (client as unknown as { client: { chat: { completions: { create: (_body: unknown, options: typeof requestOptions) => Promise<AsyncIterable<unknown>> } } } }).client = {
+    chat: { completions: { create: async (_body, options) => {
+      requestOptions = options;
+      return openAiToolStream('propose_changeset', JSON.stringify(VALID_EXCEL_PROPOSAL), 't1', secret, preamble);
+    } } },
   };
   const events: StreamEvent[] = [];
 
-  const result = await client.respondStream(LOOP_REQ, excelDialect, (event) => events.push(event));
+  const result = await client.respondStream(LOOP_REQ, excelDialect, (event) => events.push(event), { signal: controller.signal });
 
   assert.equal(result.kind, 'changeset');
   assert.doesNotMatch(JSON.stringify(events), new RegExp(secret));
   assert.doesNotMatch(JSON.stringify(events), new RegExp(preamble));
+  assert.equal(requestOptions?.signal, controller.signal);
+  assert.equal(requestOptions?.maxRetries, 0);
+  assert.equal(typeof requestOptions?.timeout, 'number');
   assert.deepEqual(
     events.filter((event) => event.type === 'status').map((event) => event.status.phase),
     ['generating', 'ready'],
@@ -437,6 +445,50 @@ test('OpenAI stream releases text only after it is classified as the final answe
   assert.deepEqual(result, { kind: 'answer', text: 'final answer' });
   assert.deepEqual(events.filter((event) => event.type === 'answer'), [{ type: 'answer', delta: 'final answer' }]);
   assert.doesNotMatch(JSON.stringify(events), /unclassified tool preamble/);
+});
+
+test('OpenAI stream cancellation reaches the SDK and returns normalized abort error without retrying', async () => {
+  const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'abort-model' });
+  const controller = new AbortController();
+  let calls = 0;
+  (client as unknown as { client: { chat: { completions: { create: (_body: unknown, options: { signal?: AbortSignal }) => Promise<never> } } } }).client = {
+    chat: { completions: { create: async (_body, options) => {
+      calls++;
+      return new Promise<never>((_resolve, reject) => {
+        options.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    } } },
+  };
+
+  const pending = client.respondStream(LOOP_REQ, excelDialect, () => undefined, { signal: controller.signal });
+  controller.abort();
+
+  await assert.rejects(
+    pending,
+    (error) => error instanceof Error
+      && (error as Error & { code?: string }).code === 'PROVIDER_ABORTED'
+      && (error as Error & { retryable?: boolean }).retryable === false,
+  );
+  assert.equal(calls, 1);
+});
+
+test('Anthropic transport errors use the same normalized provider taxonomy', async () => {
+  const client = new AnthropicModelClient({
+    apiKey: 'test-key',
+    model: 'taxonomy-model',
+    retryPolicy: { maxRetries: 0 },
+  });
+  (client as unknown as { client: { messages: { create: () => Promise<never> } } }).client = {
+    messages: { create: async () => { throw Object.assign(new Error('raw overloaded response'), { status: 529, type: 'overloaded_error' }); } },
+  };
+
+  await assert.rejects(
+    () => client.respond(LOOP_REQ, excelDialect),
+    (error) => error instanceof Error
+      && (error as Error & { code?: string }).code === 'PROVIDER_UNAVAILABLE'
+      && (error as Error & { provider?: string }).provider === 'anthropic'
+      && !error.message.includes('raw overloaded response'),
+  );
 });
 
 test('agent loop budget tracks model/read/repair/output/time limits independently', () => {

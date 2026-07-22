@@ -115,18 +115,26 @@ function fakeToolStream(id: string, input: unknown, thinking?: string, toolPream
 
 test('Anthropic stream never exposes provider thinking_delta', async () => {
   const client = new AnthropicModelClient({ apiKey: 'test-not-used' });
+  const controller = new AbortController();
   const secret = 'PRIVATE_ANTHROPIC_CHAIN_OF_THOUGHT';
   const preamble = 'PRIVATE_ANTHROPIC_TOOL_PREAMBLE';
-  (client as unknown as { client: { messages: { create: () => Promise<AsyncIterable<unknown>> } } }).client = {
-    messages: { create: async () => fakeToolStream('t1', { plan: '改写', edits: [{ quote: '增速略有放缓', replacement: '增速有所回落' }] }, secret, preamble) },
+  let requestOptions: { signal?: AbortSignal; timeout?: number; maxRetries?: number } | undefined;
+  (client as unknown as { client: { messages: { create: (_body: unknown, options: typeof requestOptions) => Promise<AsyncIterable<unknown>> } } }).client = {
+    messages: { create: async (_body, options) => {
+      requestOptions = options;
+      return fakeToolStream('t1', { plan: '改写', edits: [{ quote: '增速略有放缓', replacement: '增速有所回落' }] }, secret, preamble);
+    } },
   };
   const events: StreamEvent[] = [];
 
-  const result = await client.respondStream(reqFor(), wordDialect, (event) => events.push(event));
+  const result = await client.respondStream(reqFor(), wordDialect, (event) => events.push(event), { signal: controller.signal });
 
   assert.equal(result.kind, 'changeset');
   assert.doesNotMatch(JSON.stringify(events), new RegExp(secret));
   assert.doesNotMatch(JSON.stringify(events), new RegExp(preamble));
+  assert.equal(requestOptions?.signal, controller.signal);
+  assert.equal(requestOptions?.maxRetries, 0);
+  assert.equal(typeof requestOptions?.timeout, 'number');
   assert.deepEqual(
     events.filter((event) => event.type === 'status').map((event) => event.status.phase),
     ['generating', 'ready'],

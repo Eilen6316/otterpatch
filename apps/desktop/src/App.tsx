@@ -536,6 +536,7 @@ export function App() {
   const [reviewIdx, setReviewIdx] = useState(0);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false); // 同步重入锁:异步 busy state 拦不住同一帧内的连发
+  const streamAbortRef = useRef<AbortController | null>(null);
   const [sendErr, setSendErr] = useState<string | null>(null);
   const [answer, setAnswer] = useState<string | null>(null);
   const lsJson = <T,>(k: string, fb: T): T => { try { const v = JSON.parse(localStorage.getItem(k) ?? 'null'); return v == null ? fb : (v as T); } catch { return fb; } };
@@ -608,6 +609,7 @@ export function App() {
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [thread, busy]);
+  useEffect(() => () => streamAbortRef.current?.abort(), []);
 
   const r1 = Math.min(sel.ar, sel.br);
   const r2 = Math.max(sel.ar, sel.br);
@@ -764,6 +766,8 @@ export function App() {
       return;
     }
     if (ep && apiKey) {
+      const requestController = new AbortController();
+      streamAbortRef.current = requestController;
       sendingRef.current = true;
       setBusy(true);
       setSendErr(null);
@@ -778,7 +782,7 @@ export function App() {
         streamObjsRef.current = [];
         streamByEditRef.current = {};
         staleStreamRef.current = false;
-        type StreamEvt = { type: string; status?: unknown; delta?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; proposal?: unknown; questions?: ClarifyQuestion[]; message?: string };
+        type StreamEvt = { type: string; status?: unknown; delta?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; proposal?: unknown; questions?: ClarifyQuestion[]; message?: string; error?: { kind?: string } };
         await streamPropose<StreamEvt>(
           ep,
           { format: fmt, intent: theIntent, context: ctx, baseRev: 0, provider, model, apiKey, ...(proposalFile ? { documentId: `${proposalFile.format}:${proposalFile.name}:${proposalFile.byteLength}:${proposalFile.hash}` } : {}), ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(proposalBoard ? { board: proposalBoard } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildAppHistory(thread) } : {}) },
@@ -813,7 +817,20 @@ export function App() {
               }
               drawnOpsRef.current = ops.length;
             }
-            else if (e.type === 'error') throw new Error(e.message ?? 'stream error');
+            else if (e.type === 'error') {
+              const providerMessage: Record<string, string> = {
+                authentication: t('API Key 未通过 Provider 验证'),
+                permission: t('当前 API Key 无权使用该模型'),
+                invalid_request: t('Provider 拒绝了模型请求'),
+                rate_limit: t('Provider 限流,请稍后重试'),
+                timeout: t('Provider 请求超时'),
+                unavailable: t('Provider 暂时不可用'),
+                network: t('无法连接 Provider'),
+                circuit_open: t('Provider 暂时熔断,请稍后重试'),
+                unknown: t('Provider 请求失败'),
+              };
+              throw new Error(providerMessage[e.error?.kind ?? ''] ?? e.message ?? 'stream error');
+            }
             else if (e.type === 'done') {
               if (e.kind === 'changeset' && e.diff) {
                 const diff = e.diff;
@@ -876,20 +893,28 @@ export function App() {
             }
           },
           localServeToken(),
+          requestController.signal,
         );
       } catch (e) {
         const m = e instanceof Error ? e.message : String(e);
+        const cancelled = requestController.signal.aborted;
         const refused = /failed to fetch|refused|ECONNREFUSED|networkerror|load failed/i.test(m);
+        if (fmt === 'drawio' && streamObjsRef.current.length) {
+          boardRef.current?.removeObjects(Object.values(streamByEditRef.current));
+          streamObjsRef.current = [];
+          streamByEditRef.current = {};
+        }
         // 出错不回滚对话:此前把 user 气泡也删掉,用户看到"对话断开/消失"——改为把占位气泡定格成错误说明,
         // 对话完整保留(user/assistant 交替不破坏),指令放回输入框方便重试
-        setThread((th) => interruptLastStreamingAnswer(th, `⚠ 本轮请求中断(${refused ? '连不上本机 Agent 服务' : m}),对话已保留,可直接重发。`));
+        setThread((th) => interruptLastStreamingAnswer(th, cancelled ? t('本轮请求已取消。') : `⚠ 本轮请求中断(${refused ? '连不上本机 Agent 服务' : m}),对话已保留,可直接重发。`));
         setIntent(theIntent); // 把指令放回输入框,方便重试
-        setSendErr(
-          refused
+        setSendErr(cancelled
+          ? null
+          : refused
             ? `连不上本机 Agent 服务(${ep})。改了代码后请在项目根目录跑 npm run serve 重启它(会先重新构建再启动,确保用上最新能力)。`
-            : 'Agent · ' + m,
-        );
+            : 'Agent · ' + m);
       } finally {
+        if (streamAbortRef.current === requestController) streamAbortRef.current = null;
         setBusy(false);
         sendingRef.current = false;
       }
@@ -1371,6 +1396,7 @@ export function App() {
               placeholder={t(PLACEHOLDERS[fmt])}
               busy={busy}
               onSend={() => { void send(); }}
+              onCancel={() => streamAbortRef.current?.abort()}
               fileRef={fileRef}
               fileName={fileName}
               onFile={onFile}

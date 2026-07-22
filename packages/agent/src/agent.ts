@@ -18,7 +18,7 @@ import {
 import type { SkillLibrary } from '@otterpatch/skills';
 import type { ConventionStack } from './conventions.js';
 import { DIALECTS } from './dialects.js';
-import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
+import type { AgentResponse, HostDialect, ModelCallOptions, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
 import { assertProposeRequestBudget } from './sheet-tools.js';
 import { validProposalRepairs } from './loop-budget.js';
 
@@ -163,13 +163,16 @@ export class Agent {
   /** Smart routing: the model decides whether to answer a question or propose changes (falls back to propose). */
   async respond(req: ProposeRequest, opts?: RespondOptions): Promise<AgentResponse> {
     assertProposeRequestBudget(req);
+    opts?.signal?.throwIfAborted();
     const d = this.dialectFor(req);
     if (this.model.respond) {
       const response = await this.model.respond(req, d, this.withSkillTools(req, opts));
+      opts?.signal?.throwIfAborted();
       if (response.kind === 'changeset') assertChangeSet(response.changeSet);
       return response;
     }
-    const cs = await this.model.proposeChangeSet(req, d);
+    const cs = await this.model.proposeChangeSet(req, d, opts?.signal ? { signal: opts.signal } : undefined);
+    opts?.signal?.throwIfAborted();
     assertChangeSet(cs);
     if (opts?.verify) {
       const v = await opts.verify(cs);
@@ -181,9 +184,11 @@ export class Agent {
   /** Streaming routing: pass through structured public events, or synthesize them for one-shot clients. */
   async respondStream(req: ProposeRequest, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
     assertProposeRequestBudget(req);
+    opts?.signal?.throwIfAborted();
     const d = this.dialectFor(req);
     if (this.model.respondStream) {
       const response = await this.model.respondStream(req, d, onEvent, this.withSkillTools(req, opts));
+      opts?.signal?.throwIfAborted();
       if (response.kind === 'changeset') assertChangeSet(response.changeSet);
       return response;
     }
@@ -191,8 +196,10 @@ export class Agent {
     let r: AgentResponse;
     if (this.model.respond) {
       r = await this.model.respond(req, d, this.withSkillTools(req, opts));
+      opts?.signal?.throwIfAborted();
     } else {
-      const cs = await this.model.proposeChangeSet(req, d);
+      const cs = await this.model.proposeChangeSet(req, d, opts?.signal ? { signal: opts.signal } : undefined);
+      opts?.signal?.throwIfAborted();
       assertChangeSet(cs);
       if (opts?.verify) {
         const v = await opts.verify(cs);
@@ -208,8 +215,9 @@ export class Agent {
     return r;
   }
 
-  async propose(req: ProposeRequest): Promise<ChangeSet> {
+  async propose(req: ProposeRequest, opts?: ModelCallOptions): Promise<ChangeSet> {
     assertProposeRequestBudget(req);
+    opts?.signal?.throwIfAborted();
     const d = this.dialectFor(req);
 
     const validator = this.opts.validator;
@@ -219,7 +227,8 @@ export class Agent {
       const r: ProposeRequest = errors.length
         ? { ...req, proposalFeedback: errors }
         : req;
-      const cs = await this.model.proposeChangeSet(r, d);
+      const cs = await this.model.proposeChangeSet(r, d, opts);
+      opts?.signal?.throwIfAborted();
       assertChangeSet(cs);
       if (!validator) return cs;
       const v = validator(cs);

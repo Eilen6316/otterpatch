@@ -12,6 +12,17 @@ const STATUS_DICT: Record<string, string> = {
   '正在读取文档内容': 'Reading document content',
   '正在读取任务规范': 'Reading task guidance',
   '正在读取所需上下文': 'Reading required context',
+  '取消本轮请求': 'Cancel this request',
+  '本轮请求已取消。': 'This request was cancelled.',
+  'API Key 未通过 Provider 验证': 'The provider rejected this API key',
+  '当前 API Key 无权使用该模型': 'This API key cannot access the selected model',
+  'Provider 拒绝了模型请求': 'The provider rejected the model request',
+  'Provider 限流,请稍后重试': 'Provider rate limit reached; retry later',
+  'Provider 请求超时': 'Provider request timed out',
+  'Provider 暂时不可用': 'Provider is temporarily unavailable',
+  '无法连接 Provider': 'Could not reach the provider',
+  'Provider 暂时熔断,请稍后重试': 'Provider circuit is open; retry later',
+  'Provider 请求失败': 'Provider request failed',
 };
 
 export type Lang = 'zh' | 'en';

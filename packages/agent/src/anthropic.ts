@@ -9,12 +9,13 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, type ChangeSet } from '@otterpatch/core';
-import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
+import type { AgentResponse, HostDialect, ModelCallOptions, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
 import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, execReadTool, limitToolResult, parseClarify, proposalSystem, recentHistory, respondSystem, validMaxTokens, validProviderTimeout } from './sheet-tools.js';
 import { NUDGE_DIRECT, NUDGE_TOOLIFY, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
 import { salvageProposalArgs, salvageText, salvagedProposalPayload } from './json-salvage.js';
 import { AgentLoopBudget, readToolLimitText, verificationFailureText } from './loop-budget.js';
 import { readingStatus } from './stream-status.js';
+import { ProviderCallController, type ProviderRetryPolicy } from './provider-control.js';
 
 const safeJson = (s?: string): Record<string, unknown> => { try { return s ? (JSON.parse(s) as Record<string, unknown>) : {}; } catch { return {}; } };
 
@@ -24,6 +25,8 @@ export interface AnthropicOptions {
   baseURL?: string; // override for China routes / proxies
   maxTokens?: number;
   timeoutMs?: number;
+  provider?: string;
+  retryPolicy?: Partial<ProviderRetryPolicy>;
 }
 
 function assertModelOutputChars(actual: number): void {
@@ -53,13 +56,38 @@ export class AnthropicModelClient implements ModelClient {
   private readonly model: string;
   private readonly maxTokens: number;
   private readonly timeoutMs: number;
+  private readonly callControl: ProviderCallController;
 
   constructor(opts: AnthropicOptions = {}) {
     const timeout = validProviderTimeout(opts.timeoutMs);
-    this.client = new Anthropic({ apiKey: opts.apiKey, baseURL: opts.baseURL, timeout });
+    this.client = new Anthropic({ apiKey: opts.apiKey, baseURL: opts.baseURL, timeout, maxRetries: 0 });
     this.model = opts.model ?? 'claude-opus-4-8';
     this.maxTokens = validMaxTokens(opts.maxTokens);
     this.timeoutMs = timeout;
+    const provider = opts.provider ?? 'anthropic';
+    this.callControl = new ProviderCallController({
+      provider,
+      circuitKey: `${provider}:${opts.baseURL ?? 'default'}:${this.model}`,
+      retryPolicy: opts.retryPolicy,
+    });
+  }
+
+  private runProviderCall<T>(
+    budget: AgentLoopBudget,
+    signal: AbortSignal | undefined,
+    call: (options: { timeout: number; maxRetries: 0; signal?: AbortSignal }) => Promise<T>,
+    deferSuccess = false,
+  ): Promise<T> {
+    return this.callControl.run(async () => {
+      const requestOptions = {
+        timeout: Math.min(this.timeoutMs, budget.beginModelCall()),
+        maxRetries: 0 as const,
+        ...(signal ? { signal } : {}),
+      };
+      const result = await call(requestOptions);
+      budget.finishStep();
+      return result;
+    }, { ...(signal ? { signal } : {}), ...(deferSuccess ? { deferSuccess: true } : {}) });
   }
 
   private toolset(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Anthropic.Tool[] {
@@ -83,17 +111,16 @@ export class AnthropicModelClient implements ModelClient {
     return [{ type: 'text', text: respondSystem(dialect), cache_control: { type: 'ephemeral' } }];
   }
 
-  async proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet> {
+  async proposeChangeSet(req: ProposeRequest, dialect: HostDialect, opts?: ModelCallOptions): Promise<ChangeSet> {
     const budget = new AgentLoopBudget(0);
-    const res = await this.client.messages.create({
+    const res = await this.runProviderCall(budget, opts?.signal, (requestOptions) => this.client.messages.create({
       model: this.model,
       max_tokens: this.maxTokens,
       system: proposalSystem(dialect),
       messages: [{ role: 'user', content: currentRequestMessage(req) }],
       tools: [{ name: dialect.toolName, description: dialect.toolDescription, input_schema: dialect.parameters as unknown as Anthropic.Tool['input_schema'] }],
       tool_choice: { type: 'tool', name: dialect.toolName },
-    }, { timeout: Math.min(this.timeoutMs, budget.beginModelCall()) });
-    budget.finishStep();
+    }, requestOptions));
     const output = res.content.map((block) => block.type === 'text' ? block.text : block.type === 'tool_use' ? block.name + JSON.stringify(block.input) : '').join('');
     assertModelOutputChars(output.length);
     budget.recordOutput(output, res.usage?.output_tokens);
@@ -115,11 +142,14 @@ export class AnthropicModelClient implements ModelClient {
     let nudged = false;
 
     for (let step = 0; step < STEP_LIMIT; step++) {
-      const res = await this.client.messages.create(
-        { model: this.model, max_tokens: this.maxTokens, system, messages, tools, tool_choice: { type: 'auto' } },
-        { timeout: Math.min(this.timeoutMs, budget.beginModelCall()) },
+      const res = await this.runProviderCall(
+        budget,
+        opts?.signal,
+        (requestOptions) => this.client.messages.create(
+          { model: this.model, max_tokens: this.maxTokens, system, messages, tools, tool_choice: { type: 'auto' } },
+          requestOptions,
+        ),
       );
-      budget.finishStep();
       const text = res.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map((b) => b.text).join('');
       const toolUses = res.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
       const output = text + toolUses.map((tool) => tool.name + JSON.stringify(tool.input)).join('');
@@ -183,14 +213,19 @@ export class AnthropicModelClient implements ModelClient {
     };
 
     for (let step = 0; step < STEP_LIMIT; step++) {
-      const stream = await this.client.messages.create(
-        { model: this.model, max_tokens: this.maxTokens, system, messages, tools, tool_choice: { type: 'auto' }, stream: true },
-        { timeout: Math.min(this.timeoutMs, budget.beginModelCall()) },
+      const stream = await this.runProviderCall(
+        budget,
+        opts?.signal,
+        (requestOptions) => this.client.messages.create(
+          { model: this.model, max_tokens: this.maxTokens, system, messages, tools, tool_choice: { type: 'auto' }, stream: true },
+          requestOptions,
+        ),
+        true,
       );
       let text = '';
       let outputChars = 0;
       const acc: Record<number, { id: string; name: string; json: string }> = {};
-      for await (const ev of stream) {
+      for await (const ev of this.callControl.monitorStream(stream, opts?.signal)) {
         if (ev.type === 'content_block_start') {
           const cb = ev.content_block;
           if (cb.type === 'tool_use') {

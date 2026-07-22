@@ -9,7 +9,7 @@
  * drawio → single-XML surgical edit.
  */
 import { Agent, assertProposeRequestBudget, assertSheetSnapshotBudget, buildDocVerifier, buildDrawioVerifier } from '@otterpatch/agent';
-import type { AgentResponse, ChangeSetVerifier, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from '@otterpatch/agent';
+import type { AgentResponse, ChangeSetVerifier, ModelCallOptions, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from '@otterpatch/agent';
 import type { ApprovalPolicy, CellValue, ChangeSet, ChangeSetRiskContext, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
 import {
   CAPABILITY_MANIFEST_VERSION,
@@ -169,8 +169,9 @@ export class OtterPatchRuntime {
   }
 
   /** Intent → constrained ChangeSet (injects the built-in skill library; BYOK model supplied by the caller). */
-  async propose(req: ProposeRequest, model: ModelClient): Promise<ChangeSet> {
+  async propose(req: ProposeRequest, model: ModelClient, control: ModelCallOptions = {}): Promise<ChangeSet> {
     assertProposeRequestBudget(req);
+    control.signal?.throwIfAborted();
     const release = this.acquireModelSlot();
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
@@ -178,7 +179,8 @@ export class OtterPatchRuntime {
         approvalPolicy: this.approvalPolicy,
         allowUnreviewedCommit: this.allowUnreviewedCommit,
       });
-      const r = await agent.respond(req, this.verifyOpts(req));
+      const r = await agent.respond(req, this.verifyOpts(req, control));
+      control.signal?.throwIfAborted();
       if (r.kind !== 'changeset') throw new Error(r.kind === 'answer' ? r.text : 'proposal requires clarification');
       const cs = r.changeSet;
       this.emit({ type: 'propose:done', changeSetId: cs.id, editCount: cs.edits.length, ...(cs.meta.planSummary ? { planSummary: cs.meta.planSummary } : {}) });
@@ -193,15 +195,19 @@ export class OtterPatchRuntime {
 
   /** Format check after a proposal: Excel performs simulation; Word performs anchor lint;
    *  drawio simulates topology and PPTX resolves text against exact run boundaries. */
-  private verifyOpts(req: ProposeRequest): RespondOptions | undefined {
+  private verifyOpts(req: ProposeRequest, control: ModelCallOptions = {}): RespondOptions | undefined {
     const structural = this.verifiers[req.format]?.(req);
-    if (!structural) return undefined;
-    return { verify: withFinalModelReview(structural), maxRepairs: 2 };
+    if (!structural && !control.signal) return undefined;
+    return {
+      ...(control.signal ? { signal: control.signal } : {}),
+      ...(structural ? { verify: withFinalModelReview(structural), maxRepairs: 2 } : {}),
+    };
   }
 
   /** Smart routing: the model decides on its own whether to answer a question or propose changes. */
-  async respond(req: ProposeRequest, model: ModelClient): Promise<AgentResponse> {
+  async respond(req: ProposeRequest, model: ModelClient, control: ModelCallOptions = {}): Promise<AgentResponse> {
     assertProposeRequestBudget(req);
+    control.signal?.throwIfAborted();
     const release = this.acquireModelSlot();
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
@@ -209,7 +215,8 @@ export class OtterPatchRuntime {
         approvalPolicy: this.approvalPolicy,
         allowUnreviewedCommit: this.allowUnreviewedCommit,
       });
-      const r = await agent.respond(req, this.verifyOpts(req));
+      const r = await agent.respond(req, this.verifyOpts(req, control));
+      control.signal?.throwIfAborted();
       if (r.kind === 'changeset') {
         this.emit({ type: 'propose:done', changeSetId: r.changeSet.id, editCount: r.changeSet.edits.length, ...(r.changeSet.meta.planSummary ? { planSummary: r.changeSet.meta.planSummary } : {}) });
       }
@@ -223,8 +230,9 @@ export class OtterPatchRuntime {
   }
 
   /** Streaming routing: emits bounded status and answer deltas via onEvent. */
-  async respondStream(req: ProposeRequest, model: ModelClient, onEvent: (e: StreamEvent) => void): Promise<AgentResponse> {
+  async respondStream(req: ProposeRequest, model: ModelClient, onEvent: (e: StreamEvent) => void, control: ModelCallOptions = {}): Promise<AgentResponse> {
     assertProposeRequestBudget(req);
+    control.signal?.throwIfAborted();
     const release = this.acquireModelSlot();
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
@@ -232,7 +240,8 @@ export class OtterPatchRuntime {
         approvalPolicy: this.approvalPolicy,
         allowUnreviewedCommit: this.allowUnreviewedCommit,
       });
-      const r = await agent.respondStream(req, onEvent, this.verifyOpts(req));
+      const r = await agent.respondStream(req, onEvent, this.verifyOpts(req, control));
+      control.signal?.throwIfAborted();
       if (r.kind === 'changeset') {
         this.emit({ type: 'propose:done', changeSetId: r.changeSet.id, editCount: r.changeSet.edits.length, ...(r.changeSet.meta.planSummary ? { planSummary: r.changeSet.meta.planSummary } : {}) });
       }

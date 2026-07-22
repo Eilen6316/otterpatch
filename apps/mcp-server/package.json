@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "node --import tsx --test src/document-input.test.ts",
+    "test": "node --import tsx --test src/client-abort.test.ts src/document-input.test.ts",
     "mcp": "node --import tsx src/mcp.ts",
     "run": "node --import tsx src/cli.ts",
     "serve": "node --import tsx src/serve.ts"

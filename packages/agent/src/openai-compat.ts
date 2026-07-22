@@ -9,12 +9,13 @@
  */
 import OpenAI from 'openai';
 import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, type ChangeSet } from '@otterpatch/core';
-import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
+import type { AgentResponse, HostDialect, ModelCallOptions, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
 import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, execReadTool, limitToolResult, parseClarify, proposalSystem, recentHistory, respondSystem, validMaxTokens, validProviderTimeout } from './sheet-tools.js';
 import { NUDGE_DIRECT, NUDGE_TOOLIFY, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
 import { salvageProposalArgs, salvageText, safeParse, salvagedProposalPayload } from './json-salvage.js';
 import { AgentLoopBudget, readToolLimitText, verificationFailureText } from './loop-budget.js';
 import { readingStatus } from './stream-status.js';
+import { ProviderCallController, type ProviderRetryPolicy } from './provider-control.js';
 
 export interface OpenAICompatOptions {
   apiKey?: string;
@@ -22,6 +23,8 @@ export interface OpenAICompatOptions {
   baseURL?: string;
   maxTokens?: number;
   timeoutMs?: number;
+  provider?: string;
+  retryPolicy?: Partial<ProviderRetryPolicy>;
   /** Whether tool_choice can force a specific function; false triggers the fallback (default true). */
   forcedTool?: boolean;
 }
@@ -64,21 +67,46 @@ export class OpenAICompatModelClient implements ModelClient {
   private readonly maxTokens: number;
   private readonly forcedTool: boolean;
   private readonly timeoutMs: number;
+  private readonly callControl: ProviderCallController;
 
   constructor(opts: OpenAICompatOptions) {
     const timeout = validProviderTimeout(opts.timeoutMs);
-    this.client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL, timeout });
+    this.client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL, timeout, maxRetries: 0 });
     this.model = opts.model;
     this.maxTokens = validMaxTokens(opts.maxTokens);
     this.forcedTool = opts.forcedTool ?? true;
     this.timeoutMs = timeout;
+    const provider = opts.provider ?? 'openai-compatible';
+    this.callControl = new ProviderCallController({
+      provider,
+      circuitKey: `${provider}:${opts.baseURL ?? 'default'}:${opts.model}`,
+      retryPolicy: opts.retryPolicy,
+    });
+  }
+
+  private runProviderCall<T>(
+    budget: AgentLoopBudget,
+    signal: AbortSignal | undefined,
+    call: (options: { timeout: number; maxRetries: 0; signal?: AbortSignal }) => Promise<T>,
+    deferSuccess = false,
+  ): Promise<T> {
+    return this.callControl.run(async () => {
+      const requestOptions = {
+        timeout: Math.min(this.timeoutMs, budget.beginModelCall()),
+        maxRetries: 0 as const,
+        ...(signal ? { signal } : {}),
+      };
+      const result = await call(requestOptions);
+      budget.finishStep();
+      return result;
+    }, { ...(signal ? { signal } : {}), ...(deferSuccess ? { deferSuccess: true } : {}) });
   }
 
   private callModel(
     req: ProposeRequest,
     dialect: HostDialect,
     forced: boolean,
-    timeout: number,
+    requestOptions: { timeout: number; maxRetries: 0; signal?: AbortSignal },
   ): Promise<OpenAI.Chat.Completions.ChatCompletion> {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: proposalSystem(dialect) },
@@ -99,22 +127,21 @@ export class OpenAICompatModelClient implements ModelClient {
         },
       ],
       tool_choice: forced ? { type: 'function', function: { name: dialect.toolName } } : 'auto',
-    }, { timeout });
+    }, requestOptions);
   }
 
-  async proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet> {
+  async proposeChangeSet(req: ProposeRequest, dialect: HostDialect, opts?: ModelCallOptions): Promise<ChangeSet> {
     const budget = new AgentLoopBudget(0);
     const call = async (forced: boolean): Promise<OpenAI.Chat.Completions.ChatCompletion> => {
-      const result = await this.callModel(req, dialect, forced, Math.min(this.timeoutMs, budget.beginModelCall()));
-      budget.finishStep();
-      return result;
+      return this.runProviderCall(budget, opts?.signal, (requestOptions) => this.callModel(req, dialect, forced, requestOptions));
     };
     let res: OpenAI.Chat.Completions.ChatCompletion;
     try {
       res = await call(this.forcedTool);
     } catch (e) {
       // Reasoning models (e.g. deepseek-v4-flash / reasoner) reject forced tool_choice → auto-fallback and retry
-      const msg = e instanceof Error ? e.message : String(e);
+      const cause = e instanceof Error && e.cause !== undefined ? e.cause : e;
+      const msg = cause instanceof Error ? cause.message : String(cause);
       if (this.forcedTool && /tool_choice|thinking/i.test(msg)) {
         res = await call(false);
       } else {
@@ -165,11 +192,14 @@ export class OpenAICompatModelClient implements ModelClient {
     let nudged = false;
 
     for (let step = 0; step < STEP_LIMIT; step++) {
-      const res = await this.client.chat.completions.create(
-        { model: this.model, max_tokens: this.maxTokens, messages, tools, tool_choice: 'auto' },
-        { timeout: Math.min(this.timeoutMs, budget.beginModelCall()) },
+      const res = await this.runProviderCall(
+        budget,
+        opts?.signal,
+        (requestOptions) => this.client.chat.completions.create(
+          { model: this.model, max_tokens: this.maxTokens, messages, tools, tool_choice: 'auto' },
+          requestOptions,
+        ),
       );
-      budget.finishStep();
       const msg = res.choices[0]?.message;
       if (!msg) return { kind: 'answer', text: '(模型无响应)' };
       const calls = (msg.tool_calls ?? []).filter((c) => c.type === 'function');
@@ -242,14 +272,19 @@ export class OpenAICompatModelClient implements ModelClient {
     };
 
     for (let step = 0; step < STEP_LIMIT; step++) {
-      const stream = await this.client.chat.completions.create(
-        { model: this.model, max_tokens: this.maxTokens, messages, tools, tool_choice: 'auto', stream: true },
-        { timeout: Math.min(this.timeoutMs, budget.beginModelCall()) },
+      const stream = await this.runProviderCall(
+        budget,
+        opts?.signal,
+        (requestOptions) => this.client.chat.completions.create(
+          { model: this.model, max_tokens: this.maxTokens, messages, tools, tool_choice: 'auto', stream: true },
+          requestOptions,
+        ),
+        true,
       );
       let content = '';
       let outputChars = 0;
       const toolAcc: Record<number, { id: string; name: string; args: string }> = {};
-      for await (const chunk of stream) {
+      for await (const chunk of this.callControl.monitorStream(stream, opts?.signal)) {
         const d = chunk.choices[0]?.delta;
         if (!d) continue;
         const rc = (d as { reasoning_content?: string }).reasoning_content;

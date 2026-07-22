@@ -559,3 +559,30 @@ test('runtime: caps concurrent model requests per runtime session', async () => 
   unblock();
   assert.deepEqual(await first, { kind: 'answer', text: 'done' });
 });
+
+test('runtime: propagates cancellation and releases the model concurrency slot', async () => {
+  const rt = new OtterPatchRuntime({ maxConcurrentModelRequests: 1 });
+  const controller = new AbortController();
+  let observedSignal: AbortSignal | undefined;
+  const model: ModelClient = {
+    proposeChangeSet: async () => singleCellChangeSet('unused'),
+    respond: async (_req, _dialect, opts) => {
+      observedSignal = opts?.signal;
+      return new Promise<AgentResponse>((_resolve, reject) => {
+        opts?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    },
+  };
+  const request: ProposeRequest = { hostId: 'h', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' };
+  const pending = rt.respond(request, model, { signal: controller.signal });
+  controller.abort();
+
+  await assert.rejects(pending, (error) => error instanceof DOMException && error.name === 'AbortError');
+  assert.equal(observedSignal, controller.signal);
+
+  const next: ModelClient = {
+    proposeChangeSet: async () => singleCellChangeSet('unused-next'),
+    respond: async () => ({ kind: 'answer', text: 'slot released' }),
+  };
+  assert.deepEqual(await rt.respond(request, next), { kind: 'answer', text: 'slot released' });
+});

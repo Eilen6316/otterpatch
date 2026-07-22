@@ -19,6 +19,18 @@ independent: 12 total model calls, 8 read-tool calls, the configured proposal-re
 Provider-reported output tokens are used when available; streaming fallbacks use a conservative
 UTF-8 byte count. Exhausting one repair category never borrows from another.
 
+Provider transport is controlled explicitly instead of relying on SDK defaults. Each HTTP attempt
+uses the smaller of the 90-second provider timeout and the request's remaining 120-second budget;
+SDK retries are disabled. Transient network, timeout, 409, 429, and 5xx failures receive at most two
+retries with exponential backoff (250 ms, capped at 4 s, with jitter), while a longer `Retry-After`
+is honored up to 60 seconds. Three
+failed requests open a provider/model circuit for 30 seconds, followed by one half-open probe.
+Errors are normalized into stable categories such as `authentication`, `rate_limit`, `timeout`,
+`network`, and `unavailable`. One `AbortSignal` runs from the desktop cancel control through the
+local HTTP disconnect handler and Runtime into provider calls and retry sleeps.
+Only request establishment is retried; once a response stream has yielded output, a transport
+failure is surfaced instead of replaying a potentially duplicated tool call or draft.
+
 ## Read tools (perceive before acting)
 
 | Format | Tool | Purpose |

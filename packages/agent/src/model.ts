@@ -76,8 +76,13 @@ export type StreamEvent =
 /** Pre-commit checker: runs the format's declared lint, simulation, or output verification and returns model-feedable observations. */
 export type ChangeSetVerifier = (cs: ChangeSet) => VerifyReport | Promise<VerifyReport>;
 
+export interface ModelCallOptions {
+  /** Cancels provider calls, retry backoff, and streaming iteration for this request. */
+  signal?: AbortSignal;
+}
+
 /** Options for respond/respondStream: pre-commit checks + repair round cap + host-supplied extra tools. */
-export interface RespondOptions {
+export interface RespondOptions extends ModelCallOptions {
   /** Check each proposal; when ok=false, feed the structured report back to the model so it can fix it. Omit = no check. */
   verify?: ChangeSetVerifier;
   /** Max number of re-proposal attempts when verification fails (default 1). */
@@ -89,7 +94,7 @@ export interface RespondOptions {
 /** Any model implementation (real Claude / OpenAI-compatible / Mock). */
 export interface ModelClient {
   /** Produce a ChangeSet only (forced-execution path, kept for definitely-editing scenarios/tests). */
-  proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet>;
+  proposeChangeSet(req: ProposeRequest, dialect: HostDialect, opts?: ModelCallOptions): Promise<ChangeSet>;
   /** Smart routing: model itself decides "answer" vs "propose changes" (tool_choice:auto). Optional; falls back to proposeChangeSet if absent. */
   respond?(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Promise<AgentResponse>;
   /** Streaming variant: emits structured status/answer deltas, ultimately returning the same result as respond. Optional. */

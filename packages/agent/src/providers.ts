@@ -14,6 +14,7 @@
 import { AnthropicModelClient } from './anthropic.js';
 import { OpenAICompatModelClient } from './openai-compat.js';
 import type { ModelClient } from './model.js';
+import type { ProviderRetryPolicy } from './provider-control.js';
 
 export type Provider =
   | 'claude'
@@ -56,6 +57,7 @@ export interface CreateModelOptions {
   baseURL?: string;
   maxTokens?: number;
   timeoutMs?: number;
+  retryPolicy?: Partial<ProviderRetryPolicy>;
 }
 
 /** Create a ModelClient for the given provider (BYOK). baseURL/model can override the defaults. */
@@ -64,7 +66,7 @@ export function createModelClient(provider: Provider, opts: CreateModelOptions =
   const model = opts.model ?? p.defaultModel;
   const maxTokens = opts.maxTokens ?? 8192;
   if (p.kind === 'anthropic') {
-    return new AnthropicModelClient({ apiKey: opts.apiKey, model, baseURL: opts.baseURL, maxTokens, timeoutMs: opts.timeoutMs });
+    return new AnthropicModelClient({ apiKey: opts.apiKey, model, baseURL: opts.baseURL, maxTokens, timeoutMs: opts.timeoutMs, provider, retryPolicy: opts.retryPolicy });
   }
   return new OpenAICompatModelClient({
     apiKey: opts.apiKey,
@@ -72,6 +74,8 @@ export function createModelClient(provider: Provider, opts: CreateModelOptions =
     baseURL: opts.baseURL ?? p.baseURL,
     maxTokens,
     timeoutMs: opts.timeoutMs,
+    provider,
+    retryPolicy: opts.retryPolicy,
     forcedTool: p.forcedTool,
   });
 }
