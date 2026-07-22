@@ -44,6 +44,11 @@ apps/desktop/                 驾驶舱 UI(Vite + React + Electron):Excel/Word/�
 apps/mcp-server/              OtterPatch 作为 MCP server(stdio)+ headless CLI + otterpatch-serve 本地桥
 ```
 
+`otterpatch-serve` 启动时会各显示一次自动生成的本地调用令牌和审阅令牌；`GET /health`
+可匿名访问，所有 `POST` 必须携带 `X-OtterPatch-Token`，`POST /review` 还必须携带
+`X-OtterPatch-Review-Token`。可通过 `OtterPatch_TOKEN`、`OtterPatch_REVIEW_TOKEN` 固定令牌，
+通过 `OtterPatch_ALLOWED_ORIGINS` 配置逗号分隔的精确本机 Origin 白名单。
+
 ## 开发
 
 ```bash

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { randomBytes } from 'node:crypto';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
 import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, isResourceLimitError } from '@otterpatch/core';
 import { ProviderCallError, createModelClient, sanitizeStreamStatus, type AgentResponse, type ProposeRequest, type Provider } from '@otterpatch/agent';
@@ -8,6 +7,13 @@ import { BUILTIN_SKILLS } from '@otterpatch/skills';
 import { OtterPatchRuntime, type DiffInput, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
 import { decodeDocumentBase64 } from './document-input.js';
 import { observeClientAbort } from './client-abort.js';
+import {
+  LocalPostGate,
+  createLocalHttpSecurity,
+  isAllowedLocalOrigin,
+  matchesLocalToken,
+  redactSecrets,
+} from './http-security.js';
 
 const rt = new OtterPatchRuntime();
 type SheetInput = NonNullable<ProposeRequest['sheet']>;
@@ -21,10 +27,14 @@ const parsedMaxBodyBytes = Number(process.env.OtterPatch_MAX_BODY_BYTES ?? DEFAU
 const MAX_BODY_BYTES = Number.isSafeInteger(parsedMaxBodyBytes) && parsedMaxBodyBytes > 0
   ? Math.min(parsedMaxBodyBytes, DEFAULT_MAX_BODY_BYTES)
   : DEFAULT_MAX_BODY_BYTES;
-const AUTH_TOKEN = String(process.env.OtterPatch_TOKEN || '');
-const generatedToken = AUTH_TOKEN ? '' : randomBytes(24).toString('base64url');
-const configuredReviewToken = String(process.env.OtterPatch_REVIEW_TOKEN || '');
-const REVIEW_TOKEN = configuredReviewToken || randomBytes(24).toString('base64url');
+const security = createLocalHttpSecurity();
+const AUTH_TOKEN = security.authToken;
+const REVIEW_TOKEN = security.reviewToken;
+const postGate = new LocalPostGate({
+  maxRequests: security.postsPerMinute,
+  windowMs: 60_000,
+  maxConcurrent: security.maxConcurrentPosts,
+});
 
 class HttpError extends Error {
   constructor(
@@ -36,14 +46,7 @@ class HttpError extends Error {
 }
 
 function isAllowedOrigin(origin: string | undefined): boolean {
-  if (!origin) return true;
-  if (origin === 'null') return Boolean(AUTH_TOKEN); // packaged Electron file:// renderer must use the local token
-  try {
-    const u = new URL(origin);
-    return (u.protocol === 'http:' || u.protocol === 'https:') && ['localhost', '127.0.0.1', '::1'].includes(u.hostname);
-  } catch {
-    return false;
-  }
+  return isAllowedLocalOrigin(origin, security.allowedOrigins);
 }
 
 function cors(req: IncomingMessage, res: ServerResponse): boolean {
@@ -64,14 +67,11 @@ function readDocRev(value: unknown, fallback: number): DocRev {
 }
 
 function hasValidToken(req: IncomingMessage): boolean {
-  if (!AUTH_TOKEN) return true;
-  const header = req.headers['x-otterpatch-token'];
-  return !Array.isArray(header) && header === AUTH_TOKEN;
+  return matchesLocalToken(req.headers['x-otterpatch-token'], AUTH_TOKEN);
 }
 
 function hasValidReviewToken(req: IncomingMessage): boolean {
-  const header = req.headers['x-otterpatch-review-token'];
-  return !Array.isArray(header) && header === REVIEW_TOKEN;
+  return matchesLocalToken(req.headers['x-otterpatch-review-token'], REVIEW_TOKEN);
 }
 
 function send(req: IncomingMessage, res: ServerResponse, code: number, data: unknown): void {
@@ -116,7 +116,10 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   });
 }
 
-const emsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+const emsg = (e: unknown): string => redactSecrets(
+  e instanceof Error ? e.message : String(e),
+  [AUTH_TOKEN, REVIEW_TOKEN],
+);
 
 function diffInput(body: Record<string, unknown>): DiffInput {
   return {
@@ -140,6 +143,7 @@ function providerHttpStatus(error: ProviderCallError): number {
 
 const server = createServer((req: IncomingMessage, res: ServerResponse) => {
   void (async () => {
+    let releasePost: (() => void) | undefined;
     try {
       if (!cors(req, res)) {
         res.setHeader('Content-Type', 'application/json');
@@ -157,9 +161,21 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         send(req, res, 200, { ok: true, formats: rt.formats(), capabilities: rt.capabilities(), skills: BUILTIN_SKILLS.map((s) => s.name) });
         return;
       }
-      if (req.method === 'POST' && !hasValidToken(req)) {
-        send(req, res, 401, { error: 'missing or invalid local token' });
-        return;
+      if (req.method === 'POST') {
+        const admission = postGate.enter(req.socket.remoteAddress ?? 'local-unknown');
+        if (!admission.ok) {
+          res.setHeader('Retry-After', String(admission.retryAfterSeconds));
+          send(req, res, 429, {
+            code: admission.reason === 'rate_limit' ? 'HTTP_RATE_LIMIT' : 'HTTP_CONCURRENCY_LIMIT',
+            error: admission.reason === 'rate_limit' ? 'too many local requests' : 'local request concurrency limit reached',
+          });
+          return;
+        }
+        releasePost = admission.release;
+        if (!hasValidToken(req)) {
+          send(req, res, 401, { error: 'missing or invalid local token' });
+          return;
+        }
       }
       if (req.method === 'POST' && url === '/propose') {
         const a = await readBody(req);
@@ -302,6 +318,8 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       } else {
         send(req, res, e instanceof HttpError ? e.status : 500, { error: emsg(e) });
       }
+    } finally {
+      releasePost?.();
     }
   })();
 });
@@ -311,8 +329,13 @@ server.headersTimeout = 10_000;
 
 server.listen(PORT, HOST, () => {
   process.stderr.write(`\n[otterpatch] serve on http://${HOST}:${PORT}\n`);
-  process.stderr.write(AUTH_TOKEN ? '[otterpatch] POST auth enabled via X-OtterPatch-Token.\n' : '[otterpatch] POST auth disabled; set OtterPatch_TOKEN to require X-OtterPatch-Token. Suggested token: ' + generatedToken + '\n');
-  process.stderr.write(configuredReviewToken ? '[otterpatch] Review authority enabled via X-OtterPatch-Review-Token.\n' : '[otterpatch] Generated review token: ' + REVIEW_TOKEN + '\n');
+  process.stderr.write(security.authTokenGenerated
+    ? `[otterpatch] Generated local POST token (shown once): ${AUTH_TOKEN}\n`
+    : '[otterpatch] POST auth enabled via X-OtterPatch-Token.\n');
+  process.stderr.write(security.reviewTokenGenerated
+    ? `[otterpatch] Generated review token (shown once): ${REVIEW_TOKEN}\n`
+    : '[otterpatch] Review authority enabled via X-OtterPatch-Review-Token.\n');
+  process.stderr.write(`[otterpatch] POST limits: ${security.postsPerMinute}/minute, ${security.maxConcurrentPosts} concurrent.\n`);
   process.stderr.write(`[otterpatch] Capability manifest: ${rt.capabilities().version}\n`);
   process.stderr.write('[otterpatch] If expected Excel ops are missing, restart npm run serve.\n\n');
 });

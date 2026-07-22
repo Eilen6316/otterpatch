@@ -71,8 +71,14 @@ otterpatch-run --yes --format excel --intent "fill amount = qty × price" --in b
 The cockpit UI talks to the runtime through a local HTTP bridge (`otterpatch-serve`) — start it, then point the model panel's *otterpatch-serve URL* at it (BYOK):
 
 ```bash
-otterpatch-serve   # GET /health · POST /propose · POST /review · POST /commit (signed receipt required)
+otterpatch-serve   # prints generated local/review tokens once; GET /health remains anonymous
 ```
+
+Every `POST` requires `X-OtterPatch-Token`; `/review` additionally requires
+`X-OtterPatch-Review-Token`. Set `OtterPatch_TOKEN` and `OtterPatch_REVIEW_TOKEN` to pin the
+tokens instead of generating them. Browser access defaults to the exact Vite origins on port
+5173 plus Electron's `null` file origin; customize the comma-separated loopback allowlist with
+`OtterPatch_ALLOWED_ORIGINS`.
 
 ## Develop
 
