@@ -155,7 +155,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         );
         if (r.kind === 'answer') send(req, res, 200, { answer: r.text });
         else if (r.kind === 'clarify') send(req, res, 200, { questions: r.questions });
-        else send(req, res, 200, { changeSet: r.changeSet, diff: rt.diff(r.changeSet), proposal: rt.createProposal(r.changeSet, String(a.format)) });
+        else send(req, res, 200, { changeSet: r.changeSet, diff: rt.diff(r.changeSet), proposal: rt.createProposal(r.changeSet, String(a.format), String(a.documentId ?? r.changeSet.hostId)) });
         return;
       }
       if (req.method === 'POST' && url === '/propose-stream') {
@@ -182,7 +182,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
             model,
             (e) => {
               if (e.type === 'done') {
-                if (e.result.kind === 'changeset') sse({ type: 'done', kind: 'changeset', changeSet: e.result.changeSet, diff: rt.diff(e.result.changeSet), proposal: rt.createProposal(e.result.changeSet, String(a.format)) });
+                if (e.result.kind === 'changeset') sse({ type: 'done', kind: 'changeset', changeSet: e.result.changeSet, diff: rt.diff(e.result.changeSet), proposal: rt.createProposal(e.result.changeSet, String(a.format), String(a.documentId ?? e.result.changeSet.hostId)) });
                 else if (e.result.kind === 'clarify') sse({ type: 'done', kind: 'clarify', questions: e.result.questions });
                 else sse({ type: 'done', kind: 'answer', text: e.result.text });
               } else {

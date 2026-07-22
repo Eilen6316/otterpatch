@@ -95,12 +95,12 @@ npm test -w @otterpatch/writeback-surgical
 - [x] Surgical OOXML write-back (validated + tested)
 - [x] Agent turn: natural-language intent → constrained `ChangeSet` (BYOK, 8 providers)
 - [x] drawio adapter: mxCell add/delete/setProps/move + diagram-level surgical write-back
-- [x] Headless runtime: intent → ChangeSet → reviewable diff → surgical write-back, end-to-end (excel/drawio)
+- [x] Headless runtime: signed review → per-document single-writer queue → risk enforcement → surgical write-back → mandatory backend verification
 - [x] MCP server + headless CLI with a JSON event stream (BYOK)
 - [x] Word redline + PDF form-fill + PowerPoint slide-text adapters — propose→commit for excel/word/pdf/ppt/drawio
 - [x] Ribbon formatting applies to the live selection (bold/italic/colors/align/number-format)
 - [x] Electron desktop shell + electron-builder packaging config (Chinese/English UI)
-- [x] Closed write-back loop in the cockpit (otterpatch-serve): load a file → propose → review diff (per-item accept/reject) → accept subset → surgical write-back → download the edited file
+- [x] Closed write-back loop in the cockpit (otterpatch-serve): load a file → signed proposal → review diff → receipt-bound subset → verified surgical write-back → download
 - [x] Word: full Office-style six-tab ribbon + **inline tracked-change review** — per-change hover cards, 4-state view toggle (original/markup/clean/final), flatten-on-accept (accepting physically finalizes; no markup pollution)
 - [x] Agent read tools — Excel `read_range`/`aggregate`; Word `read_blocks`/`find_text`/`get_outline`/`get_style_usage` (full-doc snapshot, both model channels)
 - [x] Domain playbooks with progressive disclosure (`load_skill`): GB/T 9704 official-document layout, financial-sheet rules, chart selection

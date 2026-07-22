@@ -9,7 +9,7 @@ const rt = new OtterPatchRuntime();
 const base = { by: 'human' };
 
 async function reviewedCommit(format, bytes, changeSet) {
-  const proposal = rt.createProposal(changeSet, format);
+  const proposal = rt.createProposal(changeSet, format, `fixture:${changeSet.id}`);
   const reviewed = rt.reviewProposal(proposal, changeSet, changeSet.edits.map((edit) => edit.id), bytes, 'real-writeback-test');
   return rt.commit({ format, bytes, changeSet, currentRev: 0, ...reviewed });
 }

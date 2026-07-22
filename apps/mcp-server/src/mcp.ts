@@ -46,6 +46,7 @@ server.registerTool(
       intent: z.string().describe('natural-language edit intent'),
       context: z.string().default('').describe('read-only snapshot of the selected region, fed to the model'),
       baseRev: z.number().int().nonnegative().default(0).describe('document revision used as the ChangeSet base revision'),
+      documentId: z.string().optional().describe('stable host document identity used for single-writer commit serialization'),
       provider: z.string().default('claude').describe('claude | openai | deepseek | glm | kimi | doubao | minimax | gemini'),
       model: z.string().optional(),
       apiKey: z.string().optional(),
@@ -76,7 +77,7 @@ server.registerTool(
       );
       if (r.kind === 'answer') return ok({ answer: r.text });
       if (r.kind === 'clarify') return ok({ questions: r.questions });
-      return ok({ changeSet: r.changeSet, diff: rt.diff(r.changeSet), proposal: rt.createProposal(r.changeSet, a.format) });
+      return ok({ changeSet: r.changeSet, diff: rt.diff(r.changeSet), proposal: rt.createProposal(r.changeSet, a.format, a.documentId ?? r.changeSet.hostId) });
     } catch (e) {
       return fail('propose failed: ' + emsg(e));
     }

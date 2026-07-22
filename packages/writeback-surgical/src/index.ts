@@ -51,6 +51,7 @@ function asPatchResult(r: OoxmlParts | OoxmlPatchResult): OoxmlPatchResult {
 export class SurgicalOoxmlWriteback implements WritebackBackend {
   readonly id = 'surgical-ooxml' as WritebackId;
   readonly strategy: WritebackKind = 'surgical-ooxml';
+  private readonly expectedPartsByOutput = new WeakMap<Uint8Array, ReadonlySet<string>>();
 
   constructor(private readonly compile: OoxmlPatchCompiler) {}
 
@@ -73,6 +74,7 @@ export class SurgicalOoxmlWriteback implements WritebackBackend {
     if (!original) throw new Error('SurgicalOoxmlWriteback.commit: DocHandle.bytes required');
     const { parts: patches, report } = asPatchResult(await this.compile(cs, original));
     const bytes = repackOoxml(original, patches);
+    this.expectedPartsByOutput.set(bytes, new Set(Object.keys(patches)));
 
     const integrity = comparePartsIntegrity(original, bytes);
     const expected = new Set(Object.keys(patches));
@@ -102,10 +104,15 @@ export class SurgicalOoxmlWriteback implements WritebackBackend {
     if (!before.bytes || !after.bytes) {
       throw new Error('SurgicalOoxmlWriteback.verify: before/after bytes required');
     }
+    const expectedParts = this.expectedPartsByOutput.get(after.bytes);
+    if (!expectedParts) throw new Error('SurgicalOoxmlWriteback.verify: output was not produced by this backend instance');
     const integrity = comparePartsIntegrity(before.bytes, after.bytes);
+    const drift = integrity.changed
+      .filter((change) => !expectedParts.has(change.slice(1)))
+      .map((change) => ({ part: change.slice(1), kind: 'content' as const, note: `unexpected: ${change}` }));
     return {
       score: integrity.total === 0 ? 1 : integrity.identical / integrity.total,
-      drift: integrity.changed.map((c) => ({ part: c.slice(1), kind: 'content' as const, note: `changed: ${c}` })),
+      drift,
     };
   }
 }

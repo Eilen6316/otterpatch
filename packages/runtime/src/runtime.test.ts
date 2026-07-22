@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync } from 'fflate';
-import type { AnchorId, ChangeSet, DocRev, HostId } from '@otterpatch/core';
+import type { AnchorId, ChangeSet, DocRev, HostId, WritebackBackend, WritebackId } from '@otterpatch/core';
 import { MockModelClient, type ModelClient, type ProposeRequest, type RespondOptions, type AgentResponse } from '@otterpatch/agent';
 import { comparePartsIntegrity, readOoxmlParts } from '@otterpatch/writeback-surgical';
 import { OtterPatchRuntime } from './runtime.js';
@@ -42,6 +42,15 @@ function makeXlsx(): Uint8Array {
       '<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="B1" s="2"><v>20</v></c></row></sheetData></worksheet>',
     ),
   });
+}
+
+function singleCellChangeSet(id = 'single', op: ChangeSet['edits'][number]['op'] = { family: 'value', kind: 'setValue', value: 1 }): ChangeSet {
+  const aid = 'a0' as AnchorId;
+  return {
+    id, hostId: 'h', baseRev: 0 as DocRev,
+    anchors: { [aid]: { id: aid, hostId: 'h' as HostId, kind: 'grid', ref: null, baseRev: 0 as DocRev, portable: { kind: 'grid', sheet: 'Sheet1', a1: 'B1' } } },
+    origin: { by: 'human' }, meta: { intent: 'x' }, edits: [{ id: 'e1', target: aid, op }],
+  };
 }
 
 test('runtime: propose → diff → commit(excel) 端到端 + 事件流', async () => {
@@ -171,6 +180,126 @@ test('runtime: commit rejects invalid acceptedEditIds', async () => {
   await assert.rejects(() => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, acceptedEditIds: [] }), /must not be empty/);
   await assert.rejects(() => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, acceptedEditIds: ['missing'] }), /unknown edit id/);
   await assert.rejects(() => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, acceptedEditIds: ['e1', 'e1'] }), /duplicate edit id/);
+});
+
+test('runtime: unreviewed destructive edits are blocked by the approval policy', async () => {
+  const rt = new OtterPatchRuntime({ allowUnreviewedCommit: true });
+  const cs = singleCellChangeSet('destructive', { family: 'value', kind: 'deleteRange' });
+  await assert.rejects(
+    () => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, acceptedEditIds: ['e1'] }),
+    /requires human approval/,
+  );
+});
+
+test('runtime: serializes same-source commits, verifies output, and isolates event listeners', async () => {
+  const rt = new OtterPatchRuntime({ reviewSecret: 'q'.repeat(32) });
+  const bytes = new Uint8Array([1, 2, 3]);
+  const cs = singleCellChangeSet('serialized');
+  let active = 0;
+  let maxActive = 0;
+  let verified = 0;
+  let unexpectedDrift = false;
+  const backend: WritebackBackend = {
+    id: 'test-backend' as WritebackId,
+    strategy: 'native-command',
+    canHandle: () => ({ ok: true }),
+    supports: () => true,
+    commit: async (_changeSet, doc) => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      active--;
+      return { ok: true, bytes: new Uint8Array([...(doc.bytes ?? []), 4]), touchedParts: ['test'], fidelity: { score: 1, drift: [] }, appliedEditIds: ['e1'] };
+    },
+    verify: async () => {
+      verified++;
+      return { score: 1, drift: unexpectedDrift ? [{ part: 'outside-target', kind: 'content', note: 'changed' }] : [] };
+    },
+  };
+  rt.registerWriteback('test', () => backend);
+  rt.on(() => { throw new Error('observer failure'); });
+  assert.doesNotThrow(() => rt.diff(cs));
+
+  const first = rt.reviewProposal(rt.createProposal(cs, 'test', 'doc-1'), cs, ['e1'], bytes, 'r1');
+  const second = rt.reviewProposal(rt.createProposal(cs, 'test', 'doc-1'), cs, ['e1'], bytes, 'r2');
+  const results = await Promise.allSettled([
+    rt.commit({ format: 'test', bytes, changeSet: cs, ...first }),
+    rt.commit({ format: 'test', bytes, changeSet: cs, ...second }),
+  ]);
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+  const rejection = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  assert.match(String(rejection?.reason), /already been committed/);
+  assert.equal(maxActive, 1);
+  assert.equal(verified, 1);
+
+  unexpectedDrift = true;
+  const drifted = rt.reviewProposal(rt.createProposal(cs, 'test', 'doc-2'), cs, ['e1'], bytes, 'r3');
+  await assert.rejects(
+    () => rt.commit({ format: 'test', bytes, changeSet: cs, ...drifted }),
+    /unexpected drift: outside-target/,
+  );
+  unexpectedDrift = false;
+  await assert.rejects(
+    () => rt.commit({ format: 'test', bytes, changeSet: cs, ...drifted }),
+    /already been used/,
+  );
+});
+
+test('runtime: serializes different source versions of the same document', async () => {
+  const rt = new OtterPatchRuntime({ reviewSecret: 'v'.repeat(32) });
+  const cs = singleCellChangeSet('document-lock');
+  let active = 0;
+  let maxActive = 0;
+  const backend: WritebackBackend = {
+    id: 'document-lock-backend' as WritebackId,
+    strategy: 'native-command',
+    canHandle: () => ({ ok: true }),
+    supports: () => true,
+    commit: async (_changeSet, doc) => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      active--;
+      return { ok: true, bytes: doc.bytes!, touchedParts: ['test'], fidelity: { score: 1, drift: [] }, appliedEditIds: ['e1'] };
+    },
+    verify: async () => ({ score: 1, drift: [] }),
+  };
+  rt.registerWriteback('document-lock-test', () => backend);
+  const firstBytes = new Uint8Array([1]);
+  const secondBytes = new Uint8Array([2]);
+  const first = rt.reviewProposal(rt.createProposal(cs, 'document-lock-test', 'same-doc'), cs, ['e1'], firstBytes, 'r1');
+  const second = rt.reviewProposal(rt.createProposal(cs, 'document-lock-test', 'same-doc'), cs, ['e1'], secondBytes, 'r2');
+
+  const results = await Promise.all([
+    rt.commit({ format: 'document-lock-test', bytes: firstBytes, changeSet: cs, ...first }),
+    rt.commit({ format: 'document-lock-test', bytes: secondBytes, changeSet: cs, ...second }),
+  ]);
+  assert.equal(results.length, 2);
+  assert.equal(maxActive, 1);
+});
+
+test('runtime: falls back when the primary backend cannot handle the reviewed change', async () => {
+  const rt = new OtterPatchRuntime({ reviewSecret: 'f'.repeat(32) });
+  const cs = singleCellChangeSet('fallback');
+  const bytes = new Uint8Array([7]);
+  let fallbackVerified = false;
+  const unavailable: WritebackBackend = {
+    id: 'primary' as WritebackId, strategy: 'surgical-ooxml', supports: () => false,
+    canHandle: () => ({ ok: false, reason: 'unsupported in primary' }),
+    commit: async () => { throw new Error('must not run'); }, verify: async () => { throw new Error('must not run'); },
+  };
+  const fallback: WritebackBackend = {
+    id: 'fallback' as WritebackId, strategy: 'native-command', supports: () => true, canHandle: () => ({ ok: true }),
+    commit: async () => ({ ok: true, bytes: new Uint8Array([8]), touchedParts: ['test'], fidelity: { score: 1, drift: [] }, appliedEditIds: ['e1'] }),
+    verify: async () => { fallbackVerified = true; return { score: 1, drift: [] }; },
+  };
+  rt.registerWriteback('fallback-test', () => unavailable);
+  rt.registerWritebackFallback('fallback-test', () => fallback);
+  const reviewed = rt.reviewProposal(rt.createProposal(cs, 'fallback-test', 'doc'), cs, ['e1'], bytes, 'reviewer');
+  const result = await rt.commit({ format: 'fallback-test', bytes, changeSet: cs, ...reviewed });
+  assert.equal(result.ok, true);
+  assert.equal(result.fallbackUsed, 'native-command');
+  assert.equal(fallbackVerified, true);
 });
 
 test('runtime: proposal signing rejects non-JSON numeric values', () => {

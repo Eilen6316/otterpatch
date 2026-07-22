@@ -67,7 +67,7 @@ npm test -w @otterpatch/writeback-surgical
 - [x] 外科式 OOXML 写回(已验证 + 有测试)
 - [x] Agent 回合:自然语言意图 → 受约束的 `ChangeSet`(BYOK,8 家模型)
 - [x] drawio 适配器:mxCell 增/删/改属性/移动 + 图级外科式写回
-- [x] headless runtime + MCP server + CLI(JSON 事件流,BYOK)
+- [x] headless runtime:按文档单写者队列 + 旧源拒绝 + 风险审批强制执行 + 写后 backend verify;MCP server + CLI(JSON 事件流,BYOK)
 - [x] Word 红线 / PDF 表单 / PPT 文本适配器 —— excel/word/pdf/ppt/drawio 全链路 propose→commit
 - [x] 驾驶舱写回闭环(otterpatch-serve):载入文件 → 签名提案 → 逐条审阅 → 签名回执绑定源文件 SHA-256 与接受子集 → 外科写回 → 下载
 - [x] Word:Office 式六选项卡功能区 + **行内修订审阅**——逐条悬浮卡、四态视图(原文/修订/清样/改后)、flatten-on-accept(接受即物理定稿,零标记残留)

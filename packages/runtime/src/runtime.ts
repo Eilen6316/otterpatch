@@ -10,8 +10,8 @@
  */
 import { Agent, buildDocVerifier, buildDrawioVerifier } from '@otterpatch/agent';
 import type { AgentResponse, ChangeSetVerifier, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from '@otterpatch/agent';
-import type { ChangeSet, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
-import { assertChangeSet } from '@otterpatch/core';
+import type { ApprovalPolicy, ChangeSet, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
+import { DEFAULT_POLICY, assertChangeSet, decideApproval } from '@otterpatch/core';
 import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
 import { buildXlsxCompiler, buildGridVerifier } from '@otterpatch/adapter-univer';
 import { DrawioSurgicalWriteback } from '@otterpatch/adapter-drawio';
@@ -22,7 +22,7 @@ import { defaultLibrary } from '@otterpatch/skills';
 import type { SkillLibrary } from '@otterpatch/skills';
 import { buildDiff, type OtterPatchDiff } from './diff.js';
 import type { OtterPatchEvent, OtterPatchEventListener } from './events.js';
-import { ReviewAuthority, type ProposalEnvelope, type ReviewedProposal, type ReviewReceipt } from './review.js';
+import { ReviewAuthority, sha256Bytes, type ProposalEnvelope, type ReviewedProposal, type ReviewReceipt } from './review.js';
 
 export interface CommitInput {
   format: string;
@@ -41,21 +41,27 @@ export interface OtterPatchRuntimeOptions {
   allowUnreviewedCommit?: boolean;
   reviewSecret?: string | Uint8Array;
   reviewTtlMs?: number;
+  approvalPolicy?: ApprovalPolicy;
 }
 
 export class OtterPatchRuntime {
   private readonly listeners = new Set<OtterPatchEventListener>();
   private readonly skills: SkillLibrary;
   private readonly backends: Record<string, () => WritebackBackend>;
+  private readonly fallbackBackends: Record<string, Array<() => WritebackBackend>> = {};
   private readonly verifiers: Record<string, (req: ProposeRequest) => ChangeSetVerifier | undefined>;
   private readonly reviewAuthority: ReviewAuthority;
   private readonly allowUnreviewedCommit: boolean;
+  private readonly approvalPolicy: ApprovalPolicy;
   private readonly usedReviewNonces = new Set<string>();
+  private readonly committedSources = new Map<string, number>();
+  private readonly commitTails = new Map<string, Promise<void>>();
 
   constructor(opts: OtterPatchRuntimeOptions = {}) {
     this.skills = opts.skills ?? defaultLibrary();
     this.reviewAuthority = new ReviewAuthority(opts.reviewSecret, opts.reviewTtlMs);
     this.allowUnreviewedCommit = opts.allowUnreviewedCommit ?? false;
+    this.approvalPolicy = opts.approvalPolicy ?? DEFAULT_POLICY;
     this.verifiers = {
       excel: (req) => (req.sheet ? buildGridVerifier(req.sheet) : undefined),
       xlsx: (req) => (req.sheet ? buildGridVerifier(req.sheet) : undefined),
@@ -83,12 +89,22 @@ export class OtterPatchRuntime {
     };
   }
   private emit(e: OtterPatchEvent): void {
-    for (const l of this.listeners) l(e);
+    for (const l of this.listeners) {
+      try {
+        l(e);
+      } catch {
+        // Telemetry/UI listeners are observers and must never abort propose or commit.
+      }
+    }
   }
 
   /** Register/override the writeback backend for a format (Word redline / PDF etc. to be added later). */
   registerWriteback(format: string, make: () => WritebackBackend): void {
     this.backends[format] = make;
+  }
+  /** Add a lower-priority backend used when the primary cannot handle or verify a ChangeSet. */
+  registerWritebackFallback(format: string, make: () => WritebackBackend): void {
+    (this.fallbackBackends[format] ??= []).push(make);
   }
   /** Register/override the shadow verifier for a format (same registry pattern as backends; ppt/pdf etc. later). */
   registerVerifier(format: string, make: (req: ProposeRequest) => ChangeSetVerifier | undefined): void {
@@ -163,9 +179,9 @@ export class OtterPatchRuntime {
   }
 
   /** Sign a model proposal before it is shown for review. The source file is bound when review completes. */
-  createProposal(cs: ChangeSet, format: string): ProposalEnvelope {
+  createProposal(cs: ChangeSet, format: string, documentId = cs.hostId): ProposalEnvelope {
     if (!this.backends[format]) throw new Error(`OtterPatchRuntime: no writeback backend for format "${format}"`);
-    return this.reviewAuthority.createProposal(cs, format);
+    return this.reviewAuthority.createProposal(cs, format, documentId);
   }
 
   /** Bind the reviewed proposal to exact source bytes and accepted edit IDs. */
@@ -184,7 +200,7 @@ export class OtterPatchRuntime {
     assertChangeSet(input.changeSet);
     const make = this.backends[input.format];
     if (!make) throw new Error(`OtterPatchRuntime: no writeback backend for format "${input.format}"`);
-    const backend = make();
+    const backends = [make(), ...(this.fallbackBackends[input.format] ?? []).map((factory) => factory())];
     if (input.currentRev !== undefined && input.currentRev !== input.changeSet.baseRev) {
       throw new Error('changeset is stale: baseRev ' + input.changeSet.baseRev + ' != currentRev ' + input.currentRev);
     }
@@ -200,27 +216,99 @@ export class OtterPatchRuntime {
         input.acceptedEditIds,
       );
       receiptNonce = input.reviewReceipt.nonce;
-      if (this.usedReviewNonces.has(receiptNonce)) throw new Error('review receipt has already been used');
-      this.usedReviewNonces.add(receiptNonce);
     } else {
       if (!this.allowUnreviewedCommit) throw new Error('commit requires a signed proposal and review receipt');
       if (!input.acceptedEditIds) throw new Error('unreviewed commit requires explicit acceptedEditIds');
       acceptedEditIds = input.acceptedEditIds;
     }
     const cs: ChangeSet = { ...input.changeSet, edits: filterAcceptedEdits(input.changeSet, acceptedEditIds) };
-    this.emit({ type: 'commit:start', format: input.format, strategy: backend.strategy, editCount: cs.edits.length });
+    const approval = decideApproval(cs, this.approvalPolicy);
+    if (approval.needsApproval.length && !input.reviewReceipt) {
+      throw new Error('unreviewed commit requires human approval for edits: ' + approval.needsApproval.join(', '));
+    }
+    const sourceHash = input.proposal?.sourceFileSha256 ?? sha256Bytes(input.bytes);
+    const documentId = input.proposal?.documentId ?? input.changeSet.hostId;
+    const documentKey = JSON.stringify([documentId, input.format]);
+    const sourceKey = JSON.stringify([documentId, input.format, sourceHash]);
     try {
-      const can = backend.canHandle(cs);
-      if (!can.ok) throw new Error(`writeback cannot handle changeset: ${can.reason ?? 'unknown'}`);
-      const doc: DocHandle = { hostId: cs.hostId, bytes: input.bytes, rev: cs.baseRev };
-      const res = await backend.commit(cs, doc);
-      this.emit({ type: 'commit:done', ok: res.ok, touchedParts: res.touchedParts, fidelity: res.fidelity.score, bytes: res.bytes.length });
-      return res;
+      return await this.withDocumentLock(documentKey, async () => {
+        if (receiptNonce && this.usedReviewNonces.has(receiptNonce)) throw new Error('review receipt has already been used');
+        if (this.committedSources.has(sourceKey)) throw new Error('source file has already been committed; regenerate the proposal from the latest file');
+        if (receiptNonce) this.usedReviewNonces.add(receiptNonce);
+        const before: DocHandle = { hostId: cs.hostId, bytes: input.bytes, rev: cs.baseRev };
+        const res = await this.commitWithFallback(backends, input.format, cs, before);
+        if (res.ok) this.rememberCommittedSource(sourceKey);
+        this.emit({ type: 'commit:done', ok: res.ok, touchedParts: res.touchedParts, fidelity: res.fidelity.score, bytes: res.bytes.length });
+        return res;
+      });
     } catch (err) {
-      if (receiptNonce) this.usedReviewNonces.delete(receiptNonce);
       this.emit({ type: 'error', stage: 'commit', message: errMsg(err) });
       throw err;
     }
+  }
+
+  private async commitWithFallback(
+    backends: WritebackBackend[],
+    format: string,
+    cs: ChangeSet,
+    before: DocHandle,
+  ): Promise<WritebackResult> {
+    const failures: string[] = [];
+    let partial: WritebackResult | undefined;
+    for (let index = 0; index < backends.length; index++) {
+      const backend = backends[index]!;
+      const can = backend.canHandle(cs);
+      if (!can.ok) {
+        failures.push(`${backend.id}: ${can.reason ?? 'cannot handle changeset'}`);
+        continue;
+      }
+      this.emit({ type: 'commit:start', format, strategy: backend.strategy, editCount: cs.edits.length });
+      try {
+        const result = await backend.commit(cs, before);
+        const after: DocHandle = { hostId: cs.hostId, bytes: result.bytes, rev: (Number(cs.baseRev) + 1) as import('@otterpatch/core').DocRev };
+        const verification = await backend.verify(before, after, cs);
+        assertVerification(verification);
+        if (verification.drift.length) {
+          throw new Error('writeback verification found unexpected drift: ' + verification.drift.map((d) => d.part).join(', '));
+        }
+        const withFallback = index > 0 ? { ...result, fallbackUsed: backend.strategy } : result;
+        if (result.ok) return withFallback;
+        partial = withFallback;
+        failures.push(`${backend.id}: partial writeback`);
+      } catch (error) {
+        failures.push(`${backend.id}: ${errMsg(error)}`);
+      }
+    }
+    if (partial) return partial;
+    throw new Error('all writeback backends failed: ' + failures.join('; '));
+  }
+
+  private async withDocumentLock<T>(key: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.commitTails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const tail = previous.then(() => gate);
+    this.commitTails.set(key, tail);
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release();
+      if (this.commitTails.get(key) === tail) this.commitTails.delete(key);
+    }
+  }
+
+  private rememberCommittedSource(key: string): void {
+    this.committedSources.set(key, Date.now());
+    if (this.committedSources.size <= 10_000) return;
+    const oldest = this.committedSources.keys().next().value as string | undefined;
+    if (oldest) this.committedSources.delete(oldest);
+  }
+}
+
+function assertVerification(report: import('@otterpatch/core').FidelityReport): void {
+  if (!Number.isFinite(report.score) || report.score < 0 || report.score > 1 || !Array.isArray(report.drift)) {
+    throw new Error('writeback verifier returned an invalid fidelity report');
   }
 }
 

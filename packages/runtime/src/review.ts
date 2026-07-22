@@ -8,6 +8,7 @@ const SHA256_RX = /^[a-f0-9]{64}$/;
 export interface ProposalEnvelope {
   version: 1;
   proposalId: string;
+  documentId: string;
   format: string;
   changeSetSha256: string;
   sourceFileSha256?: string;
@@ -52,12 +53,14 @@ export class ReviewAuthority {
     if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) throw new Error('review receipt TTL must be a positive integer');
   }
 
-  createProposal(changeSet: ChangeSet, format: string, now = Date.now()): ProposalEnvelope {
+  createProposal(changeSet: ChangeSet, format: string, documentId = changeSet.hostId, now = Date.now()): ProposalEnvelope {
     assertChangeSet(changeSet);
     if (!format.trim()) throw new Error('proposal format is required');
+    if (!documentId.trim()) throw new Error('proposal documentId is required');
     const payload: ProposalPayload = {
       version: 1,
       proposalId: randomUUID(),
+      documentId,
       format,
       changeSetSha256: sha256Canonical(changeSet),
       baseRev: changeSet.baseRev,
@@ -186,7 +189,7 @@ function normalizeAcceptedEditIds(changeSet: ChangeSet, ids: string[]): string[]
 
 function assertProposal(value: ProposalEnvelope): ProposalPayload {
   if (!value || typeof value !== 'object' || value.version !== 1) throw new Error('invalid proposal envelope');
-  if (!value.proposalId || !value.format || !SHA256_RX.test(value.changeSetSha256)) throw new Error('invalid proposal envelope fields');
+  if (!value.proposalId || !value.documentId || !value.format || !SHA256_RX.test(value.changeSetSha256)) throw new Error('invalid proposal envelope fields');
   if (value.sourceFileSha256 !== undefined && !SHA256_RX.test(value.sourceFileSha256)) throw new Error('invalid proposal source file hash');
   if (!Number.isSafeInteger(value.baseRev) || value.baseRev < 0) throw new Error('invalid proposal revision');
   if (!isIsoDate(value.createdAt) || !isIsoDate(value.expiresAt)) throw new Error('invalid proposal timestamps');

@@ -55,7 +55,7 @@ try {
   if (inPath) {
     if (!confirmed) throw new Error('refusing to commit without explicit --yes after reviewing the emitted diff');
     const bytes = new Uint8Array(readFileSync(inPath));
-    const proposal = rt.createProposal(cs, format);
+    const proposal = rt.createProposal(cs, format, inPath);
     const reviewed = rt.reviewProposal(proposal, cs, cs.edits.map((edit) => edit.id), bytes, 'cli-explicit-yes');
     const res = await rt.commit({ format, bytes, changeSet: cs, ...reviewed });
     if (outPath && res.ok) {

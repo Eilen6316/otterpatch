@@ -152,16 +152,20 @@ export class DrawioSurgicalWriteback implements WritebackBackend {
     };
   }
 
-  async verify(before: DocHandle, after: DocHandle, _cs: ChangeSet): Promise<FidelityReport> {
+  async verify(before: DocHandle, after: DocHandle, cs: ChangeSet): Promise<FidelityReport> {
     if (!before.bytes || !after.bytes) throw new Error('DrawioSurgicalWriteback.verify: before/after bytes required');
     const a = [...dec.decode(before.bytes).matchAll(DIAGRAM_RE)].map((m) => m[0]);
     const b = [...dec.decode(after.bytes).matchAll(DIAGRAM_RE)].map((m) => m[0]);
     const n = Math.max(a.length, b.length);
     const drift: FidelityReport['drift'] = [];
+    const expected = new Set(cs.edits.map((edit) => {
+      const anchor = cs.anchors[edit.target];
+      return anchor?.portable.kind === 'object' ? anchor.portable.slide : -1;
+    }));
     let identical = 0;
     for (let i = 0; i < n; i++) {
       if (a[i] === b[i]) identical++;
-      else drift.push({ part: `diagram#${i}`, kind: 'content', note: 'changed' });
+      else if (!expected.has(i)) drift.push({ part: `diagram#${i}`, kind: 'content', note: 'unexpected change' });
     }
     return { score: n === 0 ? 1 : identical / n, drift };
   }

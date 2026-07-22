@@ -150,7 +150,10 @@ export class WordRedlineWriteback implements WritebackBackend {
   async verify(before: DocHandle, after: DocHandle, _cs: ChangeSet): Promise<FidelityReport> {
     if (!before.bytes || !after.bytes) throw new Error('WordRedlineWriteback.verify: before/after bytes required');
     const integrity = comparePartsIntegrity(before.bytes, after.bytes);
-    return { score: integrity.total === 0 ? 1 : integrity.identical / integrity.total, drift: [] };
+    const drift = integrity.changed
+      .filter((change) => change.slice(1) !== 'word/document.xml')
+      .map((change) => ({ part: change.slice(1), kind: 'content' as const, note: `unexpected: ${change}` }));
+    return { score: integrity.total === 0 ? 1 : integrity.identical / integrity.total, drift };
   }
 }
 
