@@ -10,11 +10,12 @@ import { redlineDocumentXml } from './document.js';
 import { WordRedlineWriteback } from './writeback.js';
 
 const doc = (inner: string, pPr = ''): string => `<w:document><w:body><w:p>${pPr}${inner}</w:p></w:body></w:document>`;
+const TEST_DATE = '2026-01-01T00:00:00Z';
 
 test('字符格式:加粗命中片段 → rPr+rPrChange,前后文各自成 run 保留', () => {
-  const { xml, changed } = redlineDocumentXml(doc('<w:r><w:t>今天天气很好</w:t></w:r>'), [{ kind: 'fmt', quote: '天气', char: { bold: true } }], { author: 'A', date: 'D' });
+  const { xml, changed } = redlineDocumentXml(doc('<w:r><w:t>今天天气很好</w:t></w:r>'), [{ kind: 'fmt', quote: '天气', char: { bold: true } }], { author: 'A', date: TEST_DATE });
   assert.equal(changed, 1);
-  assert.match(xml, /<w:r><w:rPr><w:b\/><w:rPrChange w:id="\d+" w:author="A" w:date="D"><w:rPr\/><\/w:rPrChange><\/w:rPr><w:t xml:space="preserve">天气<\/w:t><\/w:r>/);
+  assert.match(xml, /<w:r><w:rPr><w:b\/><w:rPrChange w:id="\d+" w:author="A" w:date="2026-01-01T00:00:00Z"><w:rPr\/><\/w:rPrChange><\/w:rPr><w:t xml:space="preserve">天气<\/w:t><\/w:r>/);
   assert.match(xml, /<w:t xml:space="preserve">今天<\/w:t>/);
   assert.match(xml, /<w:t xml:space="preserve">很好<\/w:t>/);
 });
@@ -31,12 +32,12 @@ test('字符格式:字体 + 颜色', () => {
 });
 
 test('段落格式:居中 + 标题2 → pStyle/jc + pPrChange 存原 pPr', () => {
-  const { xml, changed } = redlineDocumentXml(doc('<w:r><w:t>小标题</w:t></w:r>', '<w:pPr><w:jc w:val="left"/></w:pPr>'), [{ kind: 'fmt', quote: '小标题', para: { align: 'center', block: 'h2' } }], { author: 'A', date: 'D' });
+  const { xml, changed } = redlineDocumentXml(doc('<w:r><w:t>小标题</w:t></w:r>', '<w:pPr><w:jc w:val="left"/></w:pPr>'), [{ kind: 'fmt', quote: '小标题', para: { align: 'center', block: 'h2' } }], { author: 'A', date: TEST_DATE });
   assert.equal(changed, 1);
   assert.match(xml, /<w:pStyle w:val="Heading2"\/>/);
   assert.match(xml, /<w:jc w:val="center"\/>/);
   assert.doesNotMatch(xml.split('<w:pPrChange')[0]!, /w:val="left"/); // old "left" survives only inside the revision record
-  assert.match(xml, /<w:pPrChange w:id="\d+" w:author="A" w:date="D"><w:pPr><w:jc w:val="left"\/><\/w:pPr><\/w:pPrChange>/);
+  assert.match(xml, /<w:pPrChange w:id="\d+" w:author="A" w:date="2026-01-01T00:00:00Z"><w:pPr><w:jc w:val="left"\/><\/w:pPr><\/w:pPrChange>/);
 });
 
 test('段落格式:行距 1.5 + 底纹', () => {
@@ -46,7 +47,7 @@ test('段落格式:行距 1.5 + 底纹', () => {
 });
 
 test('保真:文本改写只碰命中 run,加粗 run 逐字节保留', () => {
-  const { xml } = redlineDocumentXml(doc('<w:r><w:rPr><w:b/></w:rPr><w:t>重要:</w:t></w:r><w:r><w:t>利润 100</w:t></w:r>'), [{ old: '100', new: '200' }], { author: 'A', date: 'D' });
+  const { xml } = redlineDocumentXml(doc('<w:r><w:rPr><w:b/></w:rPr><w:t>重要:</w:t></w:r><w:r><w:t>利润 100</w:t></w:r>'), [{ old: '100', new: '200' }], { author: 'A', date: TEST_DATE });
   assert.match(xml, /<w:r><w:rPr><w:b\/><\/w:rPr><w:t>重要:<\/w:t><\/w:r>/); // untouched run preserved verbatim
   assert.match(xml, /<w:delText xml:space="preserve">100<\/w:delText>/);
   assert.match(xml, /<w:t xml:space="preserve">200<\/w:t>/);

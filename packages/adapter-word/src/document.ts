@@ -9,7 +9,7 @@
  * v1's defect (flattening the whole hit paragraph, losing per-run formatting) is fixed: the whole-paragraph
  * fallback is used only when the hit involves a complex run (tabs/drawings, etc.).
  */
-import { buildRedlineXml, diffWords, type RedlineOptions } from './redline.js';
+import { buildRedlineXml, diffWords, resolveRevisionDate, type RedlineOptions } from './redline.js';
 import { charElems, paraElems, mergeRPr, mergePPr, type CharProps, type ParaProps } from './style.js';
 import type { EditId } from '@otterpatch/core';
 import { esc, paraText, parsePara, splitBody, sliceRuns } from './runs.js';
@@ -265,7 +265,7 @@ function anchorMatchCount(xml: string, edit: DocEdit): number {
  *  as ONE block, so paraIdx from the workspace ("第N段") lands on the same paragraph here. */
 export function redlineDocumentXml(documentXml: string, edits: DocEdit[], opts: RedlineOptions = {}): { xml: string; changed: number; appliedEditIds: EditId[]; droppedEdits: Array<{ editId: EditId; reason: string }> } {
   const authorRaw = opts.author ?? 'OtterPatch';
-  const ctx: Ctx = { id: opts.idStart ?? 1, author: escAttr(authorRaw), authorRaw, date: opts.date ?? '1970-01-01T00:00:00Z' };
+  const ctx: Ctx = { id: opts.idStart ?? 1, author: escAttr(authorRaw), authorRaw, date: resolveRevisionDate(opts.date) };
   let xml = documentXml;
   let changed = 0;
   const appliedEditIds: EditId[] = [];

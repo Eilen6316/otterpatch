@@ -18,6 +18,24 @@ test('buildRedlineXml: 产 Word 原生 w:del / w:ins,未改部分为普通 run',
   assert.match(xml, /<w:r><w:t xml:space="preserve">利润 <\/w:t><\/w:r>/); // unchanged part preserved
 });
 
+test('buildRedlineXml defaults revision metadata to the current time', () => {
+  const before = Date.now();
+  const xml = buildRedlineXml('old', 'new');
+  const dates = [...xml.matchAll(/w:date="([^"]+)"/g)].map((match) => match[1]!);
+
+  assert.ok(dates.length >= 2);
+  assert.equal(new Set(dates).size, 1, 'all revisions in one operation share one timestamp');
+  const timestamp = Date.parse(dates[0]!);
+  assert.ok(timestamp >= before && timestamp <= Date.now(), `revision timestamp is current: ${dates[0]}`);
+  assert.notEqual(dates[0], '1970-01-01T00:00:00Z');
+});
+
+test('buildRedlineXml validates dates and escapes revision authors', () => {
+  assert.throws(() => buildRedlineXml('old', 'new', { date: 'not-a-date' }), /valid ISO timestamp/);
+  const xml = buildRedlineXml('old', 'new', { author: 'A" & B', date: '2026-01-01T00:00:00Z' });
+  assert.match(xml, /w:author="A&quot; &amp; B"/);
+});
+
 test('纯新增 / 纯删除', () => {
   assert.match(buildRedlineXml('', 'hi'), /<w:ins[^>]*><w:r><w:t[^>]*>hi</);
   assert.match(buildRedlineXml('hi', ''), /<w:del[^>]*><w:r><w:delText[^>]*>hi</);

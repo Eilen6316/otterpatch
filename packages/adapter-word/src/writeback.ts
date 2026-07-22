@@ -136,9 +136,8 @@ export class WordRedlineWriteback implements WritebackBackend {
       }
     }
 
-    const opts: ParaEditOpts = {};
+    const opts: ParaEditOpts = { date: this.opts.date ?? new Date().toISOString() };
     if (this.opts.author !== undefined) opts.author = this.opts.author;
-    if (this.opts.date !== undefined) opts.date = this.opts.date;
     const redline = redlineDocumentXml(dec.decode(docXml), edits, opts);
     const sect = patchSectPr(redline.xml, page); // Page-level sectPr patch (columns/margins/orientation)
     const applied = [...redline.appliedEditIds, ...(sect.changed ? pageApplied : [])];

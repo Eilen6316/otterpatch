@@ -8,7 +8,8 @@
  */
 export interface RedlineOptions {
   author?: string;
-  date?: string; // ISO, e.g. 2026-01-01T00:00:00Z (supplied by caller to keep output deterministic)
+  /** ISO timestamp override for deterministic tests; production defaults to the current commit time. */
+  date?: string;
   idStart?: number;
 }
 
@@ -22,6 +23,16 @@ function tokenize(s: string): string[] {
 }
 
 const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escAttr = (s: string): string => esc(s).replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+export function resolveRevisionDate(value?: string): string {
+  const date = value ?? new Date().toISOString();
+  if (!ISO_DATE_TIME.test(date) || !Number.isFinite(Date.parse(date))) {
+    throw new Error('Word revision date must be a valid ISO timestamp');
+  }
+  return date;
+}
 
 /** Word-level LCS diff → equal/del/ins segments (adjacent segments with the same op are merged). */
 export function diffWords(a: string, b: string): DiffSeg[] {
@@ -65,8 +76,8 @@ export function diffWords(a: string, b: string): DiffSeg[] {
 
 /** Compile the diff into an in-paragraph OOXML revision run string (embedded inside a <w:p> in word/document.xml). */
 export function buildRedlineXml(original: string, revised: string, opts: RedlineOptions = {}): string {
-  const author = esc(opts.author ?? 'OtterPatch');
-  const date = opts.date ?? '1970-01-01T00:00:00Z';
+  const author = escAttr(opts.author ?? 'OtterPatch');
+  const date = resolveRevisionDate(opts.date);
   let id = opts.idStart ?? 1;
   const run = (txt: string): string => `<w:r><w:t xml:space="preserve">${esc(txt)}</w:t></w:r>`;
   return diffWords(original, revised)
