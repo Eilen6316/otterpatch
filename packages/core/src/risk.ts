@@ -84,6 +84,9 @@ export function assessEditRisk(subject: Edit | EditOp, context: RiskContext = {}
   const beforeHasFormula = typeof before?.formula === 'string' && before.formula.length > 0;
 
   if (op.kind === 'setStyle' && hasDocumentStyle(op.style)) raise('caution', 'document page style changes layout');
+  if (op.kind === 'setStyle' && (op.scope === 'section' || op.scope === 'document')) {
+    raise('caution', `style scope is ${op.scope}`);
+  }
 
   if (op.kind === 'setFormula') {
     const singleEmptyCell = context.destinationOccupied === false && (affected === undefined || affected === 1);
@@ -217,7 +220,10 @@ function contextForEdit(cs: ChangeSet, edit: Edit, context: ChangeSetRiskContext
     derived.resolvedScope = 'range';
     derived.affectedObjectCount = anchor.portable.parts.length;
   }
-  if (edit.op.kind === 'setStyle' && hasDocumentStyle(edit.op.style)) derived.documentWide = true;
+  if (edit.op.kind === 'setStyle') {
+    if (hasDocumentStyle(edit.op.style) || edit.op.scope === 'document') derived.documentWide = true;
+    if (edit.op.scope === 'section') derived.resolvedScope = 'document';
+  }
 
   return {
     ...derived,

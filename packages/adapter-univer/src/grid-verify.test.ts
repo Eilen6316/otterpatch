@@ -62,7 +62,7 @@ test('grid-verify: value and style edits may safely target the same cell', async
   const snapshot: SheetSnapshot = { ...SHEET, styles: SHEET.values.map((row) => row.map(() => null)) };
   const result = await buildGridVerifier(snapshot)(makeCs([
     { a1: 'Sheet1!B2', op: { family: 'value', kind: 'setValue', value: 8 } },
-    { a1: 'Sheet1!B2', op: { family: 'style', kind: 'setStyle', style: { bold: true } } },
+    { a1: 'Sheet1!B2', op: { family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: true } } },
   ]));
   assert.equal(result.ok, true);
   assert.equal((result.details as { affectedCells?: number }).affectedCells, 2);
@@ -78,7 +78,7 @@ test('grid-verify: range and style operations are actually simulated', async () 
     ],
   };
   const result = await buildGridVerifier(snapshot)(makeCs([
-    { a1: 'Sheet1!A2:B2', op: { family: 'style', kind: 'setStyle', style: { bold: false } } },
+    { a1: 'Sheet1!A2:B2', op: { family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: false } } },
   ]));
   assert.equal(result.ok, true);
   assert.equal(result.level, 'simulation');
@@ -113,7 +113,7 @@ test('grid-verify: missing formula/style observations fail as an insufficient sn
   assert.equal(noFormulas.code, 'VERIFIER_INSUFFICIENT_SNAPSHOT');
 
   const noStyles = await buildGridVerifier(SHEET)(makeCs([
-    { a1: 'Sheet1!A2', op: { family: 'style', kind: 'setStyle', style: { bold: false } } },
+    { a1: 'Sheet1!A2', op: { family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: false } } },
   ]));
   assert.equal(noStyles.ok, false);
   assert.equal(noStyles.code, 'VERIFIER_INSUFFICIENT_SNAPSHOT');
@@ -136,7 +136,7 @@ test('grid-verify: missing formula/style observations fail as an insufficient sn
   const sparseStyleRow: Array<AbstractStyle | null> = [null, null, null];
   delete sparseStyleRow[1];
   const sparseStyle = await buildGridVerifier({ ...SHEET, styles: [sparseStyleRow, sparseStyleRow, sparseStyleRow] })(makeCs([
-    { a1: 'Sheet1!B2', op: { family: 'style', kind: 'setStyle', style: { bold: true } } },
+    { a1: 'Sheet1!B2', op: { family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: true } } },
   ]));
   assert.equal(sparseStyle.ok, false);
   assert.equal(sparseStyle.code, 'VERIFIER_INSUFFICIENT_SNAPSHOT');

@@ -10,6 +10,7 @@ import type { CapabilitySet } from './adapter.js';
 export type ChangeSetId = string;
 export type EditId = string;
 export type CellValue = string | number | boolean | null;
+export type StyleScope = 'selection' | 'paragraph' | 'section' | 'document';
 
 export type ChangeOrigin =
   | { by: 'human' }
@@ -48,11 +49,11 @@ export interface AbstractStyle {
   lineSpacing?: number;
   /** Word paragraph-level: block style (heading/body/quote). Ignored by Excel. */
   block?: 'h1' | 'h2' | 'h3' | 'p' | 'blockquote';
-  /** Word page-level (requires all=true): column count 1/2/3 — key parameter for layouts like IEEE two-column. */
+  /** Word page-level (requires section/document scope): column count 1/2/3. */
   columns?: number;
-  /** Word page-level (requires all=true): margin preset. */
+  /** Word page-level (requires section/document scope): margin preset. */
   margin?: 'narrow' | 'normal' | 'moderate' | 'wide';
-  /** Word page-level (requires all=true): paper orientation. */
+  /** Word page-level (requires section/document scope): paper orientation. */
   orient?: 'portrait' | 'landscape';
   /** High-level intents like conditional formatting; adapter decides native vs degraded emulation. */
   conditional?: { rule: string; format: AbstractStyle };
@@ -67,7 +68,7 @@ export type EditOp =
   | { family: 'text'; kind: 'replaceText'; text: string }
   | { family: 'text'; kind: 'insertText'; text: string; at: 'start' | 'end' }
   | { family: 'value'; kind: 'deleteRange' }
-  | { family: 'style'; kind: 'setStyle'; style: AbstractStyle }
+  | { family: 'style'; kind: 'setStyle'; scope: StyleScope; style: AbstractStyle }
   // Excel (grid) extensions
   | { family: 'value'; kind: 'setFormula'; formula: string }
   | { family: 'style'; kind: 'setNumberFormat'; pattern: string }

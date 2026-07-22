@@ -70,7 +70,7 @@ test('grid shadow expands ranges and applies value/style operations to every cel
     origin: { by: 'human' }, meta: { intent: 'range' },
     edits: [
       { id: 'values', target: valueAnchor, op: { family: 'value', kind: 'setValue', value: 7 } },
-      { id: 'styles', target: styleAnchor, op: { family: 'style', kind: 'setStyle', style: { bold: false, bgColor: '#ffffff' } } },
+      { id: 'styles', target: styleAnchor, op: { family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: false, bgColor: '#ffffff' } } },
     ],
   };
   const result = await new GridChangeSetEngine().shadowApply(cs, gridShadow({
@@ -109,7 +109,7 @@ test('grid shadow rejects unsupported formulas and cycles instead of returning z
     id: 'unsupported-style',
     edits: [{
       ...unsupported.edits[0]!,
-      op: { family: 'style', kind: 'setStyle', style: { conditional: { rule: '> 0', format: { bold: true } } } },
+      op: { family: 'style', kind: 'setStyle', scope: 'selection', style: { conditional: { rule: '> 0', format: { bold: true } } } },
     }],
   };
   await assert.rejects(

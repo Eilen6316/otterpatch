@@ -281,7 +281,7 @@ test('a dropped formula edit does not change workbook calculation metadata', asy
 
 test('P1.3 setStyle:登记到 styles.xml 并改单元格 s(保留原值),ok=true', async () => {
   const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
-  const res = await wb.commit(csOp({ family: 'style', kind: 'setStyle', style: { bold: true, bgColor: '#ffd6d6' } }), { hostId: 'h1', bytes: makeXlsx(), rev: 0 as DocRev });
+  const res = await wb.commit(csOp({ family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: true, bgColor: '#ffd6d6' } }), { hostId: 'h1', bytes: makeXlsx(), rev: 0 as DocRev });
 
   assert.equal(res.ok, true);
   assert.ok(res.touchedParts.includes('xl/styles.xml'), 'styles.xml 被写入');
@@ -295,7 +295,7 @@ test('P1.3 setStyle:登记到 styles.xml 并改单元格 s(保留原值),ok=true
 
 test('xlsx batch editor merges sequential value and style edits on one cell', async () => {
   const cs = setB1To(99);
-  cs.edits.push({ id: 'e2', target: cs.edits[0]!.target, op: { family: 'style', kind: 'setStyle', style: { bold: true } } });
+  cs.edits.push({ id: 'e2', target: cs.edits[0]!.target, op: { family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: true } } });
   const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
   const res = await wb.commit(cs, { hostId: 'h1', bytes: makeXlsx(), rev: 0 as DocRev });
 
@@ -381,7 +381,7 @@ test('xlsx writeback: explicit missing sheet is dropped instead of falling back 
 
 test('xlsx writeback: invalid style color is dropped and not written into styles.xml', async () => {
   const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
-  const res = await wb.commit(csOp({ family: 'style', kind: 'setStyle', style: { color: '#fff" bad="1' } }), { hostId: 'h1', bytes: makeXlsx(), rev: 0 as DocRev });
+  const res = await wb.commit(csOp({ family: 'style', kind: 'setStyle', scope: 'selection', style: { color: '#fff" bad="1' } }), { hostId: 'h1', bytes: makeXlsx(), rev: 0 as DocRev });
   assert.equal(res.ok, false);
   assert.deepEqual(res.appliedEditIds, []);
   assert.match(res.droppedEdits?.[0]?.reason ?? '', /invalid ARGB color/);

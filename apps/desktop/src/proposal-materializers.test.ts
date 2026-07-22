@@ -28,7 +28,7 @@ test('materializeWordEdits maps text, style, delete, and image operations in dif
       edits: [
         { id: 'image', target: 'a4', op: { kind: 'setObjectProps', props: { imgAction: 'resize', width: 320 } } },
         { id: 'delete', target: 'a3', op: { kind: 'deleteRange' } },
-        { id: 'style', target: 'a2', op: { kind: 'setStyle', style: { bold: true } } },
+        { id: 'style', target: 'a2', op: { kind: 'setStyle', scope: 'selection', style: { bold: true } } },
         { id: 'text', target: 'a1', op: { kind: 'replaceText', text: 'replacement' } },
       ],
       anchors: {

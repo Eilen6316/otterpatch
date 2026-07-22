@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { AnchorId, ChangeSet, DocRev, HostId } from './index.js';
+import type { AnchorId, ChangeSet, DocRev, HostId, StyleScope } from './index.js';
 import {
   CAPABILITY_MANIFEST_VERSION,
   assertFormatCapabilities,
@@ -9,7 +9,7 @@ import {
   proposalOperationNamesFor,
 } from './capabilities.js';
 
-const flowChangeSet = (style: Record<string, unknown>, quote = '', path: number[] = []): ChangeSet => {
+const flowChangeSet = (style: Record<string, unknown>, quote = '', path: number[] = [], scope: StyleScope = 'selection'): ChangeSet => {
   const anchorId = 'a0' as AnchorId;
   return {
     id: 'word-capability',
@@ -27,7 +27,7 @@ const flowChangeSet = (style: Record<string, unknown>, quote = '', path: number[
     },
     origin: { by: 'human' },
     meta: { intent: 'format' },
-    edits: [{ id: 'e0', target: anchorId, op: { family: 'style', kind: 'setStyle', style } }],
+    edits: [{ id: 'e0', target: anchorId, op: { family: 'style', kind: 'setStyle', scope, style } }],
   } as ChangeSet;
 };
 
@@ -55,14 +55,31 @@ test('capability gate rejects unsupported Excel structure operations', () => {
 });
 
 test('Word capability separates page styling from anchored local styling', () => {
-  assert.doesNotThrow(() => assertFormatCapabilities('word', flowChangeSet({ columns: 2 }), 'writeback'));
+  assert.doesNotThrow(() => assertFormatCapabilities('word', flowChangeSet({ columns: 2 }, '', [], 'document'), 'writeback'));
   assert.doesNotThrow(() => assertFormatCapabilities('docx', flowChangeSet({ bold: true }, 'target text'), 'writeback'));
+  assert.doesNotThrow(() => assertFormatCapabilities('docx', flowChangeSet({ align: 'center' }, 'target text', [], 'paragraph'), 'writeback'));
   assert.throws(
-    () => assertFormatCapabilities('word', flowChangeSet({ font: 'Arial' }), 'writeback'),
-    /document-wide character or paragraph styling is not supported/,
+    () => assertFormatCapabilities('word', flowChangeSet({ font: 'Arial' }, '', [], 'document'), 'writeback'),
+    /local styling requires selection or paragraph scope/,
   );
   assert.throws(
-    () => assertFormatCapabilities('word', flowChangeSet({ columns: 2, font: 'Arial' }), 'writeback'),
+    () => assertFormatCapabilities('word', flowChangeSet({ columns: 2, font: 'Arial' }, '', [], 'document'), 'writeback'),
     /must be separate edits/,
+  );
+  assert.throws(
+    () => assertFormatCapabilities('word', flowChangeSet({ columns: 2 }, 'target text'), 'writeback'),
+    /section or document scope/,
+  );
+  assert.throws(
+    () => assertFormatCapabilities('word', flowChangeSet({ columns: 2 }, 'target text', [], 'document'), 'writeback'),
+    /empty document-level anchor/,
+  );
+  assert.throws(
+    () => assertFormatCapabilities('word', flowChangeSet({ align: 'center' }, 'target text'), 'writeback'),
+    /paragraph styling requires paragraph scope/,
+  );
+  assert.throws(
+    () => assertFormatCapabilities('word', flowChangeSet({ bold: true }, '', [0], 'paragraph'), 'writeback'),
+    /character styling requires a non-empty quote/,
   );
 });

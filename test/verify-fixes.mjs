@@ -29,7 +29,7 @@ const ok = (n, c) => { console.log((c ? '  ✓ ' : '  ✗ FAIL ') + n); if (!c) 
 {
   const { page, teardown } = await openApp({ storage: { 'oa.fmt': 'word', 'oa.apiKey': 'k', 'oa.server': 'http://localhost:4319' } });
   const diff = { changeSetId: 'csj', hostId: 'h', intent: 'x', items: [{ editId: 'e0', ref: '全文', badge: 'modify', after: '两端对齐', label: 'fmt', style: { align: 'justify' } }] };
-  const changeSet = { edits: [{ id: 'e0', target: 'a0', op: { family: 'style', kind: 'setStyle', style: { align: 'justify', font: '宋体', size: 12 } } }], anchors: { a0: { portable: { kind: 'flow', quote: { text: '' } } } } };
+  const changeSet = { edits: [{ id: 'e0', target: 'a0', op: { family: 'style', kind: 'setStyle', scope: 'document', style: { align: 'justify', font: '宋体', size: 12 } } }], anchors: { a0: { portable: { kind: 'flow', quote: { text: '' } } } } };
   await page.route('**/propose-stream', (r) => r.fulfill({ status: 200, contentType: 'text/event-stream', body: `data: ${JSON.stringify({ type: 'done', kind: 'changeset', diff, changeSet })}\n\n` }));
   await page.waitForSelector('.rd-page');
   await sleep(400);

@@ -117,7 +117,9 @@ for (const manifest of manifests) {
 }
 
 const EXCEL_STYLE_KEYS = new Set(['bold', 'italic', 'color', 'bgColor', 'align']);
-const WORD_LOCAL_STYLE_KEYS = new Set(['bold', 'italic', 'underline', 'font', 'size', 'color', 'align', 'lineSpacing', 'bgColor', 'block']);
+const WORD_CHARACTER_STYLE_KEYS = new Set(['bold', 'italic', 'underline', 'font', 'size', 'color']);
+const WORD_PARAGRAPH_STYLE_KEYS = new Set(['align', 'lineSpacing', 'bgColor', 'block']);
+const WORD_LOCAL_STYLE_KEYS = new Set([...WORD_CHARACTER_STYLE_KEYS, ...WORD_PARAGRAPH_STYLE_KEYS]);
 const WORD_PAGE_STYLE_KEYS = new Set(['columns', 'margin', 'orient']);
 
 export function capabilityManifests(): readonly FormatCapabilityManifest[] {
@@ -166,7 +168,10 @@ function assertFormatSpecificPayload(format: string, changeSet: ChangeSet, edit:
   const anchor = changeSet.anchors[edit.target];
   if (format === 'excel') {
     if (anchor?.portable.kind !== 'grid') throw new Error(`excel capability requires a grid anchor for edit ${edit.id}`);
-    if (edit.op.kind === 'setStyle') assertOnlyKeys(edit.op.style, EXCEL_STYLE_KEYS, 'excel setStyle');
+    if (edit.op.kind === 'setStyle') {
+      if (edit.op.scope !== 'selection') throw new Error('excel setStyle requires selection scope');
+      assertOnlyKeys(edit.op.style, EXCEL_STYLE_KEYS, 'excel setStyle');
+    }
     return;
   }
   if (format !== 'word') return;
@@ -177,11 +182,28 @@ function assertFormatSpecificPayload(format: string, changeSet: ChangeSet, edit:
   if (!keys.length) throw new Error('word setStyle requires at least one supported style field');
   const pageKeys = keys.filter((key) => WORD_PAGE_STYLE_KEYS.has(key));
   const localKeys = keys.filter((key) => WORD_LOCAL_STYLE_KEYS.has(key));
+  const characterKeys = keys.filter((key) => WORD_CHARACTER_STYLE_KEYS.has(key));
+  const paragraphKeys = keys.filter((key) => WORD_PARAGRAPH_STYLE_KEYS.has(key));
   const unknown = keys.filter((key) => !WORD_PAGE_STYLE_KEYS.has(key) && !WORD_LOCAL_STYLE_KEYS.has(key));
   if (unknown.length) throw new Error('word setStyle contains unsupported fields: ' + unknown.join(', '));
   if (pageKeys.length && localKeys.length) throw new Error('word page and local style fields must be separate edits');
 
   const hasLocation = anchor.portable.quote.text.length > 0 || anchor.portable.path[0] !== undefined;
+  if (pageKeys.length && edit.op.scope !== 'document' && edit.op.scope !== 'section') {
+    throw new Error('word page styling requires section or document scope');
+  }
+  if (pageKeys.length && edit.op.scope === 'section') {
+    throw new Error('word section-scoped page styling is not supported by the current backend');
+  }
+  if (localKeys.length && edit.op.scope !== 'selection' && edit.op.scope !== 'paragraph') {
+    throw new Error('word local styling requires selection or paragraph scope');
+  }
+  if (paragraphKeys.length && edit.op.scope !== 'paragraph') {
+    throw new Error('word paragraph styling requires paragraph scope');
+  }
+  if (characterKeys.length && !anchor.portable.quote.text) {
+    throw new Error('word character styling requires a non-empty quote');
+  }
   if (localKeys.length && !hasLocation) {
     throw new Error('word document-wide character or paragraph styling is not supported; target a quote or paragraph');
   }

@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync, unzipSync } from 'fflate';
-import type { AnchorId, ChangeSet, DocRev, HostId, LogicalAnchor } from '@otterpatch/core';
+import type { AnchorId, ChangeSet, DocRev, HostId, LogicalAnchor, StyleScope } from '@otterpatch/core';
 import { WordRedlineWriteback } from './writeback.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
@@ -19,6 +19,28 @@ function makeDocx(text: string): Uint8Array {
     ),
     'word/styles.xml': enc('<?xml version="1.0"?><w:styles xmlns:w="w"/>'),
   });
+}
+
+function pageStyleChangeSet(scope: StyleScope, quote = ''): ChangeSet {
+  const anchorId = 'a-page' as AnchorId;
+  return {
+    id: 'c-page',
+    hostId: 'h',
+    baseRev: 0 as DocRev,
+    anchors: {
+      [anchorId]: {
+        id: anchorId,
+        hostId: 'h' as HostId,
+        kind: 'flow',
+        ref: null,
+        portable: { kind: 'flow', path: quote ? [0] : [], quote: { prefix: '', text: quote, suffix: '' }, bias: 'left' },
+        baseRev: 0 as DocRev,
+      },
+    },
+    origin: { by: 'human' },
+    meta: { intent: 'two columns' },
+    edits: [{ id: 'e-page', target: anchorId, op: { family: 'style', kind: 'setStyle', scope, style: { columns: 2 } } }],
+  };
 }
 
 test('Word 红线写回:replaceText → w:ins,保留 w:pPr,仅 document.xml 变', async () => {
@@ -95,4 +117,20 @@ test('Word 红线写回:insertTable → 原生 w:tbl,仍只修改 document.xml',
   assert.equal([...docXml.matchAll(/<w:tc>/g)].length, 4);
   assert.equal(Buffer.compare(Buffer.from(before['word/styles.xml']!), Buffer.from(after['word/styles.xml']!)), 0);
   assert.equal(Buffer.compare(Buffer.from(before['[Content_Types].xml']!), Buffer.from(after['[Content_Types].xml']!)), 0);
+});
+
+test('Word page styling requires explicit document scope at the writeback boundary', async () => {
+  const wb = new WordRedlineWriteback();
+  const invalid = pageStyleChangeSet('selection', 'hello world');
+  assert.equal(wb.canHandle(invalid).ok, false);
+  await assert.rejects(
+    () => wb.commit(invalid, { hostId: 'h', bytes: makeDocx('hello world'), rev: 0 as DocRev }),
+    /section or document scope/,
+  );
+
+  const valid = pageStyleChangeSet('document');
+  const res = await wb.commit(valid, { hostId: 'h', bytes: makeDocx('hello world'), rev: 0 as DocRev });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.appliedEditIds, ['e-page']);
+  assert.match(dec.decode(unzipSync(res.bytes)['word/document.xml']!), /<w:cols w:num="2"/);
 });

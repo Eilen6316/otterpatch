@@ -11,7 +11,7 @@ const ok = (n, c) => { if (c) { pass++; console.log('  ✓', n); } else { fail++
 
 const mk = (csId, style, intent) => ({
   diff: { changeSetId: csId, hostId: 'h', intent, items: [{ editId: 'e0', ref: '全文', badge: 'modify', after: '全文格式', label: '全文版式', style }] },
-  changeSet: { edits: [{ id: 'e0', target: 'a0', op: { family: 'style', kind: 'setStyle', style } }], anchors: { a0: { portable: { kind: 'flow', quote: { text: '' } } } } },
+  changeSet: { edits: [{ id: 'e0', target: 'a0', op: { family: 'style', kind: 'setStyle', scope: 'document', style } }], anchors: { a0: { portable: { kind: 'flow', quote: { text: '' } } } } },
 });
 const R1 = mk('csP1', { font: 'Times New Roman', size: 10, columns: 2 }, '先做第一批:全文 Times New Roman 10pt + 双栏');
 const R2 = mk('csP2', { font: '黑体' }, '第二批:标题字体');

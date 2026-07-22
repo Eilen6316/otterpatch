@@ -68,7 +68,7 @@ test('写回:setStyle(加粗)→ rPrChange,仅 document.xml 变', async () => {
   const anchor: LogicalAnchor = { id: a0, hostId: 'h' as unknown as HostId, kind: 'flow', ref: {}, portable: { kind: 'flow', path: [0], quote: { prefix: '', text: 'brave', suffix: '' }, bias: 'left' }, baseRev: 0 as DocRev };
   const cs: ChangeSet = {
     id: 'c', hostId: 'h', baseRev: 0 as DocRev, anchors: { [a0]: anchor }, origin: { by: 'human' }, meta: { intent: 'emphasize' },
-    edits: [{ id: 'e0', target: a0, op: { family: 'style', kind: 'setStyle', style: { bold: true } } }],
+    edits: [{ id: 'e0', target: a0, op: { family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: true } } }],
   };
   const original = makeDocx('be brave now');
   const wb = new WordRedlineWriteback({ author: 'OtterPatch', date: '2026-01-01T00:00:00Z' });

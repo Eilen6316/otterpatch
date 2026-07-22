@@ -25,14 +25,25 @@ test('Word 自检:改后与原文相同 = 空改动 → 失败', () => {
 });
 
 test('Word 自检:页面设置使用空 quote → 跳过定位、通过', () => {
-  const v = buildDocVerifier(DOC)(cs([{ quote: '', columns: 2 }]));
+  const v = buildDocVerifier(DOC)(cs([{ quote: '', scope: 'document', columns: 2 }]));
   assert.equal(v.ok, true);
 });
 
 test('Word 自检:不支持无锚点的全文字符格式', () => {
-  const v = buildDocVerifier(DOC)(cs([{ quote: '', font: '宋体', size: 10.5 }]));
+  const v = buildDocVerifier(DOC)(cs([{ quote: '', scope: 'document', font: '宋体', size: 10.5 }]));
   assert.equal(v.ok, false);
   assert.equal(v.code, 'VERIFIER_MISSING_ANCHOR');
+});
+
+test('Word 格式提案把作用域显式编码进 ChangeSet', () => {
+  const selection = cs([{ quote: '增速略有放缓', scope: 'selection', bold: true }]);
+  const paragraph = cs([{ quote: '增速略有放缓', scope: 'paragraph', align: 'justify' }]);
+  const document = cs([{ quote: '', scope: 'document', columns: 2 }]);
+
+  assert.equal(selection.edits[0]?.op.kind === 'setStyle' ? selection.edits[0].op.scope : '', 'selection');
+  assert.equal(paragraph.edits[0]?.op.kind === 'setStyle' ? paragraph.edits[0].op.scope : '', 'paragraph');
+  assert.equal(document.edits[0]?.op.kind === 'setStyle' ? document.edits[0].op.scope : '', 'document');
+  assert.throws(() => cs([{ quote: '增速略有放缓', bold: true }]), /explicit scope/);
 });
 
 test('Word 表格:文档末尾插入结构化表格无需源锚点', () => {

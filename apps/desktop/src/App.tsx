@@ -748,7 +748,7 @@ export function App() {
     const docSnap = fmt === 'word' ? (wordRef.current?.getDocSnapshot() ?? null) : null;
     const selDesc = wordSel ? `${wordSel.block}${wordSel.para ? ' · 第' + wordSel.para + '段' : ''}${wordSel.font ? ' · ' + wordSel.font : ''}${wordSel.size ? ' ' + wordSel.size + 'pt' : ''}${wordSel.bold ? ' 加粗' : ''}${wordSel.italic ? ' 斜体' : ''}${wordSel.align && wordSel.align !== '左对齐' ? ' ' + wordSel.align : ''}` : '';
     const ctx = isExcel ? (sheetSnap?.text ?? '(表格为空)') : fmt === 'drawio' && boardSel ? boardSel.context : fmt === 'word'
-      ? `${wordRef.current?.getContext() ?? '(空文档)'}\n(改写正文:给 quote=文档中真实存在的原文片段 + replacement;改格式:给 quote + setStyle 字段,别给 replacement;空段落/整段结构操作用 para=段号;对照表/矩阵必须用 table 二维数组生成真实表格,禁止竖线或制表符伪造。)`
+      ? `${wordRef.current?.getContext() ?? '(空文档)'}\n(改写正文:给 quote=文档中真实存在的原文片段 + replacement;改格式:显式给 scope，字符范围用 selection、整段用 paragraph、页面设置用 document;空段落/整段结构操作用 para=段号;对照表/矩阵必须用 table 二维数组生成真实表格,禁止竖线或制表符伪造。)`
         + (wordSel ? (wordSel.block === '图片'
           ? `\n[当前选区·用户此刻点选了一张图片(${selDesc})]:${wordSel.text}\n若指令含"这张图/这个图片/它",目标就是这张图所在的第${wordSel.para ?? '?'}段;整段操作用 para=${wordSel.para ?? '?'} 锚定。`
           : `\n[当前选区·用户此刻圈选了这段(${selDesc})]:"${wordSel.text}"\n若指令含"这段/这句/这里/选中的/选中/它",优先针对它;quote 用这段真实原文定位。`) : '\n[未圈选文字]:请基于整篇文档理解。')

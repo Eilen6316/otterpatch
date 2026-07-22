@@ -5,7 +5,7 @@
  *  · setStyle    → character formatting <w:rPr>+<w:rPrChange> and paragraph formatting <w:pPr>+<w:pPrChange> (format revisions that can be accepted/rejected individually).
  * Fidelity comes from reusing writeback-surgical's repack; this is OtterPatch's moat.
  */
-import { assertFormatCapabilities, writebackOperationKindsFor } from '@otterpatch/core';
+import { assertChangeSet, assertFormatCapabilities, writebackOperationKindsFor } from '@otterpatch/core';
 import type {
   ChangeSet,
   EditId,
@@ -59,6 +59,9 @@ export class WordRedlineWriteback implements WritebackBackend {
 
   async commit(cs: ChangeSet, doc: DocHandle): Promise<WritebackResult> {
     if (!doc.bytes) throw new Error('WordRedlineWriteback.commit: DocHandle.bytes required');
+    assertChangeSet(cs);
+    const support = this.canHandle(cs);
+    if (!support.ok) throw new Error(`WordRedlineWriteback cannot handle ChangeSet: ${support.reason ?? 'unsupported'}`);
     const parts = readOoxmlParts(doc.bytes);
     const docXml = parts[DOC_PART];
     if (!docXml) throw new Error(`WordRedlineWriteback: ${DOC_PART} not found`);
@@ -98,18 +101,20 @@ export class WordRedlineWriteback implements WritebackBackend {
         });
       } else if (e.op.kind === 'setStyle') {
         const st0 = e.op.style;
-        // Page-level (columns/margins/orientation): inherently document-wide, handled via surgical sectPr patch
+        // Page-level changes are allowed only with an explicit document scope.
         if (st0.columns != null || st0.margin != null || st0.orient != null) {
+          if (e.op.scope !== 'document') {
+            dropped.push({ editId: e.id, reason: `页面格式要求 document scope,得到 ${e.op.scope}` });
+            continue;
+          }
           if (st0.columns != null) page.columns = st0.columns;
           if (st0.margin != null) page.margin = st0.margin;
           if (st0.orient != null) page.orient = st0.orient;
           pageApplied.push(e.id);
-          // If the same edit also carries character/paragraph fields and has a quote, fall through to the format-revision path below; purely page-level edits stop here
-          if (!quote && st0.font == null && st0.size == null && st0.bold == null && st0.align == null && st0.lineSpacing == null) continue;
+          continue;
         }
         if (!quote && paraIdx == null) {
-          // Document-wide character/paragraph formatting (all=true): v1 surgical writeback does not support per-run rewriting — report explicitly, never fail silently (workspace preview already applied)
-          dropped.push({ editId: e.id, reason: '全文字符/段落格式(all=true)暂不支持外科写回,仅工作区预览生效;可改为对具体段落逐条下发' });
+          dropped.push({ editId: e.id, reason: '全文字符/段落格式暂不支持外科写回;可改为对具体段落逐条下发' });
           continue;
         }
         const st = e.op.style;

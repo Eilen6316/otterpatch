@@ -70,6 +70,7 @@ export function buildDocVerifier(source: Source): (cs: ChangeSet) => VerifyRepor
       const { quote, path } = anchor.portable;
       const paragraph = path[0];
       const isPageStyle = edit.op.kind === 'setStyle'
+        && (edit.op.scope === 'document' || edit.op.scope === 'section')
         && Object.keys(edit.op.style).length > 0
         && Object.keys(edit.op.style).every((key) => key === 'columns' || key === 'margin' || key === 'orient');
       const isEndTable = edit.op.kind === 'insertTable' && edit.op.at === 'end';

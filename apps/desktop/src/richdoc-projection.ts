@@ -247,7 +247,7 @@ export function documentContextFromBlocks(blocks: readonly ProjectionBlock[], fa
   const toolHint = truncated
     ? `\n(有 ${truncated} 段超长已截断:改写/引用前先用 read_blocks 取该段全文,quote 必须来自真实原文;检索用 find_text,大纲用 get_outline,排版审计用 get_style_usage。)`
     : '\n(可用工具:read_blocks 按段取全文、find_text 全文检索、get_outline 大纲、get_style_usage 样式分布。)';
-  return `[Word 文档 · ${blocks.length} 段] 每段已标注它的样式/字体/字号/对齐/颜色;要改格式就据此下发 setStyle。\n${system}\n格式概览: 字体 ${[...fonts].join('、')} | 字号 ${[...sizes].sort((a, b) => a - b).join('、')}pt${colors.size ? ' | 非黑颜色 ' + [...colors].join('、') : ''}${toolHint}\n逐段:\n${lines.join('\n')}`;
+  return `[Word 文档 · ${blocks.length} 段] 每段已标注它的样式/字体/字号/对齐/颜色;要改格式就据此下发带显式 scope 的 setStyle。\n${system}\n格式概览: 字体 ${[...fonts].join('、')} | 字号 ${[...sizes].sort((a, b) => a - b).join('、')}pt${colors.size ? ' | 非黑颜色 ' + [...colors].join('、') : ''}${toolHint}\n逐段:\n${lines.join('\n')}`;
 }
 
 export function getRichDocText(root: HTMLElement): string {

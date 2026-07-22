@@ -19,7 +19,7 @@ const diff = {
 const changeSet = {
   edits: [
     { id: 'e0', target: 'a0', op: { family: 'value', kind: 'setValue', value: 200 } },
-    { id: 'e1', target: 'a1', op: { family: 'style', kind: 'setStyle', style: { bgColor: '#ffd6d6' } } },
+    { id: 'e1', target: 'a1', op: { family: 'style', kind: 'setStyle', scope: 'selection', style: { bgColor: '#ffd6d6' } } },
   ],
   anchors: { a0: { portable: { kind: 'grid', ref: 'Sheet1!C2' } }, a1: { portable: { kind: 'grid', ref: 'Sheet1!C2' } } },
 };

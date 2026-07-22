@@ -44,13 +44,14 @@ const ALIGNMENTS = new Set(['left', 'center', 'right', 'justify']);
 const BLOCK_STYLES = new Set(['h1', 'h2', 'h3', 'p', 'blockquote']);
 const MARGINS = new Set(['narrow', 'normal', 'moderate', 'wide']);
 const ORIENTATIONS = new Set(['portrait', 'landscape']);
+const STYLE_SCOPES = new Set(['selection', 'paragraph', 'section', 'document']);
 const CONDITIONAL_WHEN = new Set(['notEmpty', 'greaterThan', 'greaterThanOrEqual', 'lessThan', 'between', 'equalTo', 'textContains', 'formula']);
 const OP_KEYS: Record<string, ReadonlySet<string>> = Object.fromEntries(Object.entries({
   setValue: ['value'],
   replaceText: ['text'],
   insertText: ['text', 'at'],
   deleteRange: [],
-  setStyle: ['style'],
+  setStyle: ['scope', 'style'],
   setFormula: ['formula'],
   setNumberFormat: ['pattern'],
   insertRows: ['count', 'before'],
@@ -198,7 +199,11 @@ function assertOp(op: Record<string, unknown>, changeSetHostId: unknown): void {
       if (typeof op.text !== 'string' || !INSERT_AT.has(String(op.at))) throw new Error('invalid ChangeSet: insertText requires text and at');
       break;
     case 'setStyle':
+      if (!STYLE_SCOPES.has(String(op.scope))) throw new Error('invalid ChangeSet: setStyle.scope invalid');
       assertStyle(op.style, 'setStyle.style');
+      if (hasPageStyle(op.style) && op.scope !== 'section' && op.scope !== 'document') {
+        throw new Error('invalid ChangeSet: page style fields require section or document scope');
+      }
       break;
     case 'setFormula':
       if (!nonBlank(op.formula) || op.formula.length > MAX_FORMULA_CHARS) throw new Error(`invalid ChangeSet: setFormula.formula must contain 1-${MAX_FORMULA_CHARS} characters`);
@@ -307,6 +312,10 @@ function assertStyle(value: unknown, label: string, allowConditional = true): vo
     if (!nonBlank(value.conditional.rule)) throw new Error(`invalid ChangeSet: ${label}.conditional.rule required`);
     assertStyle(value.conditional.format, `${label}.conditional.format`, false);
   }
+}
+
+function hasPageStyle(style: unknown): boolean {
+  return isRecord(style) && (style.columns !== undefined || style.margin !== undefined || style.orient !== undefined);
 }
 
 function assertChart(op: Record<string, unknown>): void {

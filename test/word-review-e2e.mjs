@@ -22,7 +22,7 @@ const diff = {
 const changeSet = {
   edits: [
     { id: 'e0', target: 'a0', op: { family: 'text', kind: 'replaceText', text: '整体进度略超预期。' } },
-    { id: 'e1', target: 'a1', op: { family: 'style', kind: 'setStyle', style: { bold: true } } },
+    { id: 'e1', target: 'a1', op: { family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: true } } },
   ],
   anchors: { a0: { portable: { kind: 'flow', quote: { text: '整体进度符合预期。' } } }, a1: { portable: { kind: 'flow', quote: { text: '下周计划' } } } },
 };

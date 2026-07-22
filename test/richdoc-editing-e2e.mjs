@@ -17,7 +17,7 @@ const response = {
     items: [{ editId: 'e0', ref: '下周计划', badge: 'modify', label: '标题改为三级并居中', after: '标题3 · 居中', style }],
   },
   changeSet: {
-    edits: [{ id: 'e0', target: 'a0', op: { family: 'style', kind: 'setStyle', style } }],
+    edits: [{ id: 'e0', target: 'a0', op: { family: 'style', kind: 'setStyle', scope: 'paragraph', style } }],
     anchors: { a0: { portable: { kind: 'flow', quote: { text: '下周计划' } } } },
   },
 };

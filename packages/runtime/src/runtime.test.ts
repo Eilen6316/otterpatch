@@ -132,7 +132,7 @@ test('runtime diff exposes complete range details and observed style state', asy
   assert.deepEqual(range.items[0]?.directEffects.map((effect) => (effect.before as { value: unknown }).value), [1, 2, 3, 4]);
   assert.deepEqual(range.items[0]?.directEffects.map((effect) => (effect.after as { value: unknown }).value), [9, 9, 9, 9]);
 
-  const styleChangeSet = singleCellChangeSet('style-preview', { family: 'style', kind: 'setStyle', style: { bold: false } });
+  const styleChangeSet = singleCellChangeSet('style-preview', { family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: false } });
   const style = await runtime.diff(styleChangeSet, {
     format: 'excel',
     sheet: { a1: 'Sheet1!B1', name: 'Sheet1', values: [[10]], styles: [[{ bold: true }]] },
@@ -185,7 +185,7 @@ test('runtime diff does not treat a target outside the snapshot as an empty cell
 
 test('runtime diff preserves explicit format removal and null proposal semantics', () => {
   const style = buildDiff(
-    singleCellChangeSet('remove-format', { family: 'style', kind: 'setStyle', style: { bold: false, italic: false } }),
+    singleCellChangeSet('remove-format', { family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: false, italic: false } }),
     { format: 'excel', unavailableReason: 'style snapshot unavailable' },
   );
   assert.match(style.items[0]?.label ?? '', /取消加粗/);

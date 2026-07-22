@@ -3,7 +3,7 @@
  * Each format has its own system prompt, tool schema, and raw-proposal → ChangeSet construction.
  */
 import { MAX_FORMULA_CHARS, RESOURCE_LIMITS, ResourceLimitError, assertA1RangeBudget, proposalOperationNamesFor } from '@otterpatch/core';
-import type { AnchorId, CellValue, ChangeSet, Edit, EditOp, EditOpKind, HostId, LogicalAnchor } from '@otterpatch/core';
+import type { AnchorId, CellValue, ChangeSet, Edit, EditOp, EditOpKind, HostId, LogicalAnchor, StyleScope } from '@otterpatch/core';
 import type { HostDialect, ProposeRequest } from './model.js';
 import {
   EXCEL_SYSTEM, EXCEL_TOOL_DESC, DRAWIO_SYSTEM, DRAWIO_TOOL_DESC,
@@ -159,7 +159,7 @@ function buildExcelChangeSet(req: ProposeRequest, proposal: unknown): ChangeSet 
     let op: EditOp;
     switch (e.op) {
       case 'setFormula': op = { family: 'value', kind: 'setFormula', formula: e.formula }; break;
-      case 'setStyle': op = { family: 'style', kind: 'setStyle', style: e.style }; break;
+      case 'setStyle': op = { family: 'style', kind: 'setStyle', scope: 'selection', style: e.style }; break;
       case 'setNumberFormat': op = { family: 'style', kind: 'setNumberFormat', pattern: e.pattern }; break;
       case 'clear': op = { family: 'value', kind: 'deleteRange' }; break;
       case 'setValue': op = { family: 'value', kind: 'setValue', value: e.value }; break;
@@ -387,6 +387,8 @@ export interface WordProposal {
   plan: string;
   edits: Array<{
     quote: string;
+    /** Required for formatting edits; the intended extent must not be inferred from an empty anchor. */
+    scope?: StyleScope;
     /** 1-based paragraph number (from context/read_blocks) — anchors empty or non-unique paragraphs where quote can't; quote may be '' */
     para?: number;
     /** Structural: delete the whole paragraph at para/quote (empty-paragraph cleanup, redundant blocks) */
@@ -435,6 +437,9 @@ function buildWordChangeSet(req: ProposeRequest, p: WordProposal): ChangeSet {
       portable: { kind: 'flow', path: e.para != null && e.para >= 1 ? [e.para - 1] : [], quote: { prefix: '', text: quoteText, suffix: '' }, bias: 'left' },
     };
     const isFormat = !e.deletePara && !e.img && !e.table && e.replacement == null && (e.bold != null || e.italic != null || e.underline != null || e.font != null || e.size != null || e.color != null || e.align != null || e.lineSpacing != null || e.bgColor != null || e.block != null || e.columns != null || e.margin != null || e.orient != null);
+    if (isFormat && !['selection', 'paragraph', 'section', 'document'].includes(String(e.scope))) {
+      throw new Error(`word dialect: edit ${i} formatting requires an explicit scope`);
+    }
     const op: EditOp = e.table
       ? {
           family: 'structure',
@@ -451,6 +456,7 @@ function buildWordChangeSet(req: ProposeRequest, p: WordProposal): ChangeSet {
       ? {
           family: 'style',
           kind: 'setStyle',
+          scope: e.scope!,
           style: {
             ...(e.bold != null ? { bold: e.bold } : {}),
             ...(e.italic != null ? { italic: e.italic } : {}),
@@ -489,6 +495,7 @@ export const wordDialect: HostDialect = {
           type: 'object',
           properties: {
             quote: { type: 'string', description: '文档中真实存在的原文片段(用于定位);局部格式也必须用它选中目标。页面设置使用空串;空段落或无法唯一定位时给空串并用 para 段号锚定' },
+            scope: { type: 'string', enum: ['selection', 'paragraph', 'section', 'document'], description: '格式 edit 必填:字符范围用 selection，整段格式用 paragraph，页面设置用 document；当前写回器暂不支持 section' },
             para: { type: 'number', description: '段号(1-based,即上下文/read_blocks 里的"第N段")。空段落、重复文本等 quote 无法唯一定位时用它锚定整段;给了 para 时 quote 可为空串' },
             deletePara: { type: 'boolean', description: '结构操作:true=删除 para(或 quote)所在的整段(清理空段落/删除冗余段落)。不要同时给 replacement 或格式字段' },
             img: { type: 'string', enum: ['remove', 'resize'], description: '图片操作:对锚定段落里的图片(上下文标注为 [图片 …] 的段)remove=删除该图 / resize=调宽(配 imgWidth)。锚定用 para 段号或该段 quote' },

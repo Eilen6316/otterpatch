@@ -20,7 +20,7 @@ const diff = {
 const changeSet = {
   edits: [
     { id: 'e0', target: 'a0', op: { family: 'text', kind: 'replaceText', text: '整体进度略超预期。' } },
-    { id: 'e1', target: 'a1', op: { family: 'style', kind: 'setStyle', style: { bold: true } } },
+    { id: 'e1', target: 'a1', op: { family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: true } } },
   ],
   anchors: {
     a0: { portable: { kind: 'flow', quote: { text: '  整体进度符合预期。' } } }, // 前导空格 → 只有宽松定位能命中(验证 #3 修复)

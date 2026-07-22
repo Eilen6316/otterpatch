@@ -417,7 +417,7 @@ function inverseOf(op: EditOp, before: GridCell): EditOp | undefined {
       if (previous === undefined) return undefined;
       Object.assign(style, { [key]: previous });
     }
-    return { family: 'style', kind: 'setStyle', style };
+    return { family: 'style', kind: 'setStyle', scope: op.scope, style };
   }
   return undefined;
 }

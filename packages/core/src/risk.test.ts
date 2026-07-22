@@ -68,9 +68,10 @@ test('STRICT_POLICY: 谨慎也需人工', () => {
 });
 
 test('riskOf uses scope, occupancy, dependencies, and before-state context', () => {
-  const style = { family: 'style', kind: 'setStyle', style: { bold: true } } as const;
+  const style = { family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: true } } as const;
   assert.equal(riskOf(style, { resolvedScope: 'cell', affectedObjectCount: 1 }), 'safe');
   assert.equal(riskOf(style, { format: 'word', documentWide: true }), 'caution');
+  assert.equal(riskOf({ ...style, scope: 'document' }), 'caution');
 
   const formula = { family: 'value', kind: 'setFormula', formula: '=A1*2' } as const;
   assert.equal(riskOf(formula, { destinationOccupied: false, affectedObjectCount: 1 }), 'safe');

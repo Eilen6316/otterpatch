@@ -79,10 +79,13 @@ test('assertChangeSet validates style and object operation semantics', () => {
   const cs = validChangeSet();
   const withOp = (op: unknown) => ({ ...cs, edits: [{ ...cs.edits[0], op }] });
 
-  assert.doesNotThrow(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', style: { bold: false, color: '#c00000', size: 12 } })));
-  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', style: {} })), /at least one property/);
-  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', style: { color: '#fff\" bad=\"1' } })), /hex color/);
-  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', style: { mystery: true } })), /unsupported fields: mystery/);
+  assert.doesNotThrow(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', scope: 'selection', style: { bold: false, color: '#c00000', size: 12 } })));
+  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', style: { bold: true } })), /setStyle\.scope invalid/);
+  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', scope: 'range', style: { bold: true } })), /setStyle\.scope invalid/);
+  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', scope: 'selection', style: { columns: 2 } })), /page style fields require section or document scope/);
+  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', scope: 'selection', style: {} })), /at least one property/);
+  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', scope: 'selection', style: { color: '#fff\" bad=\"1' } })), /hex color/);
+  assert.throws(() => assertChangeSet(withOp({ family: 'style', kind: 'setStyle', scope: 'selection', style: { mystery: true } })), /unsupported fields: mystery/);
 
   assert.doesNotThrow(() => assertChangeSet(withOp({ family: 'object', kind: 'moveObject', box: { left: 0, top: -5, width: 10 } })));
   assert.throws(() => assertChangeSet(withOp({ family: 'object', kind: 'moveObject', box: {} })), /at least one coordinate/);
