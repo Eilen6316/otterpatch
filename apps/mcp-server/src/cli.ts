@@ -8,10 +8,11 @@
  *   otterpatch-run --yes --mock --in in.xlsx --out out.xlsx  # 无需 API key,固定演示 edit
  * BYOK:export OtterPatch_API_KEY=...(非 --mock 时必需);--provider/--model 可选。
  */
-import { readFileSync, writeFileSync } from 'node:fs';
-import type { DocRev } from '@otterpatch/core';
+import { writeFileSync } from 'node:fs';
+import { isResourceLimitError, type DocRev } from '@otterpatch/core';
 import { createModelClient, MockModelClient, type ModelClient, type Provider, type ProposeRequest } from '@otterpatch/agent';
 import { OtterPatchRuntime } from '@otterpatch/runtime';
+import { readDocumentFile } from './document-input.js';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf('--' + name);
@@ -54,7 +55,7 @@ try {
   rt.diff(cs);
   if (inPath) {
     if (!confirmed) throw new Error('refusing to commit without explicit --yes after reviewing the emitted diff');
-    const bytes = new Uint8Array(readFileSync(inPath));
+    const bytes = readDocumentFile(inPath);
     const proposal = rt.createProposal(cs, format, inPath);
     const reviewed = rt.reviewProposal(proposal, cs, cs.edits.map((edit) => edit.id), bytes, 'cli-explicit-yes');
     const res = await rt.commit({ format, bytes, changeSet: cs, ...reviewed });
@@ -64,6 +65,6 @@ try {
     }
   }
 } catch (e) {
-  emit({ type: 'fatal', message: e instanceof Error ? e.message : String(e) });
+  emit({ type: 'fatal', message: e instanceof Error ? e.message : String(e), ...(isResourceLimitError(e) ? e.toJSON() : {}) });
   process.exitCode = 1;
 }

@@ -8,9 +8,9 @@
  * (forcing the tool would otherwise return HTTP 400).
  */
 import OpenAI from 'openai';
-import type { ChangeSet } from '@otterpatch/core';
+import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, type ChangeSet } from '@otterpatch/core';
 import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
-import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, execReadTool, parseClarify, proposalSystem, recentHistory, respondSystem } from './sheet-tools.js';
+import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, execReadTool, limitToolResult, parseClarify, proposalSystem, recentHistory, respondSystem, validMaxTokens, validProviderTimeout } from './sheet-tools.js';
 import { NUDGE_DIRECT, NUDGE_TOOLIFY, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
 import { salvageProposalArgs, salvageText, safeParse } from './json-salvage.js';
 
@@ -19,8 +19,15 @@ export interface OpenAICompatOptions {
   model: string;
   baseURL?: string;
   maxTokens?: number;
+  timeoutMs?: number;
   /** Whether tool_choice can force a specific function; false triggers the fallback (default true). */
   forcedTool?: boolean;
+}
+
+function assertModelOutputChars(actual: number): void {
+  if (actual > RESOURCE_LIMITS.modelOutputChars) {
+    throw new ResourceLimitError('model_output_chars', RESOURCE_LIMITS.modelOutputChars, actual, 'Ask the model to return a smaller batch.');
+  }
 }
 
 /**
@@ -56,9 +63,10 @@ export class OpenAICompatModelClient implements ModelClient {
   private readonly forcedTool: boolean;
 
   constructor(opts: OpenAICompatOptions) {
-    this.client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL });
+    const timeout = validProviderTimeout(opts.timeoutMs);
+    this.client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL, timeout });
     this.model = opts.model;
-    this.maxTokens = opts.maxTokens ?? 8192;
+    this.maxTokens = validMaxTokens(opts.maxTokens);
     this.forcedTool = opts.forcedTool ?? true;
   }
 
@@ -107,9 +115,12 @@ export class OpenAICompatModelClient implements ModelClient {
     if (!call || call.type !== 'function') {
       throw new Error(`OpenAICompatModelClient: model did not call ${dialect.toolName}`);
     }
+    assertModelOutputChars((res.choices[0]?.message?.content ?? '').length + call.function.arguments.length);
     const parsed = salvageProposalArgs(call.function.arguments);
     if (parsed.truncated) throw new Error(TRUNCATED_FALLBACK);
-    return dialect.buildChangeSet(req, parsed);
+    const changeSet = dialect.buildChangeSet(req, parsed);
+    assertChangeSet(changeSet);
+    return changeSet;
   }
 
   /** Assemble messages (system + multi-turn history + current instruction) and the tool menu (edit-proposal / answer_user / read-only data / host extras). */
@@ -128,7 +139,7 @@ export class OpenAICompatModelClient implements ModelClient {
   /** Unified read-only tool execution: give extraTools (e.g. load_skill) first shot, then route to sheet/doc data reads. */
   private execTool(name: string, args: unknown, req: ProposeRequest, opts?: RespondOptions): string {
     const ex = opts?.extraTools?.exec(name, args);
-    if (ex !== null && ex !== undefined) return ex;
+    if (ex !== null && ex !== undefined) return limitToolResult(ex);
     return execReadTool(name, (args ?? {}) as Record<string, unknown>, req);
   }
 
@@ -144,6 +155,7 @@ export class OpenAICompatModelClient implements ModelClient {
       const msg = res.choices[0]?.message;
       if (!msg) return { kind: 'answer', text: '(模型无响应)' };
       const calls = (msg.tool_calls ?? []).filter((c) => c.type === 'function');
+      assertModelOutputChars((msg.content ?? '').length + calls.reduce((total, call) => total + call.function.arguments.length, 0));
       if (!calls.length) {
         // No tool call: empty text → nudge for a result; prose final → toolify it once
         // ("prose proposal" failure mode: plan/clarify written as raw text).
@@ -166,6 +178,7 @@ export class OpenAICompatModelClient implements ModelClient {
           continue;
         }
         const cs = dialect.buildChangeSet(req, parsed);
+        assertChangeSet(cs);
         if (opts?.verify) {
           const v = await opts.verify(cs);
           if (!v.ok) {
@@ -204,13 +217,20 @@ export class OpenAICompatModelClient implements ModelClient {
     for (let step = 0; step < STEP_LIMIT; step++) {
       const stream = await this.client.chat.completions.create({ model: this.model, max_tokens: this.maxTokens, messages, tools, tool_choice: 'auto', stream: true });
       let content = '';
+      let outputChars = 0;
       const toolAcc: Record<number, { id: string; name: string; args: string }> = {};
       for await (const chunk of stream) {
         const d = chunk.choices[0]?.delta;
         if (!d) continue;
         const rc = (d as { reasoning_content?: string }).reasoning_content; // chain-of-thought deltas from reasoning models such as DeepSeek
-        if (rc) onEvent({ type: 'reasoning', delta: rc });
+        if (rc) {
+          outputChars += rc.length;
+          assertModelOutputChars(outputChars);
+          onEvent({ type: 'reasoning', delta: rc });
+        }
         if (d.content) {
+          outputChars += d.content.length;
+          assertModelOutputChars(outputChars);
           content += d.content;
           onEvent({ type: 'answer', delta: d.content });
         }
@@ -220,6 +240,8 @@ export class OpenAICompatModelClient implements ModelClient {
           if (tc.id) acc.id = tc.id;
           if (tc.function?.name) acc.name = tc.function.name;
           if (tc.function?.arguments) {
+            outputChars += tc.function.arguments.length;
+            assertModelOutputChars(outputChars);
             acc.args += tc.function.arguments;
             // drawio: emit proposal-argument deltas so the frontend can draw the corresponding shapes on the canvas while generating
             if (dialect.format === 'drawio' && acc.name === dialect.toolName) onEvent({ type: 'draft', delta: tc.function.arguments });
@@ -251,6 +273,7 @@ export class OpenAICompatModelClient implements ModelClient {
           continue;
         }
         const cs = dialect.buildChangeSet(req, parsed);
+        assertChangeSet(cs);
         if (opts?.verify) {
           onEvent({ type: 'tool', name: 'verify' });
           const v = await opts.verify(cs);

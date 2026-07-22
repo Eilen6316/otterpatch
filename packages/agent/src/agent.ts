@@ -6,11 +6,12 @@
  * retry within the same turn (inspired by codex apply_patch's apply-report-iterate loop).
  * Later: skill-script execution, capability negotiation, shadow validation.
  */
-import type { ChangeSet } from '@otterpatch/core';
+import { assertChangeSet, type ChangeSet } from '@otterpatch/core';
 import type { SkillLibrary } from '@otterpatch/skills';
 import type { ConventionStack } from './conventions.js';
 import { DIALECTS } from './dialects.js';
 import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
+import { assertProposeRequestBudget } from './sheet-tools.js';
 
 export interface ChangeSetValidation {
   ok: boolean;
@@ -85,9 +86,15 @@ export class Agent {
 
   /** Smart routing: the model decides whether to answer a question or propose changes (falls back to propose). */
   async respond(req: ProposeRequest, opts?: RespondOptions): Promise<AgentResponse> {
+    assertProposeRequestBudget(req);
     const d = this.dialectFor(req);
-    if (this.model.respond) return this.model.respond(req, d, this.withSkillTools(req, opts));
+    if (this.model.respond) {
+      const response = await this.model.respond(req, d, this.withSkillTools(req, opts));
+      if (response.kind === 'changeset') assertChangeSet(response.changeSet);
+      return response;
+    }
     const cs = await this.model.proposeChangeSet(req, d);
+    assertChangeSet(cs);
     if (opts?.verify) {
       const v = await opts.verify(cs);
       if (!v.ok) throw new Error(v.report || 'proposal verification failed');
@@ -97,13 +104,19 @@ export class Agent {
 
   /** Streaming routing: pass through if respondStream exists; otherwise fall back to a one-shot result and emit delta/done events. */
   async respondStream(req: ProposeRequest, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
+    assertProposeRequestBudget(req);
     const d = this.dialectFor(req);
-    if (this.model.respondStream) return this.model.respondStream(req, d, onEvent, this.withSkillTools(req, opts));
+    if (this.model.respondStream) {
+      const response = await this.model.respondStream(req, d, onEvent, this.withSkillTools(req, opts));
+      if (response.kind === 'changeset') assertChangeSet(response.changeSet);
+      return response;
+    }
     let r: AgentResponse;
     if (this.model.respond) {
       r = await this.model.respond(req, d, this.withSkillTools(req, opts));
     } else {
       const cs = await this.model.proposeChangeSet(req, d);
+      assertChangeSet(cs);
       if (opts?.verify) {
         const v = await opts.verify(cs);
         r = v.ok ? { kind: 'changeset' as const, changeSet: cs } : { kind: 'answer' as const, text: '提案校验失败。\n' + v.report };
@@ -111,12 +124,14 @@ export class Agent {
         r = { kind: 'changeset', changeSet: cs };
       }
     }
+    if (r.kind === 'changeset') assertChangeSet(r.changeSet);
     if (r.kind === 'answer') onEvent({ type: 'answer', delta: r.text });
     onEvent({ type: 'done', result: r });
     return r;
   }
 
   async propose(req: ProposeRequest): Promise<ChangeSet> {
+    assertProposeRequestBudget(req);
     const d = this.dialectFor(req);
 
     const validator = this.opts.validator;
@@ -127,6 +142,7 @@ export class Agent {
         ? { ...req, proposalFeedback: errors }
         : req;
       const cs = await this.model.proposeChangeSet(r, d);
+      assertChangeSet(cs);
       if (!validator) return cs;
       const v = validator(cs);
       if (v.ok) return cs;

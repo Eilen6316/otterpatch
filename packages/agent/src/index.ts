@@ -12,3 +12,4 @@ export * from './agent.js';
 export * from './word-verify.js';
 export * from './doc-tools.js';
 export * from './drawio-verify.js';
+export * from './sheet-tools.js';

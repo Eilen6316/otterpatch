@@ -55,6 +55,7 @@ export interface CreateModelOptions {
   model?: string;
   baseURL?: string;
   maxTokens?: number;
+  timeoutMs?: number;
 }
 
 /** Create a ModelClient for the given provider (BYOK). baseURL/model can override the defaults. */
@@ -63,13 +64,14 @@ export function createModelClient(provider: Provider, opts: CreateModelOptions =
   const model = opts.model ?? p.defaultModel;
   const maxTokens = opts.maxTokens ?? 8192;
   if (p.kind === 'anthropic') {
-    return new AnthropicModelClient({ apiKey: opts.apiKey, model, baseURL: opts.baseURL, maxTokens });
+    return new AnthropicModelClient({ apiKey: opts.apiKey, model, baseURL: opts.baseURL, maxTokens, timeoutMs: opts.timeoutMs });
   }
   return new OpenAICompatModelClient({
     apiKey: opts.apiKey,
     model,
     baseURL: opts.baseURL ?? p.baseURL,
     maxTokens,
+    timeoutMs: opts.timeoutMs,
     forcedTool: p.forcedTool,
   });
 }

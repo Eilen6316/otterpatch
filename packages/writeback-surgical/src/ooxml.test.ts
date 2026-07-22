@@ -6,7 +6,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync } from 'fflate';
-import { comparePartsIntegrity, repackOoxml } from './ooxml.js';
+import { ResourceLimitError } from '@otterpatch/core';
+import { comparePartsIntegrity, readOoxmlParts, repackOoxml } from './ooxml.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 
@@ -43,4 +44,37 @@ test('新增部件被纳入', () => {
   const integrity = comparePartsIntegrity(original, patched);
   assert.deepEqual(integrity.changed, ['+b.xml']);
   assert.equal(integrity.identical, 1);
+});
+
+test('OOXML preflight rejects excessive entries, expansion, ratio, and XML depth', () => {
+  const entries = zipSync({ 'a.xml': enc('<a/>'), 'b.xml': enc('<b/>'), 'c.xml': enc('<c/>') });
+  assert.throws(
+    () => readOoxmlParts(entries, { maxEntries: 2 }),
+    (error) => error instanceof ResourceLimitError && error.resource === 'zip_entries',
+  );
+
+  const expanded = zipSync({ 'a.bin': new Uint8Array(32) });
+  assert.throws(
+    () => readOoxmlParts(expanded, { maxDecompressedEntryBytes: 16 }),
+    (error) => error instanceof ResourceLimitError && error.resource === 'zip_decompressed_entry_bytes',
+  );
+  assert.throws(
+    () => readOoxmlParts(expanded, { maxCompressionRatio: 2 }),
+    (error) => error instanceof ResourceLimitError && error.resource === 'zip_compression_ratio',
+  );
+
+  const deep = zipSync({ 'a.xml': enc('<a><b><c><d/></c></b></a>') });
+  assert.throws(
+    () => readOoxmlParts(deep, { maxXmlNestingDepth: 2 }),
+    (error) => error instanceof ResourceLimitError && error.resource === 'xml_nesting_depth',
+  );
+});
+
+test('OOXML preflight rejects oversized archives and unsafe input paths', () => {
+  const archive = zipSync({ 'a.xml': enc('<a/>') });
+  assert.throws(
+    () => readOoxmlParts(archive, { maxArchiveBytes: archive.byteLength - 1 }),
+    (error) => error instanceof ResourceLimitError && error.resource === 'document_bytes',
+  );
+  assert.throws(() => readOoxmlParts(zipSync({ '../escape.xml': enc('<a/>') })), /unsafe OOXML part path/);
 });

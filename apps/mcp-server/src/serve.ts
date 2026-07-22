@@ -2,17 +2,20 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
-import { assertChangeSet } from '@otterpatch/core';
+import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, isResourceLimitError } from '@otterpatch/core';
 import { createModelClient, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
 import { OtterPatchRuntime, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
+import { decodeDocumentBase64 } from './document-input.js';
 
 const rt = new OtterPatchRuntime();
 const PORT = Number(process.env.OtterPatch_PORT ?? 4319);
 const HOST = '127.0.0.1';
-const DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024;
+const DEFAULT_MAX_BODY_BYTES = RESOURCE_LIMITS.httpBodyBytes;
 const parsedMaxBodyBytes = Number(process.env.OtterPatch_MAX_BODY_BYTES ?? DEFAULT_MAX_BODY_BYTES);
-const MAX_BODY_BYTES = Number.isSafeInteger(parsedMaxBodyBytes) && parsedMaxBodyBytes > 0 ? parsedMaxBodyBytes : DEFAULT_MAX_BODY_BYTES;
+const MAX_BODY_BYTES = Number.isSafeInteger(parsedMaxBodyBytes) && parsedMaxBodyBytes > 0
+  ? Math.min(parsedMaxBodyBytes, DEFAULT_MAX_BODY_BYTES)
+  : DEFAULT_MAX_BODY_BYTES;
 const AUTH_TOKEN = String(process.env.OtterPatch_TOKEN || '');
 const generatedToken = AUTH_TOKEN ? '' : randomBytes(24).toString('base64url');
 const configuredReviewToken = String(process.env.OtterPatch_REVIEW_TOKEN || '');
@@ -77,7 +80,7 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const len = Number(req.headers['content-length'] ?? 0);
     if (Number.isFinite(len) && len > MAX_BODY_BYTES) {
-      reject(new HttpError(413, `request body too large (max ${MAX_BODY_BYTES} bytes)`));
+      reject(new ResourceLimitError('http_body_bytes', MAX_BODY_BYTES, len));
       return;
     }
     const chunks: Buffer[] = [];
@@ -90,7 +93,7 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
       if (size > MAX_BODY_BYTES) {
         failed = true;
         req.pause();
-        reject(new HttpError(413, `request body too large (max ${MAX_BODY_BYTES} bytes)`));
+        reject(new ResourceLimitError('http_body_bytes', MAX_BODY_BYTES, size));
         return;
       }
       chunks.push(chunk);
@@ -205,7 +208,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
           a.proposal as ProposalEnvelope,
           a.changeSet as ChangeSet,
           a.acceptedEditIds as string[],
-          new Uint8Array(Buffer.from(String(a.fileBase64 ?? ''), 'base64')),
+          decodeDocumentBase64(a.fileBase64),
           String(a.reviewerSessionId ?? 'desktop'),
         );
         send(req, res, 200, reviewed);
@@ -214,7 +217,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       if (req.method === 'POST' && url === '/commit') {
         const a = await readBody(req);
         if (!a.proposal || !a.reviewReceipt) throw new HttpError(403, 'signed proposal and review receipt required');
-        const bytes = new Uint8Array(Buffer.from(String(a.fileBase64 ?? ''), 'base64'));
+        const bytes = decodeDocumentBase64(a.fileBase64);
         assertChangeSet(a.changeSet);
         const r = await rt.commit({
           format: String(a.format),
@@ -229,7 +232,11 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       }
       send(req, res, 404, { error: 'not found' });
     } catch (e) {
-      send(req, res, e instanceof HttpError ? e.status : 500, { error: emsg(e) });
+      if (isResourceLimitError(e)) {
+        send(req, res, e.resource === 'concurrent_model_requests' ? 429 : 413, { error: emsg(e), ...e.toJSON() });
+      } else {
+        send(req, res, e instanceof HttpError ? e.status : 500, { error: emsg(e) });
+      }
     }
   })();
 });

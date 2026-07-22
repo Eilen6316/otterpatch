@@ -2,7 +2,7 @@
  * Host dialects: Excel (A1 + setValue/setFormula) and drawio (mxCell id + add/update/delete/move).
  * Each format has its own system prompt, tool schema, and raw-proposal → ChangeSet construction.
  */
-import { proposalOperationNamesFor } from '@otterpatch/core';
+import { RESOURCE_LIMITS, ResourceLimitError, proposalOperationNamesFor } from '@otterpatch/core';
 import type { AnchorId, CellValue, ChangeSet, Edit, EditOp, EditOpKind, HostId, LogicalAnchor } from '@otterpatch/core';
 import type { HostDialect, ProposeRequest } from './model.js';
 import {
@@ -25,6 +25,12 @@ function newChangeSet(
     meta: { intent: req.intent, planSummary: plan },
     edits,
   };
+}
+
+function assertProposalItemCount(items: readonly unknown[]): void {
+  if (items.length > RESOURCE_LIMITS.changeSetEdits) {
+    throw new ResourceLimitError('changeset_edits', RESOURCE_LIMITS.changeSetEdits, items.length);
+  }
 }
 
 // ───────────────────────── Excel ─────────────────────────
@@ -66,6 +72,7 @@ function sheetOf(cell: string): string {
 function buildExcelChangeSet(req: ProposeRequest, p: ExcelProposal): ChangeSet {
   const anchors: Record<AnchorId, LogicalAnchor> = {};
   const edits: Edit[] = [];
+  assertProposalItemCount(p.edits ?? []);
   (p.edits ?? []).forEach((e, i) => {
     const aid = ('a' + i) as AnchorId;
     anchors[aid] = {
@@ -101,6 +108,7 @@ export const excelDialect: HostDialect = {
       plan: { type: 'string', description: '一句话说明你打算做什么' },
       edits: {
         type: 'array',
+        maxItems: RESOURCE_LIMITS.changeSetEdits,
         items: {
           type: 'object',
           properties: {
@@ -159,6 +167,7 @@ const defined = (o: Record<string, unknown>): Record<string, unknown> =>
 function buildDrawioChangeSet(req: ProposeRequest, p: DrawioProposal): ChangeSet {
   const anchors: Record<AnchorId, LogicalAnchor> = {};
   const edits: Edit[] = [];
+  assertProposalItemCount(p.ops ?? []);
   (p.ops ?? []).forEach((o, i) => {
     const aid = ('a' + i) as AnchorId;
     const page = o.page ?? 0;
@@ -224,6 +233,7 @@ export const drawioDialect: HostDialect = {
       plan: { type: 'string', description: '一句话说明你打算做什么' },
       ops: {
         type: 'array',
+        maxItems: RESOURCE_LIMITS.changeSetEdits,
         items: {
           type: 'object',
           properties: {
@@ -291,6 +301,7 @@ export interface WordProposal {
 function buildWordChangeSet(req: ProposeRequest, p: WordProposal): ChangeSet {
   const anchors: Record<AnchorId, LogicalAnchor> = {};
   const edits: Edit[] = [];
+  assertProposalItemCount(p.edits ?? []);
   (p.edits ?? []).forEach((e, i) => {
     const aid = ('a' + i) as AnchorId;
     const quoteText = e.quote ?? '';
@@ -353,6 +364,7 @@ export const wordDialect: HostDialect = {
       plan: { type: 'string', description: '一句话说明你打算做什么' },
       edits: {
         type: 'array',
+        maxItems: RESOURCE_LIMITS.changeSetEdits,
         items: {
           type: 'object',
           properties: {
@@ -404,6 +416,7 @@ export interface PdfProposal {
 function buildPdfChangeSet(req: ProposeRequest, p: PdfProposal): ChangeSet {
   const anchors: Record<AnchorId, LogicalAnchor> = {};
   const edits: Edit[] = [];
+  assertProposalItemCount(p.edits ?? []);
   (p.edits ?? []).forEach((e, i) => {
     const aid = ('a' + i) as AnchorId;
     anchors[aid] = {
@@ -430,6 +443,7 @@ export const pdfDialect: HostDialect = {
       plan: { type: 'string', description: '一句话说明你打算做什么' },
       edits: {
         type: 'array',
+        maxItems: RESOURCE_LIMITS.changeSetEdits,
         items: {
           type: 'object',
           properties: {
@@ -455,6 +469,7 @@ export interface PptProposal {
 function buildPptChangeSet(req: ProposeRequest, p: PptProposal): ChangeSet {
   const anchors: Record<AnchorId, LogicalAnchor> = {};
   const edits: Edit[] = [];
+  assertProposalItemCount(p.edits ?? []);
   (p.edits ?? []).forEach((e, i) => {
     const aid = ('a' + i) as AnchorId;
     anchors[aid] = {
@@ -481,6 +496,7 @@ export const pptDialect: HostDialect = {
       plan: { type: 'string', description: '一句话说明你打算做什么' },
       edits: {
         type: 'array',
+        maxItems: RESOURCE_LIMITS.changeSetEdits,
         items: {
           type: 'object',
           properties: {

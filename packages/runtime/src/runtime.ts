@@ -8,16 +8,19 @@
  * Writeback backends are routed by format: excel/xlsx → surgical OOXML (Univer compiler);
  * drawio → single-XML surgical edit.
  */
-import { Agent, buildDocVerifier, buildDrawioVerifier } from '@otterpatch/agent';
+import { Agent, assertProposeRequestBudget, buildDocVerifier, buildDrawioVerifier } from '@otterpatch/agent';
 import type { AgentResponse, ChangeSetVerifier, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from '@otterpatch/agent';
 import type { ApprovalPolicy, ChangeSet, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
 import {
   CAPABILITY_MANIFEST_VERSION,
   DEFAULT_POLICY,
+  RESOURCE_LIMITS,
+  ResourceLimitError,
   assertChangeSet,
   assertFormatCapabilities,
   capabilityManifests,
   decideApproval,
+  isResourceLimitError,
 } from '@otterpatch/core';
 import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
 import { buildXlsxCompiler, buildGridVerifier } from '@otterpatch/adapter-univer';
@@ -49,6 +52,7 @@ export interface OtterPatchRuntimeOptions {
   reviewSecret?: string | Uint8Array;
   reviewTtlMs?: number;
   approvalPolicy?: ApprovalPolicy;
+  maxConcurrentModelRequests?: number;
 }
 
 export class OtterPatchRuntime {
@@ -60,7 +64,9 @@ export class OtterPatchRuntime {
   private readonly reviewAuthority: ReviewAuthority;
   private readonly allowUnreviewedCommit: boolean;
   private readonly approvalPolicy: ApprovalPolicy;
-  private readonly usedReviewNonces = new Set<string>();
+  private readonly maxConcurrentModelRequests: number;
+  private activeModelRequests = 0;
+  private readonly usedReviewNonces = new Map<string, number>();
   private readonly committedSources = new Map<string, number>();
   private readonly commitTails = new Map<string, Promise<void>>();
 
@@ -69,6 +75,10 @@ export class OtterPatchRuntime {
     this.reviewAuthority = new ReviewAuthority(opts.reviewSecret, opts.reviewTtlMs);
     this.allowUnreviewedCommit = opts.allowUnreviewedCommit ?? false;
     this.approvalPolicy = opts.approvalPolicy ?? DEFAULT_POLICY;
+    this.maxConcurrentModelRequests = opts.maxConcurrentModelRequests ?? RESOURCE_LIMITS.concurrentModelRequests;
+    if (!Number.isSafeInteger(this.maxConcurrentModelRequests) || this.maxConcurrentModelRequests <= 0 || this.maxConcurrentModelRequests > RESOURCE_LIMITS.concurrentModelRequests) {
+      throw new ResourceLimitError('concurrent_model_requests', RESOURCE_LIMITS.concurrentModelRequests, this.maxConcurrentModelRequests);
+    }
     this.verifiers = {
       excel: (req) => (req.sheet ? buildGridVerifier(req.sheet) : undefined),
       xlsx: (req) => (req.sheet ? buildGridVerifier(req.sheet) : undefined),
@@ -126,6 +136,8 @@ export class OtterPatchRuntime {
 
   /** Intent → constrained ChangeSet (injects the built-in skill library; BYOK model supplied by the caller). */
   async propose(req: ProposeRequest, model: ModelClient): Promise<ChangeSet> {
+    assertProposeRequestBudget(req);
+    const release = this.acquireModelSlot();
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
       const agent = new Agent(model, undefined, this.skills);
@@ -137,6 +149,8 @@ export class OtterPatchRuntime {
     } catch (err) {
       this.emit({ type: 'error', stage: 'propose', message: errMsg(err) });
       throw err;
+    } finally {
+      release();
     }
   }
 
@@ -150,6 +164,8 @@ export class OtterPatchRuntime {
 
   /** Smart routing: the model decides on its own whether to answer a question or propose changes. */
   async respond(req: ProposeRequest, model: ModelClient): Promise<AgentResponse> {
+    assertProposeRequestBudget(req);
+    const release = this.acquireModelSlot();
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
       const agent = new Agent(model, undefined, this.skills);
@@ -161,11 +177,15 @@ export class OtterPatchRuntime {
     } catch (err) {
       this.emit({ type: 'error', stage: 'propose', message: errMsg(err) });
       throw err;
+    } finally {
+      release();
     }
   }
 
   /** Streaming routing: emits reasoning/answer deltas via onEvent. */
   async respondStream(req: ProposeRequest, model: ModelClient, onEvent: (e: StreamEvent) => void): Promise<AgentResponse> {
+    assertProposeRequestBudget(req);
+    const release = this.acquireModelSlot();
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
       const agent = new Agent(model, undefined, this.skills);
@@ -177,6 +197,8 @@ export class OtterPatchRuntime {
     } catch (err) {
       this.emit({ type: 'error', stage: 'propose', message: errMsg(err) });
       throw err;
+    } finally {
+      release();
     }
   }
 
@@ -218,6 +240,7 @@ export class OtterPatchRuntime {
     }
     let acceptedEditIds: string[];
     let receiptNonce: string | undefined;
+    let receiptExpiresAt: number | undefined;
     if (input.proposal && input.reviewReceipt) {
       acceptedEditIds = this.reviewAuthority.verifyForCommit(
         input.proposal,
@@ -228,6 +251,7 @@ export class OtterPatchRuntime {
         input.acceptedEditIds,
       );
       receiptNonce = input.reviewReceipt.nonce;
+      receiptExpiresAt = Date.parse(input.reviewReceipt.expiresAt);
     } else {
       if (!this.allowUnreviewedCommit) throw new Error('commit requires a signed proposal and review receipt');
       if (!input.acceptedEditIds) throw new Error('unreviewed commit requires explicit acceptedEditIds');
@@ -246,7 +270,10 @@ export class OtterPatchRuntime {
       return await this.withDocumentLock(documentKey, async () => {
         if (receiptNonce && this.usedReviewNonces.has(receiptNonce)) throw new Error('review receipt has already been used');
         if (this.committedSources.has(sourceKey)) throw new Error('source file has already been committed; regenerate the proposal from the latest file');
-        if (receiptNonce) this.usedReviewNonces.add(receiptNonce);
+        if (this.committedSources.size >= 10_000) {
+          throw new ResourceLimitError('committed_source_cache_entries', 10_000, this.committedSources.size + 1, 'Restart the short-lived runtime before accepting more documents.');
+        }
+        if (receiptNonce) this.consumeReviewNonce(receiptNonce, receiptExpiresAt!);
         const before: DocHandle = { hostId: cs.hostId, bytes: input.bytes, rev: cs.baseRev };
         const res = await this.commitWithFallback(backends, input.format, cs, before);
         if (res.ok) this.rememberCommittedSource(sourceKey);
@@ -288,6 +315,7 @@ export class OtterPatchRuntime {
         partial = withFallback;
         failures.push(`${backend.id}: partial writeback`);
       } catch (error) {
+        if (isResourceLimitError(error)) throw error;
         failures.push(`${backend.id}: ${errMsg(error)}`);
       }
     }
@@ -312,9 +340,38 @@ export class OtterPatchRuntime {
 
   private rememberCommittedSource(key: string): void {
     this.committedSources.set(key, Date.now());
-    if (this.committedSources.size <= 10_000) return;
-    const oldest = this.committedSources.keys().next().value as string | undefined;
-    if (oldest) this.committedSources.delete(oldest);
+  }
+
+  private acquireModelSlot(): () => void {
+    if (this.activeModelRequests >= this.maxConcurrentModelRequests) {
+      throw new ResourceLimitError(
+        'concurrent_model_requests',
+        this.maxConcurrentModelRequests,
+        this.activeModelRequests + 1,
+        'Wait for an active model request to finish before retrying.',
+      );
+    }
+    this.activeModelRequests++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.activeModelRequests--;
+    };
+  }
+
+  private consumeReviewNonce(nonce: string, expiresAt: number): void {
+    const limit = 10_000;
+    if (this.usedReviewNonces.size >= limit) {
+      const now = Date.now();
+      for (const [usedNonce, expiry] of this.usedReviewNonces) {
+        if (expiry < now) this.usedReviewNonces.delete(usedNonce);
+      }
+    }
+    if (this.usedReviewNonces.size >= limit) {
+      throw new ResourceLimitError('review_nonce_cache_entries', limit, this.usedReviewNonces.size + 1, 'Wait for expired review receipts to be pruned.');
+    }
+    this.usedReviewNonces.set(nonce, expiresAt);
   }
 }
 

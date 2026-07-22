@@ -15,10 +15,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import type { ChangeSet, DocRev } from '@otterpatch/core';
-import { assertChangeSet } from '@otterpatch/core';
+import { assertChangeSet, isResourceLimitError } from '@otterpatch/core';
 import { createModelClient, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
 import { OtterPatchRuntime, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
+import { decodeDocumentBase64 } from './document-input.js';
 
 const allowUnreviewedCommit = process.env.OTTERPATCH_ALLOW_UNREVIEWED_COMMIT === '1';
 const rt = new OtterPatchRuntime({ allowUnreviewedCommit });
@@ -27,6 +28,9 @@ rt.on((e) => process.stderr.write('[otterpatch] ' + JSON.stringify(e) + '\n'));
 const ok = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] });
 const fail = (msg: string) => ({ content: [{ type: 'text' as const, text: msg }], isError: true });
 const emsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+const failWith = (stage: string, error: unknown) => isResourceLimitError(error)
+  ? fail(JSON.stringify({ error: `${stage} failed`, message: emsg(error), ...error.toJSON() }))
+  : fail(`${stage} failed: ${emsg(error)}`);
 
 const server = new McpServer({ name: 'otterpatch', version: '0.0.1' });
 
@@ -79,7 +83,7 @@ server.registerTool(
       if (r.kind === 'clarify') return ok({ questions: r.questions });
       return ok({ changeSet: r.changeSet, diff: rt.diff(r.changeSet), proposal: rt.createProposal(r.changeSet, a.format, a.documentId ?? r.changeSet.hostId) });
     } catch (e) {
-      return fail('propose failed: ' + emsg(e));
+      return failWith('propose', e);
     }
   },
 );
@@ -93,7 +97,7 @@ server.registerTool(
       assertChangeSet(changeSet);
       return ok(rt.diff(changeSet));
     } catch (e) {
-      return fail('diff failed: ' + emsg(e));
+      return failWith('diff', e);
     }
   },
 );
@@ -114,7 +118,7 @@ server.registerTool(
   },
   async (a) => {
     try {
-      const bytes = new Uint8Array(Buffer.from(a.fileBase64, 'base64'));
+      const bytes = decodeDocumentBase64(a.fileBase64);
       const changeSet = JSON.parse(a.changeSet) as ChangeSet;
       const proposal = a.proposal ? JSON.parse(a.proposal) as ProposalEnvelope : undefined;
       const reviewReceipt = a.reviewReceipt ? JSON.parse(a.reviewReceipt) as ReviewReceipt : undefined;
@@ -129,7 +133,7 @@ server.registerTool(
       });
       return ok({ ok: res.ok, ...(res.ok ? { fileBase64: Buffer.from(res.bytes).toString('base64') } : { partialFileBase64: Buffer.from(res.bytes).toString('base64') }), touchedParts: res.touchedParts, fidelity: res.fidelity, ...(res.appliedEditIds ? { appliedEditIds: res.appliedEditIds } : {}), ...(res.droppedEdits ? { droppedEdits: res.droppedEdits } : {}) });
     } catch (e) {
-      return fail('commit failed: ' + emsg(e));
+      return failWith('commit', e);
     }
   },
 );

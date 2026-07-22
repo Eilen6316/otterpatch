@@ -49,6 +49,9 @@ try {
     body: oversizeBody,
   });
   assert.equal(oversize.status, 413);
+  const oversizeError = await oversize.json();
+  assert.equal(oversizeError.code, 'RESOURCE_LIMIT_EXCEEDED');
+  assert.equal(oversizeError.resource, 'http_body_bytes');
 
   const unsignedReview = await fetch(`http://127.0.0.1:${port}/review`, {
     method: 'POST',

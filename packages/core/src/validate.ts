@@ -1,4 +1,5 @@
 import type { ChangeSet } from './changeset.js';
+import { RESOURCE_LIMITS, ResourceLimitError, assertA1RangeBudget, assertJsonBudget } from './limits.js';
 
 const OP_FAMILIES: Record<string, string> = {
   setValue: 'value',
@@ -40,6 +41,7 @@ const VALIDATION_RULES = new Set(['list', 'numberBetween', 'numberGreaterThan', 
 const TABLE_INSERT_AT = new Set(['before', 'after', 'end']);
 
 export function assertChangeSet(value: unknown): asserts value is ChangeSet {
+  assertJsonBudget(value, 'changeset');
   if (!isRecord(value)) throw new Error('invalid ChangeSet: expected object');
   const cs = value as Partial<ChangeSet>;
   if (!nonEmpty(cs.id)) throw new Error('invalid ChangeSet: id required');
@@ -48,10 +50,18 @@ export function assertChangeSet(value: unknown): asserts value is ChangeSet {
   assertMeta(cs.meta);
   assertOrigin(cs.origin);
   if (!isRecord(cs.anchors)) throw new Error('invalid ChangeSet: anchors object required');
-  for (const [id, anchor] of Object.entries(cs.anchors)) assertAnchor(id, anchor, cs.hostId, cs.baseRev);
+  const anchorEntries = Object.entries(cs.anchors);
+  if (anchorEntries.length > RESOURCE_LIMITS.changeSetAnchors) {
+    throw new ResourceLimitError('changeset_anchors', RESOURCE_LIMITS.changeSetAnchors, anchorEntries.length);
+  }
+  for (const [id, anchor] of anchorEntries) assertAnchor(id, anchor, cs.hostId, cs.baseRev);
   if (!Array.isArray(cs.edits)) throw new Error('invalid ChangeSet: edits array required');
+  if (cs.edits.length > RESOURCE_LIMITS.changeSetEdits) {
+    throw new ResourceLimitError('changeset_edits', RESOURCE_LIMITS.changeSetEdits, cs.edits.length);
+  }
 
   const seen = new Set<string>();
+  let totalTouchedCells = 0;
   for (const edit of cs.edits as unknown[]) {
     if (!isRecord(edit)) throw new Error('invalid ChangeSet: edit must be object');
     if (!nonEmpty(edit.id)) throw new Error('invalid ChangeSet: edit id required');
@@ -62,6 +72,14 @@ export function assertChangeSet(value: unknown): asserts value is ChangeSet {
     const op = edit.op;
     if (!isRecord(op)) throw new Error('invalid ChangeSet: edit op required');
     assertOp(op);
+    const anchor = (cs.anchors as unknown as Record<string, unknown>)[edit.target];
+    if (isRecord(anchor) && isRecord(anchor.portable) && anchor.portable.kind === 'grid') {
+      const cells = assertA1RangeBudget(String(anchor.portable.a1));
+      totalTouchedCells += cells;
+      if (totalTouchedCells > RESOURCE_LIMITS.totalTouchedCells) {
+        throw new ResourceLimitError('total_touched_cells', RESOURCE_LIMITS.totalTouchedCells, totalTouchedCells);
+      }
+    }
     if (edit.inverse !== undefined) {
       if (!isRecord(edit.inverse)) throw new Error('invalid ChangeSet: inverse op must be object');
       assertOp(edit.inverse);

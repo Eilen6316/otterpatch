@@ -9,9 +9,8 @@
  *  - If the target cell does not exist, insert a new <c> (creating a <row> if needed) instead of throwing.
  *  - Strings use inlineStr (sharedStrings untouched); formulas write <f> without a cached value (Excel recalculates on open).
  */
-import { unzipSync } from 'fflate';
-import { supportsFormatOperation, type CellValue, type ChangeSet, type EditId, type LogicalAnchor } from '@otterpatch/core';
-import type { OoxmlParts, OoxmlPatchResult } from '@otterpatch/writeback-surgical';
+import { assertA1RangeBudget, supportsFormatOperation, type CellValue, type ChangeSet, type EditId, type LogicalAnchor } from '@otterpatch/core';
+import { readOoxmlParts, type OoxmlParts, type OoxmlPatchResult } from '@otterpatch/writeback-surgical';
 import { XlsxStyles, type AbstractCellStyle } from './xlsx-styles.js';
 
 const dec = new TextDecoder();
@@ -40,6 +39,7 @@ function parseRef(ref: string): { col: number; row: number } {
 }
 /** A1 or A1:B3 → list of cell refs (ranges expanded row by row, column by column). */
 function expandCells(a1: string): string[] {
+  assertA1RangeBudget(a1);
   const [from, to] = a1.split(':');
   if (!to) {
     const a = parseRef(from!);
@@ -218,7 +218,7 @@ function resolveStylesPath(parts: OoxmlParts): string | null {
 /** Build the Excel OoxmlPatchCompiler: ChangeSet → sheet/styles XML patches + per-edit report. */
 export function buildXlsxCompiler() {
   return async function compile(cs: ChangeSet, original: Uint8Array): Promise<OoxmlPatchResult> {
-    const parts = unzipSync(original);
+    const parts = readOoxmlParts(original);
     const sheetCache = new Map<string, string>();
     const applied: EditId[] = [];
     const dropped: Array<{ editId: EditId; reason: string }> = [];

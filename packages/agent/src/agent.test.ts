@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { DocRev } from '@otterpatch/core';
+import { RESOURCE_LIMITS, ResourceLimitError, type DocRev } from '@otterpatch/core';
 import { Agent, ConventionStack, EXCEL_OPS, MockModelClient, OpenAICompatModelClient, conventionFromMarkdown, createModelClient, excelDialect, normalizeMessages, PROVIDERS, wordDialect, type Provider } from './index.js';
 import { defaultLibrary } from '@otterpatch/skills';
 
@@ -223,5 +223,34 @@ test('OpenAI forced proposal rejects truncated tool args', async () => {
   await assert.rejects(
     () => client.proposeChangeSet({ hostId: 'h1', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' }, excelDialect),
     /truncated|截断|输出/i,
+  );
+});
+
+test('model clients enforce output-token and provider-timeout budgets', () => {
+  assert.throws(
+    () => new OpenAICompatModelClient({ apiKey: 'x', model: 'test', maxTokens: RESOURCE_LIMITS.maxOutputTokens + 1 }),
+    (error) => error instanceof ResourceLimitError && error.resource === 'max_output_tokens',
+  );
+  assert.throws(
+    () => new OpenAICompatModelClient({ apiKey: 'x', model: 'test', timeoutMs: RESOURCE_LIMITS.providerTimeoutMaxMs + 1 }),
+    (error) => error instanceof ResourceLimitError && error.resource === 'provider_timeout_ms',
+  );
+});
+
+test('OpenAI client rejects oversized model output before JSON salvage', async () => {
+  const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'test-model' }) as unknown as {
+    client: { chat: { completions: { create: () => Promise<unknown> } } };
+    proposeChangeSet: OpenAICompatModelClient['proposeChangeSet'];
+  };
+  client.client = {
+    chat: {
+      completions: {
+        create: async () => ({ choices: [{ message: { tool_calls: [{ type: 'function', function: { arguments: 'x'.repeat(RESOURCE_LIMITS.modelOutputChars + 1) } }] } }] }),
+      },
+    },
+  };
+  await assert.rejects(
+    () => client.proposeChangeSet({ hostId: 'h1', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' }, excelDialect),
+    (error) => error instanceof ResourceLimitError && error.resource === 'model_output_chars',
   );
 });

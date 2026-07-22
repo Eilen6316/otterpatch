@@ -4,7 +4,7 @@
  * selected by ProposeRequest.format. Model implementations (Claude/OpenAI-compatible/Mock) only do
  * "call model per dialect → get raw proposal → dialect.buildChangeSet"; the model never emits OOXML/XML directly.
  */
-import type { ChangeSet, DocRev, LogicalAnchor, VerifyReport } from '@otterpatch/core';
+import { assertChangeSet, type ChangeSet, type DocRev, type LogicalAnchor, type VerifyReport } from '@otterpatch/core';
 
 export interface ProposeRequest {
   hostId: string;
@@ -80,10 +80,13 @@ export interface ModelClient {
 export class MockModelClient implements ModelClient {
   constructor(private readonly fn: (req: ProposeRequest) => unknown) {}
   async proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet> {
-    return dialect.buildChangeSet(req, this.fn(req));
+    const changeSet = dialect.buildChangeSet(req, this.fn(req));
+    assertChangeSet(changeSet);
+    return changeSet;
   }
   async respond(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Promise<AgentResponse> {
     const cs = dialect.buildChangeSet(req, this.fn(req));
+    assertChangeSet(cs);
     if (opts?.verify) {
       const v = await opts.verify(cs);
       if (!v.ok) return { kind: 'answer', text: 'Proposal verification failed.\\n' + v.report };

@@ -3,9 +3,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregate, auxToolDefs, currentRequestMessage, execSheetTool, parseClarify, readRange, respondSystem, type SheetData } from './sheet-tools.js';
+import { aggregate, auxToolDefs, currentRequestMessage, execReadTool, execSheetTool, parseClarify, readRange, recentHistory, respondSystem, type SheetData } from './sheet-tools.js';
 import { wordDialect } from './dialects.js';
-import type { DocRev } from '@otterpatch/core';
+import { RESOURCE_LIMITS, ResourceLimitError, type DocRev } from '@otterpatch/core';
 
 const SHEET: SheetData = {
   a1: 'A1:C4',
@@ -37,6 +37,29 @@ test('readRange:按 A1 区域取精确值,空格标 (空)', () => {
 
 test('readRange:strip sheet 限定符与 $ 绝对引用', () => {
   assert.match(readRange(SHEET, 'Sheet1!$B$2'), /B2=2/);
+});
+
+test('readRange rejects oversized areas and returns a structured tool error', () => {
+  assert.throws(
+    () => readRange(SHEET, 'A1:XFD1048576'),
+    (error) => error instanceof ResourceLimitError && error.resource === 'read_range_cells',
+  );
+  const result = execReadTool('read_range', { a1: 'A1:XFD1048576' }, { sheet: SHEET });
+  assert.match(result, /RESOURCE_LIMIT_EXCEEDED/);
+  assert.match(result, /smaller batches/);
+});
+
+test('request context and history have fixed character budgets', () => {
+  const base = { hostId: 'h', format: 'word', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' };
+  assert.throws(
+    () => currentRequestMessage({ ...base, context: 'x'.repeat(RESOURCE_LIMITS.documentContextChars + 1) }),
+    (error) => error instanceof ResourceLimitError && error.resource === 'document_context_chars',
+  );
+  const history = recentHistory({
+    ...base,
+    history: Array.from({ length: 12 }, (_, index) => ({ role: index % 2 ? 'assistant' as const : 'user' as const, content: 'x'.repeat(20_000) })),
+  });
+  assert.equal(history.reduce((total, message) => total + message.content.length, 0), RESOURCE_LIMITS.historyChars);
 });
 
 test('aggregate:整列求和/计数跳过表头', () => {

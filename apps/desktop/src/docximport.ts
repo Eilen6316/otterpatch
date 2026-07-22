@@ -5,7 +5,8 @@
  * 段落(pStyle 标题/对齐/行距)+ run(加粗/斜体/下划线/删除线/字号/字体/颜色/高亮)。
  * 顶层表格保留二维结构并渲染为真实 HTML table;图片/脚注等复杂构件仍显式报告降级。
  */
-import { unzipSync, strFromU8 } from 'fflate';
+import { strFromU8 } from 'fflate';
+import { readOoxmlParts } from '@otterpatch/writeback-surgical';
 
 const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] ?? c));
 const xmlCodePoint = (raw: string, radix: number): string => {
@@ -114,7 +115,7 @@ export interface DocxImport { html: string; skipped: string[] }
 
 /** .docx 字节 → { html, skipped }。抛错=不是合法 docx。 */
 export function docxToHtml(bytes: Uint8Array): DocxImport {
-  const files = unzipSync(bytes);
+  const files = readOoxmlParts(bytes);
   const doc = files['word/document.xml'];
   if (!doc) throw new Error('不是合法的 .docx(缺 word/document.xml)');
   const xml = strFromU8(doc);

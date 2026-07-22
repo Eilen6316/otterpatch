@@ -167,6 +167,13 @@ test('xlsx writeback: invalid A1 is dropped instead of falling back to A1', asyn
   assert.deepEqual(res.touchedParts, []);
 });
 
+test('xlsx writeback: rejects oversized ranges before expanding cell addresses', async () => {
+  const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
+  const res = await wb.commit(csOp({ family: 'value', kind: 'setValue', value: 7 }, 'Sheet1!A1:XFD1048576'), { hostId: 'h1', bytes: makeXlsx(), rev: 0 as DocRev });
+  assert.equal(res.ok, false);
+  assert.match(res.droppedEdits?.[0]?.reason ?? '', /resource limit exceeded: range_cells/);
+});
+
 test('xlsx writeback: explicit missing sheet is dropped instead of falling back to sheet1', async () => {
   const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
   const res = await wb.commit(csOp({ family: 'value', kind: 'setValue', value: 7 }, 'Missing!B1'), { hostId: 'h1', bytes: makeXlsx(), rev: 0 as DocRev });

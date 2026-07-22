@@ -324,3 +324,25 @@ test('runtime: built-in capability gate rejects proposals that cannot be written
   assert.throws(() => rt.createProposal(unsupported, 'excel'), /does not allow propose for op insertRows/);
   assert.equal(rt.capabilities().version, 'capabilities-v1');
 });
+
+test('runtime: caps concurrent model requests per runtime session', async () => {
+  const rt = new OtterPatchRuntime({ maxConcurrentModelRequests: 1 });
+  let unblock!: () => void;
+  let started!: () => void;
+  const startedPromise = new Promise<void>((resolve) => { started = resolve; });
+  const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+  const model: ModelClient = {
+    proposeChangeSet: async () => singleCellChangeSet('unused'),
+    respond: async () => {
+      started();
+      await blocked;
+      return { kind: 'answer', text: 'done' };
+    },
+  };
+  const request: ProposeRequest = { hostId: 'h', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' };
+  const first = rt.respond(request, model);
+  await startedPromise;
+  await assert.rejects(() => rt.respond(request, model), /concurrent_model_requests/);
+  unblock();
+  assert.deepEqual(await first, { kind: 'answer', text: 'done' });
+});

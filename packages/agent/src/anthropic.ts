@@ -8,9 +8,9 @@
  * Default model claude-opus-4-8; if apiKey is omitted, reads ANTHROPIC_API_KEY; baseURL can be overridden for China routes.
  */
 import Anthropic from '@anthropic-ai/sdk';
-import type { ChangeSet } from '@otterpatch/core';
+import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, type ChangeSet } from '@otterpatch/core';
 import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
-import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, execReadTool, parseClarify, proposalSystem, recentHistory, respondSystem } from './sheet-tools.js';
+import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, execReadTool, limitToolResult, parseClarify, proposalSystem, recentHistory, respondSystem, validMaxTokens, validProviderTimeout } from './sheet-tools.js';
 import { NUDGE_DIRECT, NUDGE_TOOLIFY, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
 import { salvageProposalArgs, salvageText } from './json-salvage.js';
 
@@ -21,6 +21,13 @@ export interface AnthropicOptions {
   model?: string; // default claude-opus-4-8
   baseURL?: string; // override for China routes / proxies
   maxTokens?: number;
+  timeoutMs?: number;
+}
+
+function assertModelOutputChars(actual: number): void {
+  if (actual > RESOURCE_LIMITS.modelOutputChars) {
+    throw new ResourceLimitError('model_output_chars', RESOURCE_LIMITS.modelOutputChars, actual, 'Ask the model to return a smaller batch.');
+  }
 }
 
 /** Normalize history: drop empties, merge adjacent same-role messages, strip leading assistant turns (Anthropic requires user-first, alternating roles). */
@@ -45,9 +52,10 @@ export class AnthropicModelClient implements ModelClient {
   private readonly maxTokens: number;
 
   constructor(opts: AnthropicOptions = {}) {
-    this.client = new Anthropic({ apiKey: opts.apiKey, baseURL: opts.baseURL });
+    const timeout = validProviderTimeout(opts.timeoutMs);
+    this.client = new Anthropic({ apiKey: opts.apiKey, baseURL: opts.baseURL, timeout });
     this.model = opts.model ?? 'claude-opus-4-8';
-    this.maxTokens = opts.maxTokens ?? 8192;
+    this.maxTokens = validMaxTokens(opts.maxTokens);
   }
 
   private toolset(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Anthropic.Tool[] {
@@ -57,7 +65,7 @@ export class AnthropicModelClient implements ModelClient {
   /** Unified read-only tool execution: give extraTools (e.g. load_skill) first shot, then route to sheet/doc data fetching. */
   private execTool(name: string, input: unknown, req: ProposeRequest, opts?: RespondOptions): string {
     const ex = opts?.extraTools?.exec(name, input);
-    if (ex !== null && ex !== undefined) return ex;
+    if (ex !== null && ex !== undefined) return limitToolResult(ex);
     return execReadTool(name, (input ?? {}) as Record<string, unknown>, req);
   }
   private initMessages(req: ProposeRequest): Anthropic.MessageParam[] {
@@ -84,7 +92,10 @@ export class AnthropicModelClient implements ModelClient {
     if (!block || block.type !== 'tool_use') {
       throw new Error(`AnthropicModelClient: model did not call ${dialect.toolName}`);
     }
-    return dialect.buildChangeSet(req, block.input);
+    assertModelOutputChars(JSON.stringify(block.input).length);
+    const changeSet = dialect.buildChangeSet(req, block.input);
+    assertChangeSet(changeSet);
+    return changeSet;
   }
 
   /** Smart routing + multi-step loop: answer_user / read_range / aggregate; shadow-verify proposals and feed failures back for repair (propose→observe→repair). */
@@ -99,6 +110,7 @@ export class AnthropicModelClient implements ModelClient {
       const res = await this.client.messages.create({ model: this.model, max_tokens: this.maxTokens, system, messages, tools, tool_choice: { type: 'auto' } });
       const text = res.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map((b) => b.text).join('');
       const toolUses = res.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+      assertModelOutputChars(text.length + toolUses.reduce((total, tool) => total + JSON.stringify(tool.input).length, 0));
       if (!toolUses.length) {
         // No tool call this turn: empty text → nudge to produce a result; non-empty prose →
         // "prose proposal" failure mode, nudge once to toolify it (routing contract: every
@@ -110,6 +122,7 @@ export class AnthropicModelClient implements ModelClient {
       const propose = toolUses.find((b) => b.name === dialect.toolName);
       if (propose) {
         const cs = dialect.buildChangeSet(req, propose.input);
+        assertChangeSet(cs);
         if (opts?.verify) {
           const v = await opts.verify(cs);
           if (!v.ok) {
@@ -148,6 +161,7 @@ export class AnthropicModelClient implements ModelClient {
     for (let step = 0; step < STEP_LIMIT; step++) {
       const stream = await this.client.messages.create({ model: this.model, max_tokens: this.maxTokens, system, messages, tools, tool_choice: { type: 'auto' }, stream: true });
       let text = '';
+      let outputChars = 0;
       const acc: Record<number, { id: string; name: string; json: string }> = {};
       for await (const ev of stream) {
         if (ev.type === 'content_block_start') {
@@ -156,15 +170,21 @@ export class AnthropicModelClient implements ModelClient {
         } else if (ev.type === 'content_block_delta') {
           const d = ev.delta;
           if (d.type === 'text_delta') {
+            outputChars += d.text.length;
+            assertModelOutputChars(outputChars);
             text += d.text;
             onEvent({ type: 'answer', delta: d.text });
           } else if (d.type === 'input_json_delta') {
             const a = acc[ev.index];
             if (a) {
+              outputChars += d.partial_json.length;
+              assertModelOutputChars(outputChars);
               a.json += d.partial_json;
               if (dialect.format === 'drawio' && a.name === dialect.toolName) onEvent({ type: 'draft', delta: d.partial_json });
             }
           } else if (d.type === 'thinking_delta') {
+            outputChars += d.thinking.length;
+            assertModelOutputChars(outputChars);
             onEvent({ type: 'reasoning', delta: d.thinking });
           }
         }
@@ -190,6 +210,7 @@ export class AnthropicModelClient implements ModelClient {
           continue;
         }
         const cs = dialect.buildChangeSet(req, parsed);
+        assertChangeSet(cs);
         if (opts?.verify) {
           onEvent({ type: 'tool', name: 'verify' });
           const v = await opts.verify(cs);

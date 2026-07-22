@@ -15,6 +15,7 @@
     "app:pack": "npm run build && electron-builder"
   },
   "dependencies": {
+    "@otterpatch/writeback-surgical": "0.0.1",
     "@univerjs/preset-sheets-core": "^0.25.1",
     "@univerjs/presets": "^0.25.1",
     "echarts": "^6.1.0",
