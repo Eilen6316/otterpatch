@@ -41,3 +41,12 @@ test('instructionsFor:能按名拉到手册正文(GB/T 9704 内容在)', () => {
   assert.match(md, /仿宋/);
   assert.equal(lib.instructionsFor('不存在'), undefined);
 });
+
+test('playbook instructions stay inside current writeback capabilities', () => {
+  const lib = defaultLibrary();
+  assert.doesNotMatch(lib.instructionsFor('docx-gongwen') ?? '', /all=true/);
+  assert.doesNotMatch(lib.instructionsFor('docx-conventions') ?? '', /all=true/);
+  assert.doesNotMatch(lib.instructionsFor('xlsx-authoring') ?? '', /freeze 表头、开 filter;录入区加 dataValidation/);
+  assert.match(lib.instructionsFor('chart-selection') ?? '', /不能创建或修改图表/);
+  assert.match(lib.instructionsFor('pptx-design') ?? '', /仅支持页内唯一、且完整位于单个文本 run/);
+});

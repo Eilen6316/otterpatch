@@ -174,7 +174,10 @@ export class OtterPatchRuntime {
     const release = this.acquireModelSlot();
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
-      const agent = new Agent(model, undefined, this.skills);
+      const agent = new Agent(model, undefined, this.skills, undefined, {
+        approvalPolicy: this.approvalPolicy,
+        allowUnreviewedCommit: this.allowUnreviewedCommit,
+      });
       const r = await agent.respond(req, this.verifyOpts(req));
       if (r.kind !== 'changeset') throw new Error(r.kind === 'answer' ? r.text : 'proposal requires clarification');
       const cs = r.changeSet;
@@ -202,7 +205,10 @@ export class OtterPatchRuntime {
     const release = this.acquireModelSlot();
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
-      const agent = new Agent(model, undefined, this.skills);
+      const agent = new Agent(model, undefined, this.skills, undefined, {
+        approvalPolicy: this.approvalPolicy,
+        allowUnreviewedCommit: this.allowUnreviewedCommit,
+      });
       const r = await agent.respond(req, this.verifyOpts(req));
       if (r.kind === 'changeset') {
         this.emit({ type: 'propose:done', changeSetId: r.changeSet.id, editCount: r.changeSet.edits.length, ...(r.changeSet.meta.planSummary ? { planSummary: r.changeSet.meta.planSummary } : {}) });
@@ -222,7 +228,10 @@ export class OtterPatchRuntime {
     const release = this.acquireModelSlot();
     this.emit({ type: 'propose:start', format: req.format, intent: req.intent });
     try {
-      const agent = new Agent(model, undefined, this.skills);
+      const agent = new Agent(model, undefined, this.skills, undefined, {
+        approvalPolicy: this.approvalPolicy,
+        allowUnreviewedCommit: this.allowUnreviewedCommit,
+      });
       const r = await agent.respondStream(req, onEvent, this.verifyOpts(req));
       if (r.kind === 'changeset') {
         this.emit({ type: 'propose:done', changeSetId: r.changeSet.id, editCount: r.changeSet.edits.length, ...(r.changeSet.meta.planSummary ? { planSummary: r.changeSet.meta.planSummary } : {}) });

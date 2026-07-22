@@ -17,7 +17,7 @@ keywords: [公文, 通知, 红头, 党政, 机关, 发文, gb/t 9704, 9704, 仿�
 
 ## changeset 惯用法
 - 【第一刀永远是公文标题】一条 edit 同时给足五个字段:block=h1 + font=宋体 + size=22 + bold=true + align=center(字符级与段落级可以合在同一条格式 edit 里)——只给 block 不给居中/字号是最常见的半成品,居中是公文标题的硬性要求
-- 全文正文规范化:setStyle all=true(font=仿宋, size=16, lineSpacing=1.5)一次落定 —— 但先确认标题已用 block 套好层级,否则 all=true 会把标题也拉平
+- 全文正文规范化:当前后端不支持无锚点的全文字符格式;先识别标题与正文,再按段落分批生成 scope=paragraph 的 setStyle,每段保留可审阅锚点
 - 层级序号体系必须是:一、→(一)→ 1. →(1),不得混用"1、""(1)."等杂糅体;发现杂糅先用 replaceText 统一序号,再 setStyle 定字体
 - 标点:中文公文一律全角标点;"的、地、得"用法与"截止/截至"等易错词顺手修正(replaceText,一处一条)
 

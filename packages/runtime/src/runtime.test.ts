@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync } from 'fflate';
-import type { AnchorId, ChangeSet, DocRev, HostId, WritebackBackend, WritebackId } from '@otterpatch/core';
+import { STRICT_POLICY, type AnchorId, type ChangeSet, type DocRev, type HostId, type WritebackBackend, type WritebackId } from '@otterpatch/core';
 import { MockModelClient, type ModelClient, type ProposeRequest, type RespondOptions, type AgentResponse } from '@otterpatch/agent';
 import { comparePartsIntegrity, readOoxmlParts } from '@otterpatch/writeback-surgical';
 import { OtterPatchRuntime } from './runtime.js';
@@ -221,6 +221,24 @@ test('runtime: verifyOpts 给 word/drawio/pptx 挂上分级检查、未注册格
   assert.ok(captured[1]?.verify, 'drawio 也应挂上 verify(拓扑完整性自检)');
   assert.ok(captured[2]?.verify, 'pptx 应挂上 verify(页内唯一且单 run)');
   assert.equal(captured[3]?.verify, undefined, '未注册校验器的格式(pdf)不挂');
+});
+
+test('runtime passes its actual approval mode into the trusted Agent capability block', async () => {
+  const rt = new OtterPatchRuntime({ approvalPolicy: STRICT_POLICY, allowUnreviewedCommit: true });
+  let system = '';
+  const model: ModelClient = {
+    proposeChangeSet: async () => { throw new Error('unused'); },
+    respond: async (_req, dialect) => {
+      system = dialect.systemPrompt;
+      return { kind: 'answer', text: 'ok' };
+    },
+  };
+  await rt.respond({
+    hostId: 'h', format: 'excel', intent: 'inspect', baseRev: 0 as DocRev, anchors: [], context: '',
+    sheet: { name: 'Sheet1', a1: 'A1', values: [[1]] },
+  }, model);
+  assert.match(system, /explicit unreviewed-commit mode is enabled/);
+  assert.match(system, /autoApprove=safe;requiresApproval=caution,destructive/);
 });
 
 test('runtime: PPTX proposal verifier rejects missing, duplicate, and cross-run targets before review', async () => {

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RESOURCE_LIMITS, ResourceLimitError, type DocRev } from '@otterpatch/core';
-import { Agent, AnthropicModelClient, ConventionStack, EXCEL_OPS, MockModelClient, OpenAICompatModelClient, conventionFromMarkdown, createModelClient, excelDialect, normalizeMessages, PROVIDERS, wordDialect, type Provider } from './index.js';
+import { RESOURCE_LIMITS, ResourceLimitError, STRICT_POLICY, type DocRev } from '@otterpatch/core';
+import { Agent, AnthropicModelClient, ConventionStack, EXCEL_OPS, MockModelClient, OpenAICompatModelClient, conventionFromMarkdown, createModelClient, excelDialect, normalizeMessages, PROVIDERS, wordDialect, type ModelClient, type Provider } from './index.js';
 import { defaultLibrary } from '@otterpatch/skills';
 import { AgentLoopBudget, validProposalRepairs } from './loop-budget.js';
 
@@ -66,6 +66,29 @@ test('Agent capability surfaces expose only operations with verified writeback',
   const excelSurface = excelDialect.systemPrompt + JSON.stringify(excelDialect.parameters);
   assert.doesNotMatch(excelSurface, /insertRows|deleteRows|merge|freeze|condFormat|dataValidation|chart|addSheet/);
   assert.doesNotMatch(wordDialect.systemPrompt + JSON.stringify(wordDialect.parameters), /all=true|"all"/);
+});
+
+test('Agent appends current capability, maturity, snapshot, and approval constraints after skills', async () => {
+  let system = '';
+  const model: ModelClient = {
+    proposeChangeSet: async (req, dialect) => {
+      system = dialect.systemPrompt;
+      return excelDialect.buildChangeSet(req, { plan: 'update', edits: [{ cell: 'A1', op: 'setValue', value: 2 }] });
+    },
+  };
+  await new Agent(model, undefined, defaultLibrary(), undefined, {
+    approvalPolicy: STRICT_POLICY,
+    allowUnreviewedCommit: true,
+  }).propose({
+    hostId: 'h', format: 'excel', intent: 'update A1', baseRev: 0 as DocRev, anchors: [], context: 'A1=1',
+    sheet: { name: 'Sheet1', a1: 'A1', values: [[1]] },
+  });
+
+  assert.match(system, /setValue\{core=setValue,maturity=verified,scope=range,preview=true,verify=true,backend=surgical-ooxml\}/);
+  assert.match(system, /sheetSnapshot=available/);
+  assert.match(system, /autoApprove=safe;requiresApproval=caution,destructive/);
+  assert.match(system, /Agent 始终只能提出 ChangeSet,不能自行提交/);
+  assert.ok(system.lastIndexOf('【当前执行约束') > system.lastIndexOf('可用技能'));
 });
 
 test('Excel tool schema and builder discriminate operations without dangerous defaults', () => {

@@ -16,7 +16,7 @@ const ANTHROPIC = 'anthropic/skills';
 export const BUILTIN_SKILLS: SkillCard[] = [
   {
     name: 'xlsx',
-    description: 'Excel 电子表格的读取/创建/编辑/分析:openpyxl、公式、图表、数据透视;保留样式与公式。',
+    description: 'Excel 电子表格分析与受约束编辑:读取快照,写入值、公式、基础样式和数字格式,或清空内容。',
     formats: ['excel', 'xlsx'],
     keywords: ['excel', 'xlsx', '表格', '公式', '透视', 'openpyxl', '图表'],
     source: ANTHROPIC,
@@ -24,7 +24,7 @@ export const BUILTIN_SKILLS: SkillCard[] = [
   },
   {
     name: 'docx',
-    description: 'Word 文档的读取/创建/编辑:python-docx + 直接改 OOXML;样式、修订(track changes)、表格、图片。',
+    description: 'Word 文档受约束编辑:文字修订、局部格式、页面设置、文末表格及段内图片操作。',
     formats: ['word', 'docx'],
     keywords: ['word', 'docx', '文档', '修订', '排版', 'python-docx'],
     source: ANTHROPIC,
@@ -32,7 +32,7 @@ export const BUILTIN_SKILLS: SkillCard[] = [
   },
   {
     name: 'pptx',
-    description: 'PowerPoint 的读取/创建/编辑:python-pptx;版式、主题、母版、形状与图表。',
+    description: 'PowerPoint 窄范围预览能力:仅替换页内唯一且位于单个文本 run 的原文。',
     formats: ['ppt', 'pptx'],
     keywords: ['ppt', 'pptx', '幻灯片', '演示', '母版', 'python-pptx'],
     source: ANTHROPIC,
@@ -40,7 +40,7 @@ export const BUILTIN_SKILLS: SkillCard[] = [
   },
   {
     name: 'pdf',
-    description: 'PDF 的读取/文本抽取/表单填写/生成。',
+    description: 'PDF 实验性写回:仅填写未签名 PDF 的 AcroForm 文本字段。',
     formats: ['pdf'],
     keywords: ['pdf', '表单', '抽取', '生成'],
     source: ANTHROPIC,
