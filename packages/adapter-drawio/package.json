@@ -10,7 +10,8 @@
     "test": "node --import tsx --test src/mxgraph.test.ts src/writeback.test.ts src/drawio-pipeline.test.ts"
   },
   "dependencies": {
-    "@otterpatch/core": "0.0.1"
+    "@otterpatch/core": "0.0.1",
+    "@xmldom/xmldom": "^0.9.10"
   },
   "devDependencies": {
     "@otterpatch/agent": "0.0.1",

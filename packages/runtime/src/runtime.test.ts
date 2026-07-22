@@ -447,6 +447,35 @@ test('runtime: falls back when the primary backend cannot handle the reviewed ch
   assert.equal(fallbackVerified, true);
 });
 
+test('runtime rejects verification metrics that report an invalid package', async () => {
+  const rt = new OtterPatchRuntime({ reviewSecret: 'p'.repeat(32) });
+  const cs = singleCellChangeSet('invalid-package');
+  const bytes = new Uint8Array([7]);
+  const backend: WritebackBackend = {
+    id: 'invalid-package-backend' as WritebackId,
+    strategy: 'native-command',
+    supports: () => true,
+    canHandle: () => ({ ok: true }),
+    commit: async () => ({ ok: true, bytes: new Uint8Array([8]), touchedParts: ['test'], fidelity: { score: 1, drift: [] }, appliedEditIds: ['e1'] }),
+    verify: async () => ({
+      score: 1,
+      drift: [],
+      verification: {
+        packageValid: false,
+        locality: { intendedParts: ['test'], unexpectedParts: [], unchangedPartRatio: 1 },
+        semantic: { verifiedEdits: ['e1'], unverifiableEdits: [], failedEdits: [] },
+        compatibility: { warnings: [] },
+      },
+    }),
+  };
+  rt.registerWriteback('invalid-package-test', () => backend);
+  const reviewed = rt.reviewProposal(rt.createProposal(cs, 'invalid-package-test', 'doc'), cs, ['e1'], bytes, 'reviewer');
+  await assert.rejects(
+    () => rt.commit({ format: 'invalid-package-test', bytes, changeSet: cs, ...reviewed }),
+    /invalid output package/,
+  );
+});
+
 test('runtime: proposal signing rejects non-JSON numeric values', () => {
   const rt = new OtterPatchRuntime();
   const aid = 'a0' as import('@otterpatch/core').AnchorId;

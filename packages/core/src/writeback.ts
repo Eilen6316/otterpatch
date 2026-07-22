@@ -19,13 +19,33 @@ export interface OoxmlPart {
   xpath?: string;
 }
 
+export interface VerificationMetrics {
+  packageValid: boolean;
+  locality: {
+    intendedParts: string[];
+    unexpectedParts: string[];
+    /** Byte-identical ratio among parts outside intendedParts. */
+    unchangedPartRatio: number;
+  };
+  semantic: {
+    verifiedEdits: EditId[];
+    unverifiableEdits: EditId[];
+    failedEdits: Array<{ editId: EditId; reason: string }>;
+  };
+  compatibility: {
+    warnings: string[];
+  };
+}
+
 export interface FidelityReport {
+  /** Legacy compatibility field. When verification is present, this mirrors locality.unchangedPartRatio. */
   score: number;
   drift: Array<{
     part: string;
     kind: 'style' | 'layout' | 'content' | 'formula';
     note: string;
   }>;
+  verification?: VerificationMetrics;
 }
 export interface DocHandle {
   readonly hostId: string;

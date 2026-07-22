@@ -353,6 +353,12 @@ export class OtterPatchRuntime {
         const after: DocHandle = { hostId: cs.hostId, bytes: result.bytes, rev: (Number(cs.baseRev) + 1) as import('@otterpatch/core').DocRev };
         const verification = await backend.verify(before, after, cs);
         assertVerification(verification);
+        if (verification.verification?.packageValid === false) {
+          throw new Error('writeback verification found an invalid output package');
+        }
+        if (result.ok && verification.verification?.semantic.failedEdits.length) {
+          throw new Error('writeback semantic verification failed: ' + verification.verification.semantic.failedEdits.map((failure) => failure.editId).join(', '));
+        }
         if (verification.drift.length) {
           throw new Error('writeback verification found unexpected drift: ' + verification.drift.map((d) => d.part).join(', '));
         }
@@ -424,6 +430,19 @@ export class OtterPatchRuntime {
 function assertVerification(report: import('@otterpatch/core').FidelityReport): void {
   if (!Number.isFinite(report.score) || report.score < 0 || report.score > 1 || !Array.isArray(report.drift)) {
     throw new Error('writeback verifier returned an invalid fidelity report');
+  }
+  const verification = report.verification;
+  if (!verification) return;
+  const ratio = verification.locality?.unchangedPartRatio;
+  const validArrays = Array.isArray(verification.locality?.intendedParts)
+    && Array.isArray(verification.locality?.unexpectedParts)
+    && Array.isArray(verification.semantic?.verifiedEdits)
+    && Array.isArray(verification.semantic?.unverifiableEdits)
+    && Array.isArray(verification.semantic?.failedEdits)
+    && Array.isArray(verification.compatibility?.warnings);
+  if (typeof verification.packageValid !== 'boolean' || !Number.isFinite(ratio) || ratio < 0 || ratio > 1
+    || report.score !== ratio || !validArrays) {
+    throw new Error('writeback verifier returned invalid verification metrics');
   }
 }
 

@@ -41,6 +41,14 @@ test('drawio 写回:只改目标 diagram 的目标 cell,另一 diagram 字节级
 
   assert.equal(res.ok, true);
   assert.deepEqual(res.touchedParts, ['d0']);
+  assert.equal(res.fidelity.score, 1);
+  assert.deepEqual(res.fidelity.verification?.locality, {
+    intendedParts: ['d0'],
+    unexpectedParts: [],
+    unchangedPartRatio: 1,
+  });
+  assert.equal(res.fidelity.verification?.packageValid, true);
+  assert.deepEqual(res.fidelity.verification?.semantic.verifiedEdits, ['e0']);
   const out = dec.decode(res.bytes);
   assert.match(out, /id="2"[^>]*value="新"/);
   // d1 must be byte-for-byte untouched
@@ -101,6 +109,60 @@ test('drawio writeback: deleting a missing id is dropped, not applied', async ()
   assert.deepEqual(res.touchedParts, []);
   assert.match(res.droppedEdits?.[0]?.reason ?? '', /cell "missing" not found/);
   assert.equal(dec.decode(res.bytes), FILE);
+  assert.equal(res.fidelity.score, 1, 'locality remains perfect when no diagram changed');
+  assert.deepEqual(res.fidelity.verification?.semantic.failedEdits.map((failure) => failure.editId), ['e0']);
+});
+
+test('drawio fidelity separates locality, package validity, and semantic verification', async () => {
+  const cs: ChangeSet = {
+    id: 'cs-fidelity',
+    hostId: 'h1',
+    baseRev: 0 as DocRev,
+    anchors: { a0: anchor('a0', 0, '2') } as Record<AnchorId, LogicalAnchor>,
+    origin: { by: 'agent', sessionId: 't' },
+    meta: { intent: 'change one node' },
+    edits: [{ id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'setObjectProps', props: { value: 'new' } } }],
+  };
+  const writer = new DrawioSurgicalWriteback();
+  const oneDiagram = `<mxfile host="app">${D0}</mxfile>`;
+  const oneResult = await writer.commit(cs, { hostId: 'h1', bytes: enc(oneDiagram), rev: 0 as DocRev });
+  assert.equal(oneResult.fidelity.score, 1, 'an intended change to the only diagram must not reduce locality');
+  assert.equal(oneResult.fidelity.verification?.packageValid, true);
+  assert.deepEqual(oneResult.fidelity.verification?.semantic.verifiedEdits, ['e0']);
+
+  const result = await writer.commit(cs, { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev });
+  const verified = await writer.verify(
+    { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev },
+    { hostId: 'h1', bytes: result.bytes, rev: 1 as DocRev },
+    cs,
+  );
+  assert.equal(verified.score, 1);
+  assert.deepEqual(verified.verification?.semantic.verifiedEdits, ['e0']);
+
+  const unexpectedXml = dec.decode(result.bytes).replace('value="不动"', 'value="unexpected"');
+  const unexpected = await writer.verify(
+    { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev },
+    { hostId: 'h1', bytes: enc(unexpectedXml), rev: 1 as DocRev },
+    cs,
+  );
+  assert.equal(unexpected.score, 0);
+  assert.deepEqual(unexpected.verification?.locality.unexpectedParts, ['d1']);
+  assert.deepEqual(unexpected.verification?.semantic.verifiedEdits, ['e0']);
+
+  const malformed = await writer.verify(
+    { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev },
+    { hostId: 'h1', bytes: enc(dec.decode(result.bytes).replace('</mxfile>', '')), rev: 1 as DocRev },
+    cs,
+  );
+  assert.equal(malformed.verification?.packageValid, false);
+
+  const entityDocument = '<!DOCTYPE mxfile [<!ENTITY x "value">]><mxfile><diagram id="d"><mxGraphModel><root/></mxGraphModel></diagram></mxfile>';
+  const unsafe = await writer.verify(
+    { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev },
+    { hostId: 'h1', bytes: enc(entityDocument), rev: 1 as DocRev },
+    cs,
+  );
+  assert.equal(unsafe.verification?.packageValid, false);
 });
 
 test('drawio writeback: validates ChangeSets at the commit boundary', async () => {
