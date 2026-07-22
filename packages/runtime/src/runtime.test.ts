@@ -191,6 +191,35 @@ test('runtime: unreviewed destructive edits are blocked by the approval policy',
   );
 });
 
+test('runtime: contextual destructive risk requires a review receipt', async () => {
+  const rt = new OtterPatchRuntime({ allowUnreviewedCommit: true, reviewSecret: 'r'.repeat(32) });
+  const bytes = makeXlsx();
+  const cs = singleCellChangeSet('protected-formula', { family: 'value', kind: 'setFormula', formula: '=1+1' });
+  const riskContext = {
+    byEdit: {
+      e1: {
+        destinationOccupied: true,
+        beforeState: { formula: '=SUM(A1:A9)' },
+        formulaDependencies: ['C1'],
+        protectedRegion: true,
+      },
+    },
+  };
+  await assert.rejects(
+    () => rt.commit({ format: 'excel', bytes, changeSet: cs, acceptedEditIds: ['e1'], riskContext }),
+    /requires human approval/,
+  );
+  await assert.rejects(
+    () => rt.commit({ format: 'excel', bytes, changeSet: cs, acceptedEditIds: ['e1'], riskContext, reviewReceipt: {} as never }),
+    /must be supplied together/,
+  );
+
+  const proposal = rt.createProposal(cs, 'excel');
+  const reviewed = rt.reviewProposal(proposal, cs, ['e1'], bytes, 'risk-reviewer');
+  const result = await rt.commit({ format: 'excel', bytes, changeSet: cs, riskContext, ...reviewed });
+  assert.equal(result.ok, true);
+});
+
 test('runtime: serializes same-source commits, verifies output, and isolates event listeners', async () => {
   const rt = new OtterPatchRuntime({ reviewSecret: 'q'.repeat(32) });
   const bytes = new Uint8Array([1, 2, 3]);

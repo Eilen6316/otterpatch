@@ -66,3 +66,52 @@ test('STRICT_POLICY: 谨慎也需人工', () => {
   assert.deepEqual(d.auto, ['e0']);
   assert.deepEqual(d.needsApproval, ['e1']);
 });
+
+test('riskOf uses scope, occupancy, dependencies, and before-state context', () => {
+  const style = { family: 'style', kind: 'setStyle', style: { bold: true } } as const;
+  assert.equal(riskOf(style, { resolvedScope: 'cell', affectedObjectCount: 1 }), 'safe');
+  assert.equal(riskOf(style, { format: 'word', documentWide: true }), 'caution');
+
+  const formula = { family: 'value', kind: 'setFormula', formula: '=A1*2' } as const;
+  assert.equal(riskOf(formula, { destinationOccupied: false, affectedObjectCount: 1 }), 'safe');
+  assert.equal(riskOf(formula, { destinationOccupied: true, beforeState: { formula: '=SUM(A1:A9)' }, formulaDependencies: ['B10'] }), 'destructive');
+
+  const copy = { family: 'structure', kind: 'copyRange', to: 'B1' } as const;
+  assert.equal(riskOf(copy, { destinationOccupied: false }), 'caution');
+  assert.equal(riskOf(copy, { destinationOccupied: true }), 'destructive');
+
+  const move = { family: 'object', kind: 'moveObject', box: { left: 12, top: 11 } } as const;
+  const beforeState = { box: { left: 10, top: 10, width: 20, height: 20 } };
+  assert.equal(riskOf(move, { beforeState, canvasBounds: { left: 0, top: 0, width: 100, height: 100 } }), 'safe');
+  assert.equal(riskOf({ ...move, box: { left: 95 } }, { beforeState, canvasBounds: { left: 0, top: 0, width: 100, height: 100 } }), 'caution');
+
+  assert.equal(riskOf({ family: 'object', kind: 'setObjectProps', props: { style: 'fillColor=#fff;' } }), 'safe');
+  assert.equal(riskOf({ family: 'object', kind: 'setObjectProps', props: { id: 'replacement' } }), 'destructive');
+  assert.equal(riskOf({ family: 'value', kind: 'setValue', value: 1 }, { protectedRegion: true }), 'destructive');
+});
+
+test('assessChangeSet derives affected range size and supports per-edit trusted observations', () => {
+  const large = cs([{ family: 'value', kind: 'setValue', value: 1 }]);
+  const anchorId = large.edits[0]!.target;
+  large.anchors[anchorId] = {
+    ...large.anchors[anchorId]!,
+    portable: { kind: 'grid', sheet: 'S', a1: 'A1:A1001' },
+  };
+  const largeRisk = assessChangeSet(large, { format: 'excel' });
+  assert.equal(largeRisk.level, 'destructive');
+  assert.match(largeRisk.byEdit[0]!.reasons.join('\n'), /more than 1000/);
+
+  const formulas = cs([
+    { family: 'value', kind: 'setFormula', formula: '=A1' },
+    { family: 'value', kind: 'setFormula', formula: '=A2' },
+  ]);
+  const contextual = decideApproval(formulas, STRICT_POLICY, {
+    byEdit: {
+      e0: { destinationOccupied: false },
+      e1: { destinationOccupied: true, beforeState: { formula: '=SUM(A:A)' }, formulaDependencies: 2 },
+    },
+  });
+  assert.deepEqual(contextual.auto, ['e0']);
+  assert.deepEqual(contextual.needsApproval, ['e1']);
+  assert.equal(contextual.level, 'destructive');
+});

@@ -10,7 +10,7 @@
  */
 import { Agent, assertProposeRequestBudget, buildDocVerifier, buildDrawioVerifier } from '@otterpatch/agent';
 import type { AgentResponse, ChangeSetVerifier, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from '@otterpatch/agent';
-import type { ApprovalPolicy, ChangeSet, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
+import type { ApprovalPolicy, ChangeSet, ChangeSetRiskContext, DocHandle, WritebackBackend, WritebackResult } from '@otterpatch/core';
 import {
   CAPABILITY_MANIFEST_VERSION,
   DEFAULT_POLICY,
@@ -44,6 +44,8 @@ export interface CommitInput {
   currentRev?: import('@otterpatch/core').DocRev;
   proposal?: ProposalEnvelope;
   reviewReceipt?: ReviewReceipt;
+  /** Trusted host observations used to classify scope-sensitive risk. */
+  riskContext?: ChangeSetRiskContext;
 }
 
 export interface OtterPatchRuntimeOptions {
@@ -241,6 +243,7 @@ export class OtterPatchRuntime {
     let acceptedEditIds: string[];
     let receiptNonce: string | undefined;
     let receiptExpiresAt: number | undefined;
+    let hasVerifiedReview = false;
     if (input.proposal && input.reviewReceipt) {
       acceptedEditIds = this.reviewAuthority.verifyForCommit(
         input.proposal,
@@ -252,14 +255,16 @@ export class OtterPatchRuntime {
       );
       receiptNonce = input.reviewReceipt.nonce;
       receiptExpiresAt = Date.parse(input.reviewReceipt.expiresAt);
+      hasVerifiedReview = true;
     } else {
+      if (input.proposal || input.reviewReceipt) throw new Error('proposal and review receipt must be supplied together');
       if (!this.allowUnreviewedCommit) throw new Error('commit requires a signed proposal and review receipt');
       if (!input.acceptedEditIds) throw new Error('unreviewed commit requires explicit acceptedEditIds');
       acceptedEditIds = input.acceptedEditIds;
     }
     const cs: ChangeSet = { ...input.changeSet, edits: filterAcceptedEdits(input.changeSet, acceptedEditIds) };
-    const approval = decideApproval(cs, this.approvalPolicy);
-    if (approval.needsApproval.length && !input.reviewReceipt) {
+    const approval = decideApproval(cs, this.approvalPolicy, { ...input.riskContext, format: input.format });
+    if (approval.needsApproval.length && !hasVerifiedReview) {
       throw new Error('unreviewed commit requires human approval for edits: ' + approval.needsApproval.join(', '));
     }
     const sourceHash = input.proposal?.sourceFileSha256 ?? sha256Bytes(input.bytes);
