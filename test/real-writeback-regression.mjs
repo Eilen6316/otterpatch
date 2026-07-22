@@ -8,6 +8,12 @@ const dec = new TextDecoder();
 const rt = new OtterPatchRuntime();
 const base = { by: 'human' };
 
+async function reviewedCommit(format, bytes, changeSet) {
+  const proposal = rt.createProposal(changeSet, format);
+  const reviewed = rt.reviewProposal(proposal, changeSet, changeSet.edits.map((edit) => edit.id), bytes, 'real-writeback-test');
+  return rt.commit({ format, bytes, changeSet, currentRev: 0, ...reviewed });
+}
+
 function xlsxSample() {
   return zipSync({
     '[Content_Types].xml': enc('<?xml version="1.0"?><Types/>'),
@@ -83,19 +89,19 @@ function objectCs(format, elementId, value) {
 }
 
 async function checkXlsx() {
-  const res = await rt.commit({ format: 'excel', bytes: xlsxSample(), changeSet: gridCs(), currentRev: 0 });
+  const res = await reviewedCommit('excel', xlsxSample(), gridCs());
   assert.equal(res.ok, true);
   assert.match(dec.decode(unzipSync(res.bytes)['xl/worksheets/sheet1.xml']), /<v>99<\/v>/);
 }
 
 async function checkDocx() {
-  const res = await rt.commit({ format: 'word', bytes: docxSample(), changeSet: flowCs('word', 'hello world', 'hello safe world'), currentRev: 0 });
+  const res = await reviewedCommit('word', docxSample(), flowCs('word', 'hello world', 'hello safe world'));
   assert.equal(res.ok, true);
   assert.match(dec.decode(unzipSync(res.bytes)['word/document.xml']), /w:ins/);
 }
 
 async function checkDocxTable() {
-  const res = await rt.commit({ format: 'word', bytes: docxSample(), changeSet: wordTableCs(), currentRev: 0 });
+  const res = await reviewedCommit('word', docxSample(), wordTableCs());
   assert.equal(res.ok, true);
   const documentXml = dec.decode(unzipSync(res.bytes)['word/document.xml']);
   assert.match(documentXml, /<w:tbl>/);
@@ -104,20 +110,20 @@ async function checkDocxTable() {
 }
 
 async function checkPptx() {
-  const res = await rt.commit({ format: 'pptx', bytes: pptxSample(), changeSet: flowCs('pptx', 'Hello', 'World'), currentRev: 0 });
+  const res = await reviewedCommit('pptx', pptxSample(), flowCs('pptx', 'Hello', 'World'));
   assert.equal(res.ok, true);
   assert.match(dec.decode(unzipSync(res.bytes)['ppt/slides/slide1.xml']), /<a:t>World<\/a:t>/);
 }
 
 async function checkDrawio() {
   const cs = objectCs('drawio', '2', 'New');
-  const res = await rt.commit({ format: 'drawio', bytes: drawioSample(), changeSet: cs, currentRev: 0 });
+  const res = await reviewedCommit('drawio', drawioSample(), cs);
   assert.equal(res.ok, true);
   assert.match(dec.decode(res.bytes), /value="New"/);
 }
 
 async function checkPdf() {
-  const res = await rt.commit({ format: 'pdf', bytes: await pdfSample(), changeSet: objectCs('pdf', 'name', 'Alice'), currentRev: 0 });
+  const res = await reviewedCommit('pdf', await pdfSample(), objectCs('pdf', 'name', 'Alice'));
   assert.equal(res.ok, true);
   const out = await PDFDocument.load(res.bytes);
   assert.equal(out.getForm().getTextField('name').getText(), 'Alice');

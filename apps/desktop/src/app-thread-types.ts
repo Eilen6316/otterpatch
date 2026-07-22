@@ -44,6 +44,7 @@ export interface DiffTurn {
   format: WorkspaceFormat;
   fileSnapshot?: FileSnapshot;
   changeSet?: unknown;
+  proposal?: unknown;
   diff: AgentDiff;
   ops: GridOp[];
   board?: BoardPatch;

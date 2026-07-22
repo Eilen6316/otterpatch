@@ -4,8 +4,8 @@
  * 逐行 JSON 打到 stdout(供非 MCP 宿主 / 管道 / CI 消费)。
  *
  * 用法:
- *   otterpatch-run --format excel --intent "把 B1 改成 99" --in in.xlsx --out out.xlsx
- *   otterpatch-run --mock --in in.xlsx --out out.xlsx        # 无需 API key,固定演示 edit
+ *   otterpatch-run --yes --format excel --intent "把 B1 改成 99" --in in.xlsx --out out.xlsx
+ *   otterpatch-run --yes --mock --in in.xlsx --out out.xlsx  # 无需 API key,固定演示 edit
  * BYOK:export OtterPatch_API_KEY=...(非 --mock 时必需);--provider/--model 可选。
  */
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -28,6 +28,7 @@ const outPath = arg('out');
 const provider = (arg('provider') ?? 'claude') as Provider;
 const model = arg('model');
 const mock = has('mock');
+const confirmed = has('yes');
 
 const rt = new OtterPatchRuntime();
 rt.on(emit);
@@ -52,8 +53,11 @@ try {
   const cs = await rt.propose(req, client);
   rt.diff(cs);
   if (inPath) {
+    if (!confirmed) throw new Error('refusing to commit without explicit --yes after reviewing the emitted diff');
     const bytes = new Uint8Array(readFileSync(inPath));
-    const res = await rt.commit({ format, bytes, changeSet: cs });
+    const proposal = rt.createProposal(cs, format);
+    const reviewed = rt.reviewProposal(proposal, cs, cs.edits.map((edit) => edit.id), bytes, 'cli-explicit-yes');
+    const res = await rt.commit({ format, bytes, changeSet: cs, ...reviewed });
     if (outPath && res.ok) {
       writeFileSync(outPath, res.bytes);
       emit({ type: 'wrote', path: outPath, bytes: res.bytes.length });

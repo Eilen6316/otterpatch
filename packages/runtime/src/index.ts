@@ -4,4 +4,5 @@
  */
 export * from './events.js';
 export * from './diff.js';
+export * from './review.js';
 export * from './runtime.js';

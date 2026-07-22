@@ -3,8 +3,9 @@ import { spawn } from 'node:child_process';
 
 const port = Number(process.env.OtterPatch_PORT || 44319);
 const token = 'test-token';
+const reviewToken = 'test-review-token';
 const child = spawn(process.execPath, ['apps/mcp-server/dist/serve.js'], {
-  env: { ...process.env, OtterPatch_PORT: String(port), OtterPatch_MAX_BODY_BYTES: '1024', OtterPatch_TOKEN: token },
+  env: { ...process.env, OtterPatch_PORT: String(port), OtterPatch_MAX_BODY_BYTES: '1024', OtterPatch_TOKEN: token, OtterPatch_REVIEW_TOKEN: reviewToken },
   stdio: ['ignore', 'ignore', 'pipe'],
 });
 let stderr = '';
@@ -45,7 +46,26 @@ try {
   });
   assert.equal(oversize.status, 413);
 
-  console.log('[serve-security] health=200 badOrigin=403 unauth=401 oversize=413');
+  const unsignedReview = await fetch(`http://127.0.0.1:${port}/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-OtterPatch-Token': token },
+    body: '{}',
+  });
+  assert.equal(unsignedReview.status, 403);
+  assert.match(await unsignedReview.text(), /review token/);
+
+  const unreviewedCommit = await fetch(`http://127.0.0.1:${port}/commit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-OtterPatch-Token': token },
+    body: JSON.stringify({
+      format: 'excel', fileBase64: '',
+      changeSet: { id: 'c', hostId: 'h', baseRev: 0, anchors: {}, origin: { by: 'human' }, meta: { intent: 'x' }, edits: [] },
+    }),
+  });
+  assert.equal(unreviewedCommit.status, 403);
+  assert.match(await unreviewedCommit.text(), /review receipt required/);
+
+  console.log('[serve-security] health=200 badOrigin=403 unauth=401 oversize=413 unsignedReview=403 unreviewedCommit=403');
 } finally {
   child.kill();
 }

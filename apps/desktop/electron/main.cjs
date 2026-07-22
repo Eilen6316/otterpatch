@@ -13,7 +13,9 @@ const { randomBytes } = require('node:crypto');
 const isDev = !!process.env.OTTERPATCH_DEV;
 const appDistDir = path.resolve(__dirname, '..', 'dist');
 const serveToken = process.env.OtterPatch_TOKEN || randomBytes(24).toString('base64url');
+const reviewToken = process.env.OtterPatch_REVIEW_TOKEN || randomBytes(24).toString('base64url');
 process.env.OtterPatch_TOKEN = serveToken;
+process.env.OtterPatch_REVIEW_TOKEN = reviewToken;
 
 function isSafeExternalUrl(rawUrl) {
   try {
@@ -45,7 +47,7 @@ function startServe() {
     const servePath = candidates.find((p) => p && fs.existsSync(p));
     if (!servePath) return;
     serveProc = spawn(process.execPath, [servePath], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', OtterPatch_TOKEN: serveToken },
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', OtterPatch_TOKEN: serveToken, OtterPatch_REVIEW_TOKEN: reviewToken },
       stdio: 'ignore',
       windowsHide: true,
     });

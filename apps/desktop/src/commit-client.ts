@@ -10,22 +10,48 @@ export interface CommitWritebackResult {
   error?: string;
 }
 
+interface ReviewResult {
+  proposal?: unknown;
+  reviewReceipt?: unknown;
+  error?: string;
+}
+
 export async function commitWriteback(input: {
   endpoint: string;
   token?: string;
+  reviewToken?: string;
   format: WorkspaceFormat;
   fileBase64: string;
   changeSet: unknown;
+  proposal: unknown;
   acceptedEditIds: string[];
 }): Promise<CommitWritebackResult> {
+  const headers = { 'Content-Type': 'application/json', ...(input.token ? { 'X-OtterPatch-Token': input.token } : {}) };
+  const reviewHeaders = { ...headers, ...(input.reviewToken ? { 'X-OtterPatch-Review-Token': input.reviewToken } : {}) };
+  const reviewResponse = await fetch(input.endpoint + '/review', {
+    method: 'POST',
+    headers: reviewHeaders,
+    body: JSON.stringify({
+      fileBase64: input.fileBase64,
+      changeSet: input.changeSet,
+      proposal: input.proposal,
+      acceptedEditIds: input.acceptedEditIds,
+      reviewerSessionId: 'desktop:' + crypto.randomUUID(),
+    }),
+  });
+  const reviewed = (await reviewResponse.json()) as ReviewResult;
+  if (!reviewResponse.ok || !reviewed.proposal || !reviewed.reviewReceipt) {
+    throw new Error(reviewed.error ?? 'review receipt issuance failed');
+  }
   const response = await fetch(input.endpoint + '/commit', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(input.token ? { 'X-OtterPatch-Token': input.token } : {}) },
+    headers,
     body: JSON.stringify({
       format: input.format,
       fileBase64: input.fileBase64,
       changeSet: input.changeSet,
-      acceptedEditIds: input.acceptedEditIds,
+      proposal: reviewed.proposal,
+      reviewReceipt: reviewed.reviewReceipt,
       currentRev: (input.changeSet as { baseRev?: number } | null)?.baseRev ?? 0,
     }),
   });

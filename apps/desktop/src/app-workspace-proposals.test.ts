@@ -48,13 +48,14 @@ test('captureGridOpBeforeState snapshots value and cell state without mutating o
 test('makeWorkspaceDiffTurn preserves streamed text and reasoning from answer turn', () => {
   const turn = makeWorkspaceDiffTurn(
     { role: 'assistant', kind: 'answer', text: 'draft answer', reasoning: 'thinking' },
-    { format: 'excel', changeSet: { edits: [] }, diff, ops: [{ a1: 'A1', note: 'noop' }] },
+    { format: 'excel', changeSet: { edits: [] }, proposal: { proposalId: 'p1' }, diff, ops: [{ a1: 'A1', note: 'noop' }] },
   );
 
   assert.equal(turn.kind, 'diff');
   assert.equal(turn.text, 'draft answer');
   assert.equal(turn.reasoning, 'thinking');
   assert.deepEqual(turn.ops, [{ a1: 'A1', note: 'noop' }]);
+  assert.deepEqual(turn.proposal, { proposalId: 'p1' });
 });
 
 test('replaceLastWithWorkspaceDiff only replaces the final assistant turn', () => {

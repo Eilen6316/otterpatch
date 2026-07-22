@@ -6,7 +6,7 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
-    "test": "node --import tsx --test src/app-history.test.ts src/app-proposal-flow.test.ts src/app-workspace-proposals.test.ts src/docximport.test.ts src/drawio-proposal-adapter.test.ts src/drawio-review-adapter.test.ts src/excel-review-adapter.test.ts src/excel-structure-adapter.test.ts src/file-snapshot.test.ts src/proposal-materializers.test.ts src/richdoc-editing.test.ts src/richdoc-projection.test.ts src/use-review-actions.test.ts",
+    "test": "node --import tsx --test src/app-history.test.ts src/app-proposal-flow.test.ts src/app-workspace-proposals.test.ts src/commit-client.test.ts src/docximport.test.ts src/drawio-proposal-adapter.test.ts src/drawio-review-adapter.test.ts src/excel-review-adapter.test.ts src/excel-structure-adapter.test.ts src/file-snapshot.test.ts src/proposal-materializers.test.ts src/richdoc-editing.test.ts src/richdoc-projection.test.ts src/use-review-actions.test.ts",
     "build": "vite build",
     "preview": "vite preview",
     "electron": "electron .",

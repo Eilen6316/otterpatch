@@ -5,7 +5,7 @@ import type { ChangeSet, DocRev } from '@otterpatch/core';
 import { assertChangeSet } from '@otterpatch/core';
 import { createModelClient, EXCEL_OPS, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
-import { OtterPatchRuntime } from '@otterpatch/runtime';
+import { OtterPatchRuntime, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
 
 const rt = new OtterPatchRuntime();
 const PORT = Number(process.env.OtterPatch_PORT ?? 4319);
@@ -15,6 +15,8 @@ const parsedMaxBodyBytes = Number(process.env.OtterPatch_MAX_BODY_BYTES ?? DEFAU
 const MAX_BODY_BYTES = Number.isSafeInteger(parsedMaxBodyBytes) && parsedMaxBodyBytes > 0 ? parsedMaxBodyBytes : DEFAULT_MAX_BODY_BYTES;
 const AUTH_TOKEN = String(process.env.OtterPatch_TOKEN || '');
 const generatedToken = AUTH_TOKEN ? '' : randomBytes(24).toString('base64url');
+const configuredReviewToken = String(process.env.OtterPatch_REVIEW_TOKEN || '');
+const REVIEW_TOKEN = configuredReviewToken || randomBytes(24).toString('base64url');
 
 class HttpError extends Error {
   constructor(
@@ -42,7 +44,7 @@ function cors(req: IncomingMessage, res: ServerResponse): boolean {
   if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-OtterPatch-Token');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-OtterPatch-Token, X-OtterPatch-Review-Token');
   return true;
 }
 
@@ -57,6 +59,11 @@ function hasValidToken(req: IncomingMessage): boolean {
   if (!AUTH_TOKEN) return true;
   const header = req.headers['x-otterpatch-token'];
   return !Array.isArray(header) && header === AUTH_TOKEN;
+}
+
+function hasValidReviewToken(req: IncomingMessage): boolean {
+  const header = req.headers['x-otterpatch-review-token'];
+  return !Array.isArray(header) && header === REVIEW_TOKEN;
 }
 
 function send(req: IncomingMessage, res: ServerResponse, code: number, data: unknown): void {
@@ -148,7 +155,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         );
         if (r.kind === 'answer') send(req, res, 200, { answer: r.text });
         else if (r.kind === 'clarify') send(req, res, 200, { questions: r.questions });
-        else send(req, res, 200, { changeSet: r.changeSet, diff: rt.diff(r.changeSet) });
+        else send(req, res, 200, { changeSet: r.changeSet, diff: rt.diff(r.changeSet), proposal: rt.createProposal(r.changeSet, String(a.format)) });
         return;
       }
       if (req.method === 'POST' && url === '/propose-stream') {
@@ -175,7 +182,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
             model,
             (e) => {
               if (e.type === 'done') {
-                if (e.result.kind === 'changeset') sse({ type: 'done', kind: 'changeset', changeSet: e.result.changeSet, diff: rt.diff(e.result.changeSet) });
+                if (e.result.kind === 'changeset') sse({ type: 'done', kind: 'changeset', changeSet: e.result.changeSet, diff: rt.diff(e.result.changeSet), proposal: rt.createProposal(e.result.changeSet, String(a.format)) });
                 else if (e.result.kind === 'clarify') sse({ type: 'done', kind: 'clarify', questions: e.result.questions });
                 else sse({ type: 'done', kind: 'answer', text: e.result.text });
               } else {
@@ -189,16 +196,33 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         res.end();
         return;
       }
+      if (req.method === 'POST' && url === '/review') {
+        if (!hasValidReviewToken(req)) throw new HttpError(403, 'missing or invalid review token');
+        const a = await readBody(req);
+        assertChangeSet(a.changeSet);
+        if (!Array.isArray(a.acceptedEditIds)) throw new HttpError(400, 'acceptedEditIds array required');
+        const reviewed = rt.reviewProposal(
+          a.proposal as ProposalEnvelope,
+          a.changeSet as ChangeSet,
+          a.acceptedEditIds as string[],
+          new Uint8Array(Buffer.from(String(a.fileBase64 ?? ''), 'base64')),
+          String(a.reviewerSessionId ?? 'desktop'),
+        );
+        send(req, res, 200, reviewed);
+        return;
+      }
       if (req.method === 'POST' && url === '/commit') {
         const a = await readBody(req);
+        if (!a.proposal || !a.reviewReceipt) throw new HttpError(403, 'signed proposal and review receipt required');
         const bytes = new Uint8Array(Buffer.from(String(a.fileBase64 ?? ''), 'base64'));
         assertChangeSet(a.changeSet);
         const r = await rt.commit({
           format: String(a.format),
           bytes,
           changeSet: a.changeSet as ChangeSet,
-          ...(Array.isArray(a.acceptedEditIds) ? { acceptedEditIds: a.acceptedEditIds as string[] } : {}),
           currentRev: readDocRev(a.currentRev, Number((a.changeSet as ChangeSet | undefined)?.baseRev ?? 0)),
+          proposal: a.proposal as ProposalEnvelope,
+          reviewReceipt: a.reviewReceipt as ReviewReceipt,
         });
         send(req, res, 200, { ok: r.ok, ...(r.ok ? { fileBase64: Buffer.from(r.bytes).toString('base64') } : { partialFileBase64: Buffer.from(r.bytes).toString('base64') }), touchedParts: r.touchedParts, fidelity: r.fidelity, ...(r.appliedEditIds ? { appliedEditIds: r.appliedEditIds } : {}), ...(r.droppedEdits ? { droppedEdits: r.droppedEdits } : {}) });
         return;
@@ -216,6 +240,7 @@ server.headersTimeout = 10_000;
 server.listen(PORT, HOST, () => {
   process.stderr.write(`\n[otterpatch] serve on http://${HOST}:${PORT}\n`);
   process.stderr.write(AUTH_TOKEN ? '[otterpatch] POST auth enabled via X-OtterPatch-Token.\n' : '[otterpatch] POST auth disabled; set OtterPatch_TOKEN to require X-OtterPatch-Token. Suggested token: ' + generatedToken + '\n');
+  process.stderr.write(configuredReviewToken ? '[otterpatch] Review authority enabled via X-OtterPatch-Review-Token.\n' : '[otterpatch] Generated review token: ' + REVIEW_TOKEN + '\n');
   process.stderr.write(`[otterpatch] Excel ops (${EXCEL_OPS.length}): ${EXCEL_OPS.join(', ')}\n`);
   process.stderr.write('[otterpatch] If expected Excel ops are missing, restart npm run serve.\n\n');
 });

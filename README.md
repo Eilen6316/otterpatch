@@ -53,7 +53,7 @@ OtterPatch ships as an MCP server so any agent / IDE can drive the propose → r
 otterpatch_skills   list built-in document skills
 otterpatch_propose  intent (+ selection context) → constrained ChangeSet + reviewable diff   (BYOK)
 otterpatch_diff     ChangeSet → reviewable diff
-otterpatch_commit   ChangeSet + file(base64) → surgical write-back → new file + fidelity report
+otterpatch_commit   signed proposal + review receipt + file → surgical write-back + fidelity report
 ```
 
 ```jsonc
@@ -64,14 +64,14 @@ otterpatch_commit   ChangeSet + file(base64) → surgical write-back → new fil
 Or run it headless and stream JSON events (one per line):
 
 ```bash
-otterpatch-run --format excel --intent "fill amount = qty × price" --in book.xlsx --out book.out.xlsx
+otterpatch-run --yes --format excel --intent "fill amount = qty × price" --in book.xlsx --out book.out.xlsx
 # {"type":"propose:start",...} {"type":"diff:done",...} {"type":"commit:done","ok":true,"touchedParts":["xl/worksheets/sheet1.xml"],...}
 ```
 
 The cockpit UI talks to the runtime through a local HTTP bridge (`otterpatch-serve`) — start it, then point the model panel's *otterpatch-serve URL* at it (BYOK):
 
 ```bash
-otterpatch-serve   # GET /health · POST /propose {format,intent,context,provider,apiKey} · POST /commit {format,fileBase64,changeSet}
+otterpatch-serve   # GET /health · POST /propose · POST /review · POST /commit (signed receipt required)
 ```
 
 ## Develop

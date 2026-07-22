@@ -69,7 +69,7 @@ npm test -w @otterpatch/writeback-surgical
 - [x] drawio 适配器:mxCell 增/删/改属性/移动 + 图级外科式写回
 - [x] headless runtime + MCP server + CLI(JSON 事件流,BYOK)
 - [x] Word 红线 / PDF 表单 / PPT 文本适配器 —— excel/word/pdf/ppt/drawio 全链路 propose→commit
-- [x] 驾驶舱写回闭环(otterpatch-serve):载入文件 → 提案 → 逐条审阅 → 接受子集 → 外科写回 → 下载
+- [x] 驾驶舱写回闭环(otterpatch-serve):载入文件 → 签名提案 → 逐条审阅 → 签名回执绑定源文件 SHA-256 与接受子集 → 外科写回 → 下载
 - [x] Word:Office 式六选项卡功能区 + **行内修订审阅**——逐条悬浮卡、四态视图(原文/修订/清样/改后)、flatten-on-accept(接受即物理定稿,零标记残留)
 - [x] Agent 取数工具 —— Excel `read_range`/`aggregate`;Word `read_blocks`/`find_text`/`get_outline`/`get_style_usage`(全文快照,双模型通道)
 - [x] 领域打法手册 + 渐进披露(`load_skill`):GB/T 9704 公文版式、财务表规范、图表选型

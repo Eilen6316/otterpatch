@@ -22,19 +22,25 @@ import { defaultLibrary } from '@otterpatch/skills';
 import type { SkillLibrary } from '@otterpatch/skills';
 import { buildDiff, type OtterPatchDiff } from './diff.js';
 import type { OtterPatchEvent, OtterPatchEventListener } from './events.js';
+import { ReviewAuthority, type ProposalEnvelope, type ReviewedProposal, type ReviewReceipt } from './review.js';
 
 export interface CommitInput {
   format: string;
   bytes: Uint8Array;
   changeSet: ChangeSet;
-  /** Commit only these edits (result of per-block acceptance); omitted = accept all. */
+  /** Optional cross-check against the receipt. Required in explicitly enabled unreviewed mode. */
   acceptedEditIds?: string[];
   /** Live document revision observed by the caller immediately before commit. */
   currentRev?: import('@otterpatch/core').DocRev;
+  proposal?: ProposalEnvelope;
+  reviewReceipt?: ReviewReceipt;
 }
 
 export interface OtterPatchRuntimeOptions {
   skills?: SkillLibrary;
+  allowUnreviewedCommit?: boolean;
+  reviewSecret?: string | Uint8Array;
+  reviewTtlMs?: number;
 }
 
 export class OtterPatchRuntime {
@@ -42,9 +48,14 @@ export class OtterPatchRuntime {
   private readonly skills: SkillLibrary;
   private readonly backends: Record<string, () => WritebackBackend>;
   private readonly verifiers: Record<string, (req: ProposeRequest) => ChangeSetVerifier | undefined>;
+  private readonly reviewAuthority: ReviewAuthority;
+  private readonly allowUnreviewedCommit: boolean;
+  private readonly usedReviewNonces = new Set<string>();
 
   constructor(opts: OtterPatchRuntimeOptions = {}) {
     this.skills = opts.skills ?? defaultLibrary();
+    this.reviewAuthority = new ReviewAuthority(opts.reviewSecret, opts.reviewTtlMs);
+    this.allowUnreviewedCommit = opts.allowUnreviewedCommit ?? false;
     this.verifiers = {
       excel: (req) => (req.sheet ? buildGridVerifier(req.sheet) : undefined),
       xlsx: (req) => (req.sheet ? buildGridVerifier(req.sheet) : undefined),
@@ -151,6 +162,23 @@ export class OtterPatchRuntime {
     return d;
   }
 
+  /** Sign a model proposal before it is shown for review. The source file is bound when review completes. */
+  createProposal(cs: ChangeSet, format: string): ProposalEnvelope {
+    if (!this.backends[format]) throw new Error(`OtterPatchRuntime: no writeback backend for format "${format}"`);
+    return this.reviewAuthority.createProposal(cs, format);
+  }
+
+  /** Bind the reviewed proposal to exact source bytes and accepted edit IDs. */
+  reviewProposal(
+    proposal: ProposalEnvelope,
+    cs: ChangeSet,
+    acceptedEditIds: string[],
+    sourceBytes: Uint8Array,
+    reviewerSessionId: string,
+  ): ReviewedProposal {
+    return this.reviewAuthority.review(proposal, cs, acceptedEditIds, sourceBytes, reviewerSessionId);
+  }
+
   /** Accepted subset → surgical writeback → new bytes + fidelity report. */
   async commit(input: CommitInput): Promise<WritebackResult> {
     assertChangeSet(input.changeSet);
@@ -160,9 +188,26 @@ export class OtterPatchRuntime {
     if (input.currentRev !== undefined && input.currentRev !== input.changeSet.baseRev) {
       throw new Error('changeset is stale: baseRev ' + input.changeSet.baseRev + ' != currentRev ' + input.currentRev);
     }
-    const cs: ChangeSet = input.acceptedEditIds
-      ? { ...input.changeSet, edits: filterAcceptedEdits(input.changeSet, input.acceptedEditIds) }
-      : input.changeSet;
+    let acceptedEditIds: string[];
+    let receiptNonce: string | undefined;
+    if (input.proposal && input.reviewReceipt) {
+      acceptedEditIds = this.reviewAuthority.verifyForCommit(
+        input.proposal,
+        input.reviewReceipt,
+        input.changeSet,
+        input.format,
+        input.bytes,
+        input.acceptedEditIds,
+      );
+      receiptNonce = input.reviewReceipt.nonce;
+      if (this.usedReviewNonces.has(receiptNonce)) throw new Error('review receipt has already been used');
+      this.usedReviewNonces.add(receiptNonce);
+    } else {
+      if (!this.allowUnreviewedCommit) throw new Error('commit requires a signed proposal and review receipt');
+      if (!input.acceptedEditIds) throw new Error('unreviewed commit requires explicit acceptedEditIds');
+      acceptedEditIds = input.acceptedEditIds;
+    }
+    const cs: ChangeSet = { ...input.changeSet, edits: filterAcceptedEdits(input.changeSet, acceptedEditIds) };
     this.emit({ type: 'commit:start', format: input.format, strategy: backend.strategy, editCount: cs.edits.length });
     try {
       const can = backend.canHandle(cs);
@@ -172,6 +217,7 @@ export class OtterPatchRuntime {
       this.emit({ type: 'commit:done', ok: res.ok, touchedParts: res.touchedParts, fidelity: res.fidelity.score, bytes: res.bytes.length });
       return res;
     } catch (err) {
+      if (receiptNonce) this.usedReviewNonces.delete(receiptNonce);
       this.emit({ type: 'error', stage: 'commit', message: errMsg(err) });
       throw err;
     }

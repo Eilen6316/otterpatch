@@ -18,9 +18,10 @@ import type { ChangeSet, DocRev } from '@otterpatch/core';
 import { assertChangeSet } from '@otterpatch/core';
 import { createModelClient, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
-import { OtterPatchRuntime } from '@otterpatch/runtime';
+import { OtterPatchRuntime, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
 
-const rt = new OtterPatchRuntime();
+const allowUnreviewedCommit = process.env.OTTERPATCH_ALLOW_UNREVIEWED_COMMIT === '1';
+const rt = new OtterPatchRuntime({ allowUnreviewedCommit });
 rt.on((e) => process.stderr.write('[otterpatch] ' + JSON.stringify(e) + '\n'));
 
 const ok = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] });
@@ -75,7 +76,7 @@ server.registerTool(
       );
       if (r.kind === 'answer') return ok({ answer: r.text });
       if (r.kind === 'clarify') return ok({ questions: r.questions });
-      return ok({ changeSet: r.changeSet, diff: rt.diff(r.changeSet) });
+      return ok({ changeSet: r.changeSet, diff: rt.diff(r.changeSet), proposal: rt.createProposal(r.changeSet, a.format) });
     } catch (e) {
       return fail('propose failed: ' + emsg(e));
     }
@@ -99,12 +100,14 @@ server.registerTool(
 server.registerTool(
   'otterpatch_commit',
   {
-    description: 'Surgically write a ChangeSet back into a document — only touched parts change, the rest stays byte-identical. Returns { ok, fileBase64, touchedParts, fidelity }.',
+    description: 'Commit a previously reviewed proposal. A trusted host must supply the signed proposal and review receipt. Unreviewed commit is disabled unless OTTERPATCH_ALLOW_UNREVIEWED_COMMIT=1.',
     inputSchema: {
       format: z.string(),
       fileBase64: z.string().describe('original document bytes, base64'),
       changeSet: z.string().describe('ChangeSet JSON (from otterpatch_propose)'),
-      acceptedEditIds: z.array(z.string()).optional().describe('subset of edit ids to commit; omit = accept all'),
+      proposal: z.string().optional().describe('signed ProposalEnvelope JSON returned by otterpatch_propose'),
+      reviewReceipt: z.string().optional().describe('signed ReviewReceipt JSON issued by a trusted review UI'),
+      acceptedEditIds: z.array(z.string()).optional().describe('required only in explicitly enabled unreviewed mode; never defaults to accept all'),
       currentRev: z.number().int().nonnegative().optional().describe('live document revision observed immediately before commit'),
     },
   },
@@ -112,12 +115,16 @@ server.registerTool(
     try {
       const bytes = new Uint8Array(Buffer.from(a.fileBase64, 'base64'));
       const changeSet = JSON.parse(a.changeSet) as ChangeSet;
+      const proposal = a.proposal ? JSON.parse(a.proposal) as ProposalEnvelope : undefined;
+      const reviewReceipt = a.reviewReceipt ? JSON.parse(a.reviewReceipt) as ReviewReceipt : undefined;
       const res = await rt.commit({
         format: a.format,
         bytes,
         changeSet,
         ...(a.acceptedEditIds ? { acceptedEditIds: a.acceptedEditIds } : {}),
         currentRev: (a.currentRev ?? changeSet.baseRev) as DocRev,
+        ...(proposal ? { proposal } : {}),
+        ...(reviewReceipt ? { reviewReceipt } : {}),
       });
       return ok({ ok: res.ok, ...(res.ok ? { fileBase64: Buffer.from(res.bytes).toString('base64') } : { partialFileBase64: Buffer.from(res.bytes).toString('base64') }), touchedParts: res.touchedParts, fidelity: res.fidelity, ...(res.appliedEditIds ? { appliedEditIds: res.appliedEditIds } : {}), ...(res.droppedEdits ? { droppedEdits: res.droppedEdits } : {}) });
     } catch (e) {

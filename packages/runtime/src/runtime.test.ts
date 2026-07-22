@@ -62,7 +62,9 @@ test('runtime: propose → diff → commit(excel) 端到端 + 事件流', async 
   assert.equal(d.items[0]!.badge, 'modify');
 
   const original = makeXlsx();
-  const res = await rt.commit({ format: 'excel', bytes: original, changeSet: cs });
+  const proposal = rt.createProposal(cs, 'excel');
+  const reviewed = rt.reviewProposal(proposal, cs, cs.edits.map((edit) => edit.id), original, 'test-reviewer');
+  const res = await rt.commit({ format: 'excel', bytes: original, changeSet: cs, ...reviewed });
   assert.equal(res.ok, true);
   assert.deepEqual(comparePartsIntegrity(original, res.bytes).changed, ['~xl/worksheets/sheet1.xml']);
   const sheet = dec.decode(readOoxmlParts(res.bytes)['xl/worksheets/sheet1.xml']!);
@@ -119,8 +121,43 @@ test('runtime: commit rejects stale base revision', async () => {
   await assert.rejects(() => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, currentRev: 1 as DocRev }), /stale/);
 });
 
+test('runtime: commit fails closed without review and binds receipt to ChangeSet, file, IDs, and one use', async () => {
+  const rt = new OtterPatchRuntime({ reviewSecret: 'x'.repeat(32) });
+  const bytes = makeXlsx();
+  const aid = 'a0' as import('@otterpatch/core').AnchorId;
+  const cs: ChangeSet = {
+    id: 'reviewed', hostId: 'h', baseRev: 0 as DocRev,
+    anchors: { [aid]: { id: aid, hostId: 'h' as HostId, kind: 'grid', ref: null, baseRev: 0 as DocRev, portable: { kind: 'grid', sheet: 'Sheet1', a1: 'B1' } } },
+    origin: { by: 'human' }, meta: { intent: 'x' },
+    edits: [{ id: 'e1', target: aid, op: { family: 'value', kind: 'setValue', value: 1 } }],
+  };
+  await assert.rejects(() => rt.commit({ format: 'excel', bytes, changeSet: cs, acceptedEditIds: ['e1'] }), /signed proposal and review receipt/);
+
+  const proposal = rt.createProposal(cs, 'excel');
+  const reviewed = rt.reviewProposal(proposal, cs, ['e1'], bytes, 'reviewer');
+  assert.throws(
+    () => rt.reviewProposal(reviewed.proposal, cs, ['e1'], new Uint8Array([1, 2, 3]), 'reviewer'),
+    /already bound to a different source file/,
+  );
+  await assert.rejects(
+    () => rt.commit({ format: 'excel', bytes, changeSet: { ...cs, meta: { intent: 'tampered' } }, ...reviewed }),
+    /ChangeSet hash mismatch/,
+  );
+  await assert.rejects(
+    () => rt.commit({ format: 'excel', bytes: new Uint8Array([1, 2, 3]), changeSet: cs, ...reviewed }),
+    /source file hash mismatch/,
+  );
+  await assert.rejects(
+    () => rt.commit({ format: 'excel', bytes, changeSet: cs, acceptedEditIds: [], ...reviewed }),
+    /must not be empty/,
+  );
+  const result = await rt.commit({ format: 'excel', bytes, changeSet: cs, ...reviewed });
+  assert.equal(result.ok, true);
+  await assert.rejects(() => rt.commit({ format: 'excel', bytes, changeSet: cs, ...reviewed }), /already been used/);
+});
+
 test('runtime: commit rejects invalid acceptedEditIds', async () => {
-  const rt = new OtterPatchRuntime();
+  const rt = new OtterPatchRuntime({ allowUnreviewedCommit: true });
   const aid = 'a0' as import('@otterpatch/core').AnchorId;
   const cs = {
     id: 'c',
@@ -134,4 +171,16 @@ test('runtime: commit rejects invalid acceptedEditIds', async () => {
   await assert.rejects(() => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, acceptedEditIds: [] }), /must not be empty/);
   await assert.rejects(() => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, acceptedEditIds: ['missing'] }), /unknown edit id/);
   await assert.rejects(() => rt.commit({ format: 'excel', bytes: makeXlsx(), changeSet: cs, acceptedEditIds: ['e1', 'e1'] }), /duplicate edit id/);
+});
+
+test('runtime: proposal signing rejects non-JSON numeric values', () => {
+  const rt = new OtterPatchRuntime();
+  const aid = 'a0' as import('@otterpatch/core').AnchorId;
+  const cs: ChangeSet = {
+    id: 'bad-number', hostId: 'h', baseRev: 0 as DocRev,
+    anchors: { [aid]: { id: aid, hostId: 'h' as HostId, kind: 'grid', ref: null, baseRev: 0 as DocRev, portable: { kind: 'grid', sheet: 'Sheet1', a1: 'A1' } } },
+    origin: { by: 'human' }, meta: { intent: 'x' },
+    edits: [{ id: 'e1', target: aid, op: { family: 'value', kind: 'setValue', value: Number.NaN } }],
+  };
+  assert.throws(() => rt.createProposal(cs, 'excel'), /non-finite/);
 });

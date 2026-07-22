@@ -450,6 +450,15 @@ function localServeToken(): string {
   }
 }
 
+function localReviewToken(): string {
+  try {
+    const w = window as unknown as { otterpatch?: { reviewToken?: string } };
+    return String(w.otterpatch?.reviewToken || localStorage.getItem('oa.reviewToken') || '');
+  } catch {
+    return '';
+  }
+}
+
 function normalizeLocalEndpoint(raw: string): string | null {
   try {
     const u = new URL(raw.trim());
@@ -558,6 +567,7 @@ export function App() {
     t,
     setBusy,
     localServeToken,
+    localReviewToken,
     normalizeLocalEndpoint,
   });
   const [sel, setSel] = useState<Sel>({ ar: 1, ac: 2, br: 5, bc: 5 });
@@ -766,7 +776,7 @@ export function App() {
         streamObjsRef.current = [];
         streamByEditRef.current = {};
         staleStreamRef.current = false;
-        type StreamEvt = { type: string; delta?: string; name?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; questions?: ClarifyQuestion[]; message?: string };
+        type StreamEvt = { type: string; delta?: string; name?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; proposal?: unknown; questions?: ClarifyQuestion[]; message?: string };
         await streamPropose<StreamEvt>(
           ep,
           { format: fmt, intent: theIntent, context: ctx, baseRev: 0, provider, model, apiKey, ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildAppHistory(thread) } : {}) },
@@ -808,6 +818,7 @@ export function App() {
               if (e.kind === 'changeset' && e.diff) {
                 const diff = e.diff;
                 const cs = e.changeSet ?? null;
+                const proposal = e.proposal ?? null;
                 setRealCs(cs);
                 setRealDiff(diff);
                 acceptMany(diff.items.map((it) => akey(diff.changeSetId, it.editId))); // 合并而非覆写:老回合的处置不被新提案冲掉
@@ -833,14 +844,14 @@ export function App() {
                     board = { byEdit: { ...b.byEdit, ...mut.byEdit }, objs: b.objs, muts: mut.muts };
                     if (b.nodes.length || b.edges.length) void playBoard(b.nodes, b.edges); // 兜底:逐个补图
                   }
-                  setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, board }));
+                  setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, proposal, diff, board }));
                 } else if (fmt === 'word') {
                   const wordEdits = materializeWordEdits(diff, cs);
                   // 乐观落入文档(与 Excel 播放一致);编辑器按 domId 包裹,拒绝可精确还原
                   wordRef.current?.closeUndoWindow(); // 新提案=上一轮撤销窗口关闭,旧 data-undo 剥净后再落新标记
                   // 落地顺序:先非删段(段号锚不受影响),删段按段号【降序】——升序会让先删的段把后续段号顶前,删错段(实测会误删含图段)
                   for (const w of orderWordEditsForApply(wordEdits)) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w));
-                  setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, word: wordEdits }));
+                  setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, proposal, diff, word: wordEdits }));
                   setReviewIdx(0);
                   if (wordEdits[0]) wordRef.current?.highlight(wordEdits[0].domId); // 审阅期定位第一条
                 } else {
@@ -852,7 +863,7 @@ export function App() {
                   // 采集整格改前状态(值/公式/填充/字色/加粗/数字格式/对齐),供 git-diff 展示 + "撤销/拒绝"精确还原
                   const ops = captureGridOpBeforeState(materializeGridOps(diff), univerRef.current);
                   setExcelDiff('final'); // 新提案到达,速览条回到"改后"基准
-                  setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, diff, ops }));
+                  setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, proposal, diff, ops }));
                   if (ops.length) void playGridOps(univerRef.current, ops, { onStart: () => setSent(true) }); // 边画边改
                 }
               } else if (e.kind === 'clarify' && e.questions?.length) {

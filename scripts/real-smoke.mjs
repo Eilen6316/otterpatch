@@ -39,7 +39,9 @@ if (cs.edits.length < 1) {
   process.exit(1);
 }
 
-const res = await rt.commit({ format: 'excel', bytes: xlsx, changeSet: cs });
+const proposal = rt.createProposal(cs, 'excel');
+const reviewed = rt.reviewProposal(proposal, cs, cs.edits.map((edit) => edit.id), xlsx, 'real-model-smoke');
+const res = await rt.commit({ format: 'excel', bytes: xlsx, changeSet: cs, ...reviewed });
 const sheet = dec.decode(unzipSync(res.bytes)['xl/worksheets/sheet1.xml']);
 console.log(`[smoke] commit ok=${res.ok} touched=${JSON.stringify(res.touchedParts)} sheet1Snippet=${sheet.slice(0, 120)}`);
 console.log('[smoke] REAL-MODEL SMOKE OK');

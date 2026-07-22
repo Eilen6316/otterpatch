@@ -8,6 +8,7 @@ export interface CommitTurn {
   format: WritebackFormat;
   fileSnapshot?: FileSnapshot;
   changeSet?: unknown;
+  proposal?: unknown;
 }
 
 export interface UseCommitWritebackOptions {
@@ -20,6 +21,7 @@ export interface UseCommitWritebackOptions {
   t: (key: string) => string;
   setBusy: (busy: boolean) => void;
   localServeToken: () => string;
+  localReviewToken: () => string;
   normalizeLocalEndpoint: (raw: string) => string | null;
 }
 
@@ -55,6 +57,7 @@ export function useCommitWriteback({
   t,
   setBusy,
   localServeToken,
+  localReviewToken,
   normalizeLocalEndpoint,
 }: UseCommitWritebackOptions): UseCommitWritebackResult {
   const ensureCommitFile = (turn: CommitTurn): boolean => {
@@ -84,6 +87,10 @@ export function useCommitWriteback({
       notify(t('请先上传要写回的文件'));
       return false;
     }
+    if (!turn.proposal) {
+      notify('This proposal has no signed review envelope. Regenerate it before committing.');
+      return false;
+    }
     if (!ensureCommitFile(turn)) return false;
     if (!acceptedEditIds.length) {
       notify(t('没有要接受的改动'));
@@ -95,9 +102,11 @@ export function useCommitWriteback({
       const data = await commitWriteback({
         endpoint,
         token: localServeToken(),
+        reviewToken: localReviewToken(),
         format: turn.format,
         fileBase64,
         changeSet,
+        proposal: turn.proposal,
         acceptedEditIds,
       });
       const droppedCount = data.droppedEdits?.length ?? 0;

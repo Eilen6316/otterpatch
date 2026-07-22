@@ -21,6 +21,7 @@ export interface WorkspaceDiffTurnInput<FileSnapshot> {
   format: WorkspaceFormat;
   fileSnapshot?: FileSnapshot;
   changeSet: unknown;
+  proposal?: unknown;
   diff: AgentDiff;
   ops?: GridOp[];
   board?: BoardPatch;
@@ -55,6 +56,7 @@ export function makeWorkspaceDiffTurn<FileSnapshot>(
   format: WorkspaceFormat;
   fileSnapshot?: FileSnapshot;
   changeSet: unknown;
+  proposal?: unknown;
   diff: AgentDiff;
   ops: GridOp[];
   board?: BoardPatch;
@@ -68,6 +70,7 @@ export function makeWorkspaceDiffTurn<FileSnapshot>(
     format: input.format,
     fileSnapshot: input.fileSnapshot,
     changeSet: input.changeSet,
+    proposal: input.proposal,
     diff: input.diff,
     ops: input.ops ?? [],
     ...(input.board ? { board: input.board } : {}),
