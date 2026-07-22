@@ -13,9 +13,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
       # electron's GUI binary isn't needed for typecheck/build/test — skip the ~100MB download
       - name: Install
-        run: npm install
+        run: npm ci --ignore-scripts
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - name: Typecheck (tsc -b)
@@ -48,7 +50,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --ignore-scripts
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: npm run typecheck
