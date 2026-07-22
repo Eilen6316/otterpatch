@@ -195,18 +195,28 @@ function upsertCell(sheetXml: string, ref: string, newCellXml: string, hit: Cell
   return sheetXml.slice(0, insAt) + rowXml + sheetXml.slice(insAt);
 }
 
-/** Extract {sheet?, a1} from a grid anchor (a1 may be a range). */
-function anchorA1(a: LogicalAnchor): { sheet?: string; a1: string } | null {
+function unquoteSheetName(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.startsWith("'") && trimmed.endsWith("'")
+    ? trimmed.slice(1, -1).replace(/''/g, "'")
+    : trimmed;
+}
+
+/** Extract the canonical {sheet, a1} pair from the core grid-locator contract. */
+function anchorA1(a: LogicalAnchor): { sheet: string; a1: string } | null {
   const p = a.portable;
   if (p.kind !== 'grid') return null;
+  if (!p.sheet.trim()) throw new Error('grid anchor sheet is empty');
   let a1 = p.a1;
-  let sheet: string | undefined;
-  const bang = a1.indexOf('!');
+  const bang = a1.lastIndexOf('!');
   if (bang >= 0) {
-    sheet = a1.slice(0, bang).replace(/^'|'$/g, '');
+    const qualifiedSheet = unquoteSheetName(a1.slice(0, bang));
+    if (qualifiedSheet !== p.sheet) {
+      throw new Error(`grid anchor sheet mismatch: portable.sheet='${p.sheet}', a1 sheet='${qualifiedSheet}'`);
+    }
     a1 = a1.slice(bang + 1);
   }
-  return sheet != null ? { sheet, a1 } : { a1 };
+  return { sheet: p.sheet, a1 };
 }
 
 function resolveStylesPath(parts: OoxmlParts): string | null {

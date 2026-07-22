@@ -39,6 +39,28 @@ function makeXlsx(): Uint8Array {
   });
 }
 
+function makeTwoSheetXlsx(): Uint8Array {
+  return zipSync({
+    '[Content_Types].xml': enc('<?xml version="1.0"?><Types/>'),
+    '_rels/.rels': enc('<?xml version="1.0"?><Relationships/>'),
+    'xl/workbook.xml': enc(
+      '<?xml version="1.0"?><workbook xmlns:r="r"><sheets>' +
+        '<sheet name="Sheet1" sheetId="1" r:id="rId1"/>' +
+        '<sheet name="Sheet2" sheetId="2" r:id="rId2"/>' +
+        '</sheets></workbook>',
+    ),
+    'xl/_rels/workbook.xml.rels': enc(
+      '<?xml version="1.0"?><Relationships>' +
+        '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/>' +
+        '<Relationship Id="rId2" Target="worksheets/sheet2.xml"/>' +
+        '</Relationships>',
+    ),
+    'xl/styles.xml': enc('<?xml version="1.0"?><styleSheet/>'),
+    'xl/worksheets/sheet1.xml': enc('<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="B1"><v>10</v></c></row></sheetData></worksheet>'),
+    'xl/worksheets/sheet2.xml': enc('<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="B1"><v>20</v></c></row></sheetData></worksheet>'),
+  });
+}
+
 function setB1To(value: number | string): ChangeSet {
   const anchorId = 'a1' as AnchorId;
   return {
@@ -89,18 +111,33 @@ test('setValue 字符串:走 inlineStr,不触碰 sharedStrings', async () => {
 });
 
 /** Single-edit ChangeSet: B1 (or the given a1) + an arbitrary EditOp. */
-function csOp(op: EditOp, a1 = 'Sheet1!B1'): ChangeSet {
+function csOp(op: EditOp, a1 = 'Sheet1!B1', sheet = 'Sheet1'): ChangeSet {
   const aid = 'a1' as AnchorId;
   return {
     id: 'cs',
     hostId: 'h1',
     baseRev: 0 as DocRev,
-    anchors: { [aid]: { id: aid, hostId: 'h1' as HostId, kind: 'grid', ref: null, baseRev: 0 as DocRev, portable: { kind: 'grid', sheet: 'Sheet1', a1 } } },
+    anchors: { [aid]: { id: aid, hostId: 'h1' as HostId, kind: 'grid', ref: null, baseRev: 0 as DocRev, portable: { kind: 'grid', sheet, a1 } } },
     origin: { by: 'human' },
     meta: { intent: 't' },
     edits: [{ id: 'e1', target: aid, op }],
   };
 }
+
+test('xlsx writeback honors portable.sheet when a1 is unqualified', async () => {
+  const original = makeTwoSheetXlsx();
+  const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
+  const res = await wb.commit(
+    csOp({ family: 'value', kind: 'setValue', value: 99 }, 'B1', 'Sheet2'),
+    { hostId: 'h1', bytes: original, rev: 0 as DocRev },
+  );
+
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.touchedParts, ['xl/worksheets/sheet2.xml']);
+  const parts = readOoxmlParts(res.bytes);
+  assert.match(dec.decode(parts['xl/worksheets/sheet1.xml']!), /<c r="B1"><v>10<\/v><\/c>/);
+  assert.match(dec.decode(parts['xl/worksheets/sheet2.xml']!), /<c r="B1"><v>99<\/v><\/c>/);
+});
 
 test('P1.3 setFormula:写 <f> 真落盘(保留样式 s),不再静默丢弃', async () => {
   const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
