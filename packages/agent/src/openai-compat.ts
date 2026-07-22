@@ -12,7 +12,8 @@ import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, type ChangeSet } 
 import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
 import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, execReadTool, limitToolResult, parseClarify, proposalSystem, recentHistory, respondSystem, validMaxTokens, validProviderTimeout } from './sheet-tools.js';
 import { NUDGE_DIRECT, NUDGE_TOOLIFY, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
-import { salvageProposalArgs, salvageText, safeParse } from './json-salvage.js';
+import { salvageProposalArgs, salvageText, safeParse, salvagedProposalPayload } from './json-salvage.js';
+import { AgentLoopBudget, readToolLimitText, verificationFailureText } from './loop-budget.js';
 
 export interface OpenAICompatOptions {
   apiKey?: string;
@@ -61,6 +62,7 @@ export class OpenAICompatModelClient implements ModelClient {
   private readonly model: string;
   private readonly maxTokens: number;
   private readonly forcedTool: boolean;
+  private readonly timeoutMs: number;
 
   constructor(opts: OpenAICompatOptions) {
     const timeout = validProviderTimeout(opts.timeoutMs);
@@ -68,12 +70,14 @@ export class OpenAICompatModelClient implements ModelClient {
     this.model = opts.model;
     this.maxTokens = validMaxTokens(opts.maxTokens);
     this.forcedTool = opts.forcedTool ?? true;
+    this.timeoutMs = timeout;
   }
 
   private callModel(
     req: ProposeRequest,
     dialect: HostDialect,
     forced: boolean,
+    timeout: number,
   ): Promise<OpenAI.Chat.Completions.ChatCompletion> {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: proposalSystem(dialect) },
@@ -94,31 +98,40 @@ export class OpenAICompatModelClient implements ModelClient {
         },
       ],
       tool_choice: forced ? { type: 'function', function: { name: dialect.toolName } } : 'auto',
-    });
+    }, { timeout });
   }
 
   async proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet> {
+    const budget = new AgentLoopBudget(0);
+    const call = async (forced: boolean): Promise<OpenAI.Chat.Completions.ChatCompletion> => {
+      const result = await this.callModel(req, dialect, forced, Math.min(this.timeoutMs, budget.beginModelCall()));
+      budget.finishStep();
+      return result;
+    };
     let res: OpenAI.Chat.Completions.ChatCompletion;
     try {
-      res = await this.callModel(req, dialect, this.forcedTool);
+      res = await call(this.forcedTool);
     } catch (e) {
       // Reasoning models (e.g. deepseek-v4-flash / reasoner) reject forced tool_choice → auto-fallback and retry
       const msg = e instanceof Error ? e.message : String(e);
       if (this.forcedTool && /tool_choice|thinking/i.test(msg)) {
-        res = await this.callModel(req, dialect, false);
+        res = await call(false);
       } else {
         throw e;
       }
     }
 
-    const call = res.choices[0]?.message?.tool_calls?.[0];
-    if (!call || call.type !== 'function') {
+    const message = res.choices[0]?.message;
+    const toolCall = message?.tool_calls?.[0];
+    const output = (message?.content ?? '') + (message?.tool_calls ?? []).map((item) => item.type === 'function' ? item.function.name + item.function.arguments : JSON.stringify(item)).join('');
+    assertModelOutputChars(output.length);
+    budget.recordOutput(output, res.usage?.completion_tokens);
+    if (!toolCall || toolCall.type !== 'function') {
       throw new Error(`OpenAICompatModelClient: model did not call ${dialect.toolName}`);
     }
-    assertModelOutputChars((res.choices[0]?.message?.content ?? '').length + call.function.arguments.length);
-    const parsed = salvageProposalArgs(call.function.arguments);
+    const parsed = salvageProposalArgs(toolCall.function.arguments);
     if (parsed.truncated) throw new Error(TRUNCATED_FALLBACK);
-    const changeSet = dialect.buildChangeSet(req, parsed);
+    const changeSet = dialect.buildChangeSet(req, salvagedProposalPayload(parsed));
     assertChangeSet(changeSet);
     return changeSet;
   }
@@ -144,18 +157,24 @@ export class OpenAICompatModelClient implements ModelClient {
   }
 
   /** Smart routing + multi-step loop: tool_choice:auto; the model may first call read-only tools (read_range/aggregate) to fetch data on demand, then answer or propose edits.
-   *  After an edit proposal, if opts.verify is provided run a shadow validation; on failure feed the recomputed results/issue list back and let the model fix it (propose→observe→repair). */
+   *  After an edit proposal, run the declared check; on failure feed the report back within the independent proposal-repair budget. */
   async respond(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Promise<AgentResponse> {
     const { messages, tools } = this.buildCtx(req, dialect, opts);
-    let repairsLeft = opts?.maxRepairs ?? 1;
+    const budget = new AgentLoopBudget(opts?.maxRepairs ?? 1);
     let nudged = false;
 
     for (let step = 0; step < STEP_LIMIT; step++) {
-      const res = await this.client.chat.completions.create({ model: this.model, max_tokens: this.maxTokens, messages, tools, tool_choice: 'auto' });
+      const res = await this.client.chat.completions.create(
+        { model: this.model, max_tokens: this.maxTokens, messages, tools, tool_choice: 'auto' },
+        { timeout: Math.min(this.timeoutMs, budget.beginModelCall()) },
+      );
+      budget.finishStep();
       const msg = res.choices[0]?.message;
       if (!msg) return { kind: 'answer', text: '(模型无响应)' };
       const calls = (msg.tool_calls ?? []).filter((c) => c.type === 'function');
-      assertModelOutputChars((msg.content ?? '').length + calls.reduce((total, call) => total + call.function.arguments.length, 0));
+      const output = (msg.content ?? '') + calls.map((call) => call.function.name + call.function.arguments).join('');
+      assertModelOutputChars(output.length);
+      budget.recordOutput(output, res.usage?.completion_tokens);
       if (!calls.length) {
         // No tool call: empty text → nudge for a result; prose final → toolify it once
         // ("prose proposal" failure mode: plan/clarify written as raw text).
@@ -167,22 +186,20 @@ export class OpenAICompatModelClient implements ModelClient {
       const propose = calls.find((c) => c.function.name === dialect.toolName);
       if (propose) {
         const parsed = salvageProposalArgs(propose.function.arguments);
-        if (parsed.truncated && !parsed.edits?.length && !parsed.ops?.length) return { kind: 'answer', text: TRUNCATED_FALLBACK };
-        // 部分截断:抢救出了一截(如 18 条只剩 3 条,值还可能熔接)——别把残图当成品交付,回炉让模型分批重提
-        if (parsed.truncated && repairsLeft <= 0) return { kind: 'answer', text: TRUNCATED_FALLBACK };
-        if (parsed.truncated && repairsLeft > 0) {
-          repairsLeft--;
+        if (parsed.truncated) {
+          if (!budget.tryTruncationRepair()) return { kind: 'answer', text: TRUNCATED_FALLBACK };
           const got = (parsed.ops?.length ?? parsed.edits?.length ?? 0);
           messages.push({ role: 'assistant', content: msg.content ?? null, tool_calls: [{ id: propose.id, type: 'function', function: propose.function }] });
           messages.push({ role: 'tool', tool_call_id: propose.id, content: `你的 ${dialect.toolName} 输出在中途被截断,只完整收到前 ${got} 条,其余全部丢失(且截断处的值可能已损坏)。请立即重新提出,并【控制单次输出体积】:本批只输出前 ~8 条完整内容(style/字段只留必要项),plan 里说明"先做第一批,继续说'下一批'"。` });
           continue;
         }
-        const cs = dialect.buildChangeSet(req, parsed);
+        const cs = dialect.buildChangeSet(req, salvagedProposalPayload(parsed));
         assertChangeSet(cs);
         if (opts?.verify) {
           const v = await opts.verify(cs);
+          budget.finishStep();
           if (!v.ok) {
-            repairsLeft--;
+            if (!budget.tryProposalRepair()) return { kind: 'answer', text: verificationFailureText(v) };
             messages.push({ role: 'assistant', content: msg.content ?? null, tool_calls: [{ id: propose.id, type: 'function', function: propose.function }] });
             messages.push({ role: 'tool', tool_call_id: propose.id, content: v.report });
             continue;
@@ -200,22 +217,27 @@ export class OpenAICompatModelClient implements ModelClient {
       }
 
       // Read-only tools: execute + feed results back, continue the loop
+      if (!budget.tryReadTools(calls.length)) return { kind: 'answer', text: readToolLimitText() };
       messages.push(msg);
       for (const c of calls) {
         messages.push({ role: 'tool', tool_call_id: c.id, content: this.execTool(c.function.name, safeParse(c.function.arguments), req, opts) });
       }
+      budget.finishStep();
     }
     return { kind: 'answer', text: TOO_MANY_STEPS_MSG };
   }
 
-  /** Streaming variant of respond: emits reasoning (chain-of-thought) / answer (body) deltas as they are generated. Same multi-step loop + shadow-validation repair as respond. */
+  /** Streaming variant of respond: emits reasoning/answer deltas while enforcing the same independent loop budgets as respond. */
   async respondStream(req: ProposeRequest, dialect: HostDialect, onEvent: (e: StreamEvent) => void, opts?: RespondOptions): Promise<AgentResponse> {
     const { messages, tools } = this.buildCtx(req, dialect, opts);
-    let repairsLeft = opts?.maxRepairs ?? 1;
+    const budget = new AgentLoopBudget(opts?.maxRepairs ?? 1);
     let nudged = false;
 
     for (let step = 0; step < STEP_LIMIT; step++) {
-      const stream = await this.client.chat.completions.create({ model: this.model, max_tokens: this.maxTokens, messages, tools, tool_choice: 'auto', stream: true });
+      const stream = await this.client.chat.completions.create(
+        { model: this.model, max_tokens: this.maxTokens, messages, tools, tool_choice: 'auto', stream: true },
+        { timeout: Math.min(this.timeoutMs, budget.beginModelCall()) },
+      );
       let content = '';
       let outputChars = 0;
       const toolAcc: Record<number, { id: string; name: string; args: string }> = {};
@@ -226,59 +248,71 @@ export class OpenAICompatModelClient implements ModelClient {
         if (rc) {
           outputChars += rc.length;
           assertModelOutputChars(outputChars);
+          budget.recordOutput(rc);
           onEvent({ type: 'reasoning', delta: rc });
         }
         if (d.content) {
           outputChars += d.content.length;
           assertModelOutputChars(outputChars);
+          budget.recordOutput(d.content);
           content += d.content;
           onEvent({ type: 'answer', delta: d.content });
         }
         for (const tc of d.tool_calls ?? []) {
           const idx = tc.index ?? 0;
           const acc = (toolAcc[idx] ??= { id: '', name: '', args: '' });
-          if (tc.id) acc.id = tc.id;
-          if (tc.function?.name) acc.name = tc.function.name;
+          if (tc.id) {
+            outputChars += tc.id.length;
+            assertModelOutputChars(outputChars);
+            acc.id = tc.id;
+            budget.recordOutput(tc.id);
+          }
+          if (tc.function?.name) {
+            outputChars += tc.function.name.length;
+            assertModelOutputChars(outputChars);
+            acc.name = tc.function.name;
+            budget.recordOutput(tc.function.name);
+          }
           if (tc.function?.arguments) {
             outputChars += tc.function.arguments.length;
             assertModelOutputChars(outputChars);
+            budget.recordOutput(tc.function.arguments);
             acc.args += tc.function.arguments;
             // drawio: emit proposal-argument deltas so the frontend can draw the corresponding shapes on the canvas while generating
             if (dialect.format === 'drawio' && acc.name === dialect.toolName) onEvent({ type: 'draft', delta: tc.function.arguments });
           }
         }
       }
+      budget.finishStep();
       const calls = Object.values(toolAcc).filter((c) => c.name);
 
       const propose = calls.find((c) => c.name === dialect.toolName);
       if (propose) {
         const parsed = salvageProposalArgs(propose.args || '{}');
-        if (parsed.truncated && !parsed.edits?.length && !parsed.ops?.length) {
-          const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK };
-          onEvent({ type: 'done', result });
-          return result;
-        }
-        // 部分截断 → 回炉分批(与非流式路径同语义),别把残图当成品交付
-        if (parsed.truncated && repairsLeft <= 0) {
-          const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK };
-          onEvent({ type: 'done', result });
-          return result;
-        }
-        if (parsed.truncated && repairsLeft > 0) {
-          repairsLeft--;
+        if (parsed.truncated) {
+          if (!budget.tryTruncationRepair()) {
+            const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK };
+            onEvent({ type: 'done', result });
+            return result;
+          }
           onEvent({ type: 'tool', name: 'retry:truncated' });
           const got = (parsed.ops?.length ?? parsed.edits?.length ?? 0);
           messages.push({ role: 'assistant', content: content || null, tool_calls: [{ id: propose.id, type: 'function' as const, function: { name: propose.name, arguments: propose.args } }] });
           messages.push({ role: 'tool', tool_call_id: propose.id, content: `你的 ${dialect.toolName} 输出在中途被截断,只完整收到前 ${got} 条,其余全部丢失(且截断处的值可能已损坏)。请立即重新提出,并【控制单次输出体积】:本批只输出前 ~8 条完整内容(style/字段只留必要项),plan 里说明"先做第一批,继续说'下一批'"。` });
           continue;
         }
-        const cs = dialect.buildChangeSet(req, parsed);
+        const cs = dialect.buildChangeSet(req, salvagedProposalPayload(parsed));
         assertChangeSet(cs);
         if (opts?.verify) {
           onEvent({ type: 'tool', name: 'verify' });
           const v = await opts.verify(cs);
+          budget.finishStep();
           if (!v.ok) {
-            repairsLeft--;
+            if (!budget.tryProposalRepair()) {
+              const result: AgentResponse = { kind: 'answer', text: verificationFailureText(v) };
+              onEvent({ type: 'done', result });
+              return result;
+            }
             messages.push({ role: 'assistant', content: content || null, tool_calls: [{ id: propose.id, type: 'function' as const, function: { name: propose.name, arguments: propose.args } }] });
             messages.push({ role: 'tool', tool_call_id: propose.id, content: v.report });
             continue;
@@ -310,11 +344,17 @@ export class OpenAICompatModelClient implements ModelClient {
       }
 
       // Read-only tools: execute + feed back, continue the loop
+      if (!budget.tryReadTools(calls.length)) {
+        const result: AgentResponse = { kind: 'answer', text: readToolLimitText() };
+        onEvent({ type: 'done', result });
+        return result;
+      }
       messages.push({ role: 'assistant', content: content || null, tool_calls: calls.map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.args } })) });
       for (const c of calls) {
         onEvent({ type: 'tool', name: c.name });
         messages.push({ role: 'tool', tool_call_id: c.id, content: this.execTool(c.name, safeParse(c.args || '{}'), req, opts) });
       }
+      budget.finishStep();
     }
     const result: AgentResponse = { kind: 'answer', text: TOO_MANY_STEPS_MSG };
     onEvent({ type: 'done', result });

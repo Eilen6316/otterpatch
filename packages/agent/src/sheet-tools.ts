@@ -10,11 +10,11 @@ import { safeParse } from './json-salvage.js';
 import { ROUTING_PREAMBLE, TOO_MANY_STEPS_MSG, ANSWER_USER_DESC, ASK_USER_DESC, READ_RANGE_DESC, AGGREGATE_DESC } from './prompts/index.js';
 import { DOC_TOOL_DEFS, execDocTool, type DocSnapshot } from './doc-tools.js';
 
-/** Step cap for the multi-step loop. Each of the four fetch tools + load_skill + shadow repair
- *  + final self-check consumes a step; 8 steps get exhausted by the expert flow
+/** Total model-call cap for the multi-step loop. Read tools and repair categories also
+ *  have independent budgets; 8 calls get exhausted by the expert flow
  *  "load manual → audit styles → read section → propose → repair → self-check → resubmit"
  *  (bench actually hit the limit on w-gongwen), so relaxed to 12. */
-export const STEP_LIMIT = 12;
+export const STEP_LIMIT = RESOURCE_LIMITS.agentModelCalls;
 export { ROUTING_PREAMBLE, TOO_MANY_STEPS_MSG };
 
 export function validMaxTokens(value?: number): number {

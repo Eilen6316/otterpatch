@@ -12,7 +12,8 @@ import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, type ChangeSet } 
 import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
 import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, execReadTool, limitToolResult, parseClarify, proposalSystem, recentHistory, respondSystem, validMaxTokens, validProviderTimeout } from './sheet-tools.js';
 import { NUDGE_DIRECT, NUDGE_TOOLIFY, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
-import { salvageProposalArgs, salvageText } from './json-salvage.js';
+import { salvageProposalArgs, salvageText, salvagedProposalPayload } from './json-salvage.js';
+import { AgentLoopBudget, readToolLimitText, verificationFailureText } from './loop-budget.js';
 
 const safeJson = (s?: string): Record<string, unknown> => { try { return s ? (JSON.parse(s) as Record<string, unknown>) : {}; } catch { return {}; } };
 
@@ -50,12 +51,14 @@ export class AnthropicModelClient implements ModelClient {
   private readonly client: Anthropic;
   private readonly model: string;
   private readonly maxTokens: number;
+  private readonly timeoutMs: number;
 
   constructor(opts: AnthropicOptions = {}) {
     const timeout = validProviderTimeout(opts.timeoutMs);
     this.client = new Anthropic({ apiKey: opts.apiKey, baseURL: opts.baseURL, timeout });
     this.model = opts.model ?? 'claude-opus-4-8';
     this.maxTokens = validMaxTokens(opts.maxTokens);
+    this.timeoutMs = timeout;
   }
 
   private toolset(req: ProposeRequest, dialect: HostDialect, opts?: RespondOptions): Anthropic.Tool[] {
@@ -80,6 +83,7 @@ export class AnthropicModelClient implements ModelClient {
   }
 
   async proposeChangeSet(req: ProposeRequest, dialect: HostDialect): Promise<ChangeSet> {
+    const budget = new AgentLoopBudget(0);
     const res = await this.client.messages.create({
       model: this.model,
       max_tokens: this.maxTokens,
@@ -87,12 +91,15 @@ export class AnthropicModelClient implements ModelClient {
       messages: [{ role: 'user', content: currentRequestMessage(req) }],
       tools: [{ name: dialect.toolName, description: dialect.toolDescription, input_schema: dialect.parameters as unknown as Anthropic.Tool['input_schema'] }],
       tool_choice: { type: 'tool', name: dialect.toolName },
-    });
+    }, { timeout: Math.min(this.timeoutMs, budget.beginModelCall()) });
+    budget.finishStep();
+    const output = res.content.map((block) => block.type === 'text' ? block.text : block.type === 'tool_use' ? block.name + JSON.stringify(block.input) : '').join('');
+    assertModelOutputChars(output.length);
+    budget.recordOutput(output, res.usage?.output_tokens);
     const block = res.content.find((b) => b.type === 'tool_use');
     if (!block || block.type !== 'tool_use') {
       throw new Error(`AnthropicModelClient: model did not call ${dialect.toolName}`);
     }
-    assertModelOutputChars(JSON.stringify(block.input).length);
     const changeSet = dialect.buildChangeSet(req, block.input);
     assertChangeSet(changeSet);
     return changeSet;
@@ -103,14 +110,20 @@ export class AnthropicModelClient implements ModelClient {
     const system = this.systemBlocks(dialect);
     const tools = this.toolset(req, dialect, opts);
     const messages = this.initMessages(req);
-    let repairsLeft = opts?.maxRepairs ?? 1;
+    const budget = new AgentLoopBudget(opts?.maxRepairs ?? 1);
     let nudged = false;
 
     for (let step = 0; step < STEP_LIMIT; step++) {
-      const res = await this.client.messages.create({ model: this.model, max_tokens: this.maxTokens, system, messages, tools, tool_choice: { type: 'auto' } });
+      const res = await this.client.messages.create(
+        { model: this.model, max_tokens: this.maxTokens, system, messages, tools, tool_choice: { type: 'auto' } },
+        { timeout: Math.min(this.timeoutMs, budget.beginModelCall()) },
+      );
+      budget.finishStep();
       const text = res.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map((b) => b.text).join('');
       const toolUses = res.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
-      assertModelOutputChars(text.length + toolUses.reduce((total, tool) => total + JSON.stringify(tool.input).length, 0));
+      const output = text + toolUses.map((tool) => tool.name + JSON.stringify(tool.input)).join('');
+      assertModelOutputChars(output.length);
+      budget.recordOutput(output, res.usage?.output_tokens);
       if (!toolUses.length) {
         // No tool call this turn: empty text → nudge to produce a result; non-empty prose →
         // "prose proposal" failure mode, nudge once to toolify it (routing contract: every
@@ -125,8 +138,9 @@ export class AnthropicModelClient implements ModelClient {
         assertChangeSet(cs);
         if (opts?.verify) {
           const v = await opts.verify(cs);
+          budget.finishStep();
           if (!v.ok) {
-            repairsLeft--;
+            if (!budget.tryProposalRepair()) return { kind: 'answer', text: verificationFailureText(v) };
             messages.push({ role: 'assistant', content: [{ type: 'tool_use', id: propose.id, name: propose.name, input: propose.input }] });
             messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: propose.id, content: v.report }] });
             continue;
@@ -144,8 +158,10 @@ export class AnthropicModelClient implements ModelClient {
       }
 
       // Read-only tools: echo assistant content + one tool_result each, continue the loop
+      if (!budget.tryReadTools(toolUses.length)) return { kind: 'answer', text: readToolLimitText() };
       messages.push({ role: 'assistant', content: assistantBlocks(text, toolUses) });
       messages.push({ role: 'user', content: toolUses.map((b) => ({ type: 'tool_result' as const, tool_use_id: b.id, content: this.execTool(b.name, b.input, req, opts) })) });
+      budget.finishStep();
     }
     return { kind: 'answer', text: TOO_MANY_STEPS_MSG };
   }
@@ -155,23 +171,32 @@ export class AnthropicModelClient implements ModelClient {
     const system = this.systemBlocks(dialect);
     const tools = this.toolset(req, dialect, opts);
     const messages = this.initMessages(req);
-    let repairsLeft = opts?.maxRepairs ?? 1;
+    const budget = new AgentLoopBudget(opts?.maxRepairs ?? 1);
     let nudged = false;
 
     for (let step = 0; step < STEP_LIMIT; step++) {
-      const stream = await this.client.messages.create({ model: this.model, max_tokens: this.maxTokens, system, messages, tools, tool_choice: { type: 'auto' }, stream: true });
+      const stream = await this.client.messages.create(
+        { model: this.model, max_tokens: this.maxTokens, system, messages, tools, tool_choice: { type: 'auto' }, stream: true },
+        { timeout: Math.min(this.timeoutMs, budget.beginModelCall()) },
+      );
       let text = '';
       let outputChars = 0;
       const acc: Record<number, { id: string; name: string; json: string }> = {};
       for await (const ev of stream) {
         if (ev.type === 'content_block_start') {
           const cb = ev.content_block;
-          if (cb.type === 'tool_use') acc[ev.index] = { id: cb.id, name: cb.name, json: '' };
+          if (cb.type === 'tool_use') {
+            acc[ev.index] = { id: cb.id, name: cb.name, json: '' };
+            outputChars += cb.id.length + cb.name.length;
+            assertModelOutputChars(outputChars);
+            budget.recordOutput(cb.id + cb.name);
+          }
         } else if (ev.type === 'content_block_delta') {
           const d = ev.delta;
           if (d.type === 'text_delta') {
             outputChars += d.text.length;
             assertModelOutputChars(outputChars);
+            budget.recordOutput(d.text);
             text += d.text;
             onEvent({ type: 'answer', delta: d.text });
           } else if (d.type === 'input_json_delta') {
@@ -179,16 +204,19 @@ export class AnthropicModelClient implements ModelClient {
             if (a) {
               outputChars += d.partial_json.length;
               assertModelOutputChars(outputChars);
+              budget.recordOutput(d.partial_json);
               a.json += d.partial_json;
               if (dialect.format === 'drawio' && a.name === dialect.toolName) onEvent({ type: 'draft', delta: d.partial_json });
             }
           } else if (d.type === 'thinking_delta') {
             outputChars += d.thinking.length;
             assertModelOutputChars(outputChars);
+            budget.recordOutput(d.thinking);
             onEvent({ type: 'reasoning', delta: d.thinking });
           }
         }
       }
+      budget.finishStep();
       const toolUses = Object.values(acc).map((a) => ({ id: a.id, name: a.name, input: safeJson(a.json), json: a.json }));
 
       if (!toolUses.length) {
@@ -201,21 +229,28 @@ export class AnthropicModelClient implements ModelClient {
       const propose = toolUses.find((b) => b.name === dialect.toolName);
       if (propose) {
         const parsed = salvageProposalArgs(propose.json || '{}');
-        if (parsed.truncated && !parsed.edits?.length && !parsed.ops?.length) { const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK }; onEvent({ type: 'done', result }); return result; }
-        if (parsed.truncated && repairsLeft <= 0) { const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK }; onEvent({ type: 'done', result }); return result; }
-        if (parsed.truncated && repairsLeft > 0) {
-          repairsLeft--;
+        if (parsed.truncated) {
+          if (!budget.tryTruncationRepair()) {
+            const result: AgentResponse = { kind: 'answer', text: TRUNCATED_FALLBACK };
+            onEvent({ type: 'done', result });
+            return result;
+          }
           messages.push({ role: 'assistant', content: assistantBlocks(text, [propose]) });
           messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: propose.id, content: TRUNCATED_FALLBACK }] });
           continue;
         }
-        const cs = dialect.buildChangeSet(req, parsed);
+        const cs = dialect.buildChangeSet(req, salvagedProposalPayload(parsed));
         assertChangeSet(cs);
         if (opts?.verify) {
           onEvent({ type: 'tool', name: 'verify' });
           const v = await opts.verify(cs);
+          budget.finishStep();
           if (!v.ok) {
-            repairsLeft--;
+            if (!budget.tryProposalRepair()) {
+              const result: AgentResponse = { kind: 'answer', text: verificationFailureText(v) };
+              onEvent({ type: 'done', result });
+              return result;
+            }
             messages.push({ role: 'assistant', content: assistantBlocks(text, [propose]) });
             messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: propose.id, content: v.report }] });
             continue;
@@ -239,6 +274,11 @@ export class AnthropicModelClient implements ModelClient {
         return result;
       }
 
+      if (!budget.tryReadTools(toolUses.length)) {
+        const result: AgentResponse = { kind: 'answer', text: readToolLimitText() };
+        onEvent({ type: 'done', result });
+        return result;
+      }
       messages.push({ role: 'assistant', content: assistantBlocks(text, toolUses) });
       messages.push({
         role: 'user',
@@ -247,6 +287,7 @@ export class AnthropicModelClient implements ModelClient {
           return { type: 'tool_result' as const, tool_use_id: b.id, content: this.execTool(b.name, b.input, req, opts) };
         }),
       });
+      budget.finishStep();
     }
     const result: AgentResponse = { kind: 'answer', text: TOO_MANY_STEPS_MSG };
     onEvent({ type: 'done', result });

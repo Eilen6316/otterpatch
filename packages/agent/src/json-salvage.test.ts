@@ -1,13 +1,14 @@
 /** Fault-tolerant parsing: salvage the already-closed edits/ops from truncated tool args, so one cut-off doesn't kill the whole batch. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { salvageProposalArgs, salvageText, safeParse } from './json-salvage.js';
+import { salvageProposalArgs, salvageText, safeParse, salvagedProposalPayload } from './json-salvage.js';
 
 test('完整 JSON:正常解析,truncated=false', () => {
   const r = salvageProposalArgs('{"plan":"标红","edits":[{"cell":"A1","op":"setStyle"},{"cell":"A2","op":"setValue","value":1}]}');
   assert.equal(r.truncated, false);
   assert.equal(r.edits?.length, 2);
   assert.equal(r.plan, '标红');
+  assert.deepEqual(salvagedProposalPayload(r), { plan: '标红', edits: r.edits });
 });
 
 test('被截断的 edits:救回已闭合的条目,丢弃残缺尾巴', () => {

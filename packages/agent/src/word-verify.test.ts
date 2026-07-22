@@ -129,3 +129,23 @@ test('Word 端到端:编造 quote → 校验失败回喂 → 同回合改对(真
   const fedBack = JSON.stringify(secondCallArgs?.messages ?? []);
   assert.match(fedBack, /不在文档原文中/, '应把校验失败报告回喂模型');
 });
+
+test('Anthropic stream: maxRepairs=0 stops after the first failed proposal', async () => {
+  const client = new AnthropicModelClient({ apiKey: 'test-not-used' });
+  let calls = 0;
+  (client as unknown as { client: { messages: { create: () => Promise<AsyncIterable<unknown>> } } }).client = {
+    messages: { create: async () => {
+      calls++;
+      return fakeToolStream('t1', { plan: '改写', edits: [{ quote: '不存在', replacement: '新表述' }] });
+    } },
+  };
+  const result = await client.respondStream(
+    { hostId: 'h1', format: 'word', intent: '改写', baseRev: 0 as DocRev, anchors: [], context: DOC },
+    wordDialect,
+    () => {},
+    { verify: buildDocVerifier(DOC), maxRepairs: 0 },
+  );
+  assert.equal(calls, 1);
+  assert.equal(result.kind, 'answer');
+  assert.match(result.kind === 'answer' ? result.text : '', /repair budget exhausted/);
+});

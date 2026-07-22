@@ -27,6 +27,12 @@ export const RESOURCE_LIMITS = Object.freeze({
   providerTimeoutMaxMs: 120_000,
   concurrentModelRequests: 2,
   maxOutputTokens: 16_384,
+  agentModelCalls: 12,
+  agentReadToolCalls: 8,
+  agentProposalRepairs: 4,
+  agentTruncationRepairs: 1,
+  agentTotalOutputTokens: 65_536,
+  agentTotalDurationMs: 120_000,
 });
 
 export type ResourceLimitName = keyof typeof RESOURCE_LIMITS | (string & {});

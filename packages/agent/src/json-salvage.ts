@@ -66,3 +66,9 @@ export function salvageProposalArgs(raw: string): SalvagedProposal {
   const ops = extractArrayItems(raw, 'ops');
   return { ...(plan != null ? { plan } : {}), ...(edits ? { edits } : {}), ...(ops ? { ops } : {}), truncated: true };
 }
+
+/** Remove parser metadata before strict host-dialect validation. */
+export function salvagedProposalPayload(value: SalvagedProposal): Record<string, unknown> {
+  const { truncated: _truncated, ...payload } = value;
+  return payload;
+}

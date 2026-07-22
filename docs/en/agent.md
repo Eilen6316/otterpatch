@@ -12,9 +12,12 @@ contract: the model must end every turn in exactly one tool call —
 - `ask_user` — a guided clarify table (2–4 options per question) when the intent is genuinely
   ambiguous and guessing is costly
 
-Between those, the model may call **read tools** for up to `STEP_LIMIT = 8` loop steps. Both model
-channels (`anthropic.ts`, `openai-compat.ts`) implement the identical loop over the shared
-provider-agnostic tool definitions in `sheet-tools.ts` / `doc-tools.ts`.
+Between those exits, both model channels (`anthropic.ts`, `openai-compat.ts`) run the same bounded
+loop over the provider-agnostic tool definitions in `sheet-tools.ts` / `doc-tools.ts`. Budgets are
+independent: 12 total model calls, 8 read-tool calls, the configured proposal-repair allowance
+(capped at 4), one truncation repair, 65,536 cumulative output tokens, and 120 seconds total.
+Provider-reported output tokens are used when available; streaming fallbacks use a conservative
+UTF-8 byte count. Exhausting one repair category never borrows from another.
 
 ## Read tools (perceive before acting)
 

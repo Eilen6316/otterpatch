@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RESOURCE_LIMITS, ResourceLimitError, type DocRev } from '@otterpatch/core';
-import { Agent, ConventionStack, EXCEL_OPS, MockModelClient, OpenAICompatModelClient, conventionFromMarkdown, createModelClient, excelDialect, normalizeMessages, PROVIDERS, wordDialect, type Provider } from './index.js';
+import { Agent, AnthropicModelClient, ConventionStack, EXCEL_OPS, MockModelClient, OpenAICompatModelClient, conventionFromMarkdown, createModelClient, excelDialect, normalizeMessages, PROVIDERS, wordDialect, type Provider } from './index.js';
 import { defaultLibrary } from '@otterpatch/skills';
+import { AgentLoopBudget, validProposalRepairs } from './loop-budget.js';
 
 test('Agent excel: 意图 + Mock → grid setValue ChangeSet', async () => {
   const mock = new MockModelClient(() => ({ plan: '补 B1', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] }));
@@ -288,4 +289,143 @@ test('OpenAI client rejects oversized model output before JSON salvage', async (
     () => client.proposeChangeSet({ hostId: 'h1', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' }, excelDialect),
     (error) => error instanceof ResourceLimitError && error.resource === 'model_output_chars',
   );
+});
+
+const LOOP_REQ = { hostId: 'h1', format: 'excel', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' };
+const VALID_EXCEL_PROPOSAL = { plan: 'x', edits: [{ cell: 'Sheet1!A1', op: 'setValue', value: 1 }] };
+
+function openAiToolResponse(name: string, args: string, id: string, completionTokens = 1): unknown {
+  return {
+    choices: [{ message: { content: null, tool_calls: [{ id, type: 'function', function: { name, arguments: args } }] } }],
+    usage: { completion_tokens: completionTokens },
+  };
+}
+
+function openAiToolStream(name: string, args: string, id: string): AsyncIterable<unknown> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield { choices: [{ delta: { tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: args } }] } }] };
+    },
+  };
+}
+
+test('agent loop budget tracks model/read/repair/output/time limits independently', () => {
+  assert.throws(
+    () => validProposalRepairs(RESOURCE_LIMITS.agentProposalRepairs + 1),
+    (error) => error instanceof ResourceLimitError && error.resource === 'agent_proposal_repairs',
+  );
+
+  const repairs = new AgentLoopBudget(1);
+  assert.equal(repairs.tryTruncationRepair(), true);
+  assert.equal(repairs.tryTruncationRepair(), false);
+  assert.equal(repairs.tryProposalRepair(), true, 'truncation must not consume proposal repairs');
+  assert.equal(repairs.tryProposalRepair(), false);
+
+  const reads = new AgentLoopBudget(0, { readToolCalls: 2 });
+  assert.equal(reads.tryReadTools(2), true);
+  assert.equal(reads.tryReadTools(1), false);
+
+  const calls = new AgentLoopBudget(0, { modelCalls: 2 });
+  calls.beginModelCall();
+  calls.beginModelCall();
+  assert.throws(
+    () => calls.beginModelCall(),
+    (error) => error instanceof ResourceLimitError && error.resource === 'agent_model_calls',
+  );
+
+  const output = new AgentLoopBudget(0, { totalOutputTokens: 5 });
+  output.recordOutput('abc');
+  assert.throws(
+    () => output.recordOutput('def'),
+    (error) => error instanceof ResourceLimitError && error.resource === 'agent_total_output_tokens',
+  );
+
+  let now = 0;
+  const duration = new AgentLoopBudget(0, { totalDurationMs: 10 }, () => now);
+  duration.beginModelCall();
+  now = 11;
+  assert.throws(
+    () => duration.finishStep(),
+    (error) => error instanceof ResourceLimitError && error.resource === 'agent_total_duration_ms',
+  );
+});
+
+test('OpenAI non-stream repair budget is a strict retry ceiling', async () => {
+  const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'test-model' });
+  let calls = 0;
+  (client as unknown as { client: { chat: { completions: { create: () => Promise<unknown> } } } }).client = {
+    chat: { completions: { create: async () => openAiToolResponse('propose_changeset', JSON.stringify(VALID_EXCEL_PROPOSAL), `t${++calls}`) } },
+  };
+  const result = await client.respond(LOOP_REQ, excelDialect, {
+    maxRepairs: 1,
+    verify: async () => ({ ok: false, code: 'TEST_FAILURE', report: 'always invalid' }),
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.kind, 'answer');
+  assert.match(result.kind === 'answer' ? result.text : '', /repair budget exhausted.*always invalid/s);
+});
+
+test('OpenAI stream repair budget is a strict retry ceiling', async () => {
+  const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'test-model' });
+  let calls = 0;
+  (client as unknown as { client: { chat: { completions: { create: () => Promise<AsyncIterable<unknown>> } } } }).client = {
+    chat: { completions: { create: async () => openAiToolStream('propose_changeset', JSON.stringify(VALID_EXCEL_PROPOSAL), `t${++calls}`) } },
+  };
+  const result = await client.respondStream(LOOP_REQ, excelDialect, () => {}, {
+    maxRepairs: 1,
+    verify: async () => ({ ok: false, code: 'TEST_FAILURE', report: 'always invalid' }),
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.kind, 'answer');
+  assert.match(result.kind === 'answer' ? result.text : '', /repair budget exhausted/);
+});
+
+test('Anthropic non-stream repair budget is a strict retry ceiling', async () => {
+  const client = new AnthropicModelClient({ apiKey: 'test-key', model: 'test-model' });
+  let calls = 0;
+  (client as unknown as { client: { messages: { create: () => Promise<unknown> } } }).client = {
+    messages: { create: async () => ({
+      content: [{ type: 'tool_use', id: `t${++calls}`, name: 'propose_changeset', input: VALID_EXCEL_PROPOSAL }],
+      usage: { output_tokens: 1 },
+    }) },
+  };
+  const result = await client.respond(LOOP_REQ, excelDialect, {
+    maxRepairs: 1,
+    verify: async () => ({ ok: false, code: 'TEST_FAILURE', report: 'always invalid' }),
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.kind, 'answer');
+  assert.match(result.kind === 'answer' ? result.text : '', /repair budget exhausted/);
+});
+
+test('truncation and proposal repair budgets are independent', async () => {
+  const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'test-model' });
+  let calls = 0;
+  let verifies = 0;
+  const truncated = '{"plan":"x","edits":[{"cell":"Sheet1!A1","op":"setValue","value":1}';
+  (client as unknown as { client: { chat: { completions: { create: () => Promise<unknown> } } } }).client = {
+    chat: { completions: { create: async () => {
+      calls++;
+      return openAiToolResponse('propose_changeset', calls === 1 ? truncated : JSON.stringify(VALID_EXCEL_PROPOSAL), `t${calls}`);
+    } } },
+  };
+  const result = await client.respond(LOOP_REQ, excelDialect, {
+    maxRepairs: 1,
+    verify: async () => ({ ok: ++verifies > 1, report: 'repair proposal once' }),
+  });
+  assert.equal(calls, 3);
+  assert.equal(verifies, 2);
+  assert.equal(result.kind, 'changeset');
+});
+
+test('read-tool budget stops the loop before the ninth tool is executed', async () => {
+  const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'test-model' });
+  let calls = 0;
+  (client as unknown as { client: { chat: { completions: { create: () => Promise<unknown> } } } }).client = {
+    chat: { completions: { create: async () => openAiToolResponse('read_range', '{"a1":"A1"}', `r${++calls}`) } },
+  };
+  const result = await client.respond({ ...LOOP_REQ, sheet: { a1: 'A1', values: [[1]] } }, excelDialect);
+  assert.equal(calls, RESOURCE_LIMITS.agentReadToolCalls + 1);
+  assert.equal(result.kind, 'answer');
+  assert.match(result.kind === 'answer' ? result.text : '', /read-tool limit/);
 });

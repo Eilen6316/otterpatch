@@ -4,7 +4,7 @@
  * library (SkillLibrary: what it can do) into the system prompt on demand.
  * Optional validator + maxRetries: on validation failure, feed structured errors back and
  * retry within the same turn (inspired by codex apply_patch's apply-report-iterate loop).
- * Later: skill-script execution, capability negotiation, shadow validation.
+ * Later: skill-script execution and capability negotiation.
  */
 import { assertChangeSet, type ChangeSet } from '@otterpatch/core';
 import type { SkillLibrary } from '@otterpatch/skills';
@@ -12,6 +12,7 @@ import type { ConventionStack } from './conventions.js';
 import { DIALECTS } from './dialects.js';
 import type { AgentResponse, HostDialect, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
 import { assertProposeRequestBudget } from './sheet-tools.js';
+import { validProposalRepairs } from './loop-budget.js';
 
 export interface ChangeSetValidation {
   ok: boolean;
@@ -135,7 +136,7 @@ export class Agent {
     const d = this.dialectFor(req);
 
     const validator = this.opts.validator;
-    const maxRetries = this.opts.maxRetries ?? 0;
+    const maxRetries = validProposalRepairs(this.opts.maxRetries ?? 0);
     let errors: string[] = [];
     for (let attempt = 0; ; attempt++) {
       const r: ProposeRequest = errors.length
