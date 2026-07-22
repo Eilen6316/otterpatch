@@ -85,6 +85,24 @@ test('drawio writeback: out-of-range diagram reports dropped edit', async () => 
   assert.match(res.droppedEdits?.[0]?.reason ?? '', /out of range/);
 });
 
+test('drawio writeback: deleting a missing id is dropped, not applied', async () => {
+  const cs: ChangeSet = {
+    id: 'cs-missing-delete',
+    hostId: 'h1',
+    baseRev: 0 as DocRev,
+    anchors: { a0: anchor('a0', 0, 'missing') } as Record<AnchorId, LogicalAnchor>,
+    origin: { by: 'agent', sessionId: 't' },
+    meta: { intent: 'delete missing object' },
+    edits: [{ id: 'e0', target: 'a0' as AnchorId, op: { family: 'object', kind: 'deleteObject' } }],
+  };
+  const res = await new DrawioSurgicalWriteback().commit(cs, { hostId: 'h1', bytes: enc(FILE), rev: 0 as DocRev });
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.appliedEditIds, []);
+  assert.deepEqual(res.touchedParts, []);
+  assert.match(res.droppedEdits?.[0]?.reason ?? '', /cell "missing" not found/);
+  assert.equal(dec.decode(res.bytes), FILE);
+});
+
 test('drawio writeback: validates ChangeSets at the commit boundary', async () => {
   const base = {
     id: 'cs-unsafe',

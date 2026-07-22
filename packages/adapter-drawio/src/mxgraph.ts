@@ -217,6 +217,7 @@ export function applyEdits(cells: Cell[], edits: DrawioEdit[]): Cell[] {
       continue;
     }
     if (ed.op.kind === 'delete') {
+      if (!arr.some((cell) => cell.id === ed.cellId)) throw new Error(`drawio: cell "${ed.cellId}" not found`);
       const remove = new Set<string>();
       collectDescendants(ed.cellId, arr, remove);
       arr = arr.filter(

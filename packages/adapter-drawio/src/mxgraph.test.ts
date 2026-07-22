@@ -79,6 +79,13 @@ test('delete: 级联删引用它的边', () => {
   assert.match(out, /id="3"/);
 });
 
+test('delete rejects a missing cell id', () => {
+  assert.throws(
+    () => applyEditsToModel(MODEL, [{ cellId: 'missing', op: { kind: 'delete' } }]),
+    /cell "missing" not found/,
+  );
+});
+
 test('特殊字符转义', () => {
   const out = applyEditsToModel(MODEL, [{ cellId: '3', op: { kind: 'setProps', props: { value: 'a<b&c"' } } }]);
   assert.match(out, /id="3"[^>]*value="a&lt;b&amp;c&quot;"/);
