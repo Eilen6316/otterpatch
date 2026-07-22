@@ -2,7 +2,7 @@
  * 自动续批(mock):plan 声明分批 + 开关开启(oa.autobatch=1)→ 全部接受后【自动】续发"下一批",
  * 不需要人工点击;审阅操作行出现 ⚡自动续批 开关。串行续批:每批都是独立 propose→审阅回合。
  */
-import { openApp, sleep } from './harness.mjs';
+import { acceptNextConfirm, openApp, sleep } from './harness.mjs';
 
 const { page, errors, teardown } = await openApp({ storage: { 'oa.fmt': 'word', 'oa.apiKey': 'test-key', 'oa.server': 'http://localhost:4319', 'oa.autobatch': '1' } });
 let pass = 0, fail = 0;
@@ -32,12 +32,14 @@ try {
 
   ok('审阅操作行出现 ⚡自动续批 开关且已勾选', await page.evaluate(() => { const c = document.querySelector('.rv-auto input'); return !!c && c.checked; }));
   // 全部接受 → 不点任何续发按钮,等待自动续批
+  acceptNextConfirm(page);
   await page.locator('.reviewbox .btn.solid').first().click();
   await sleep(2200);
   ok('接受后【自动】续发了"下一批"(无人工点击)', (() => { try { return JSON.parse(bodies[1] ?? '{}').intent === '下一批'; } catch { return false; } })());
   ok('第二批提案已到达(第二个审阅回合)', await page.evaluate(() => document.querySelectorAll('.reviewbox').length >= 2));
   // 第二批 plan 不再含分批意图 → 接受后不再自动续发
   const n = bodies.length;
+  acceptNextConfirm(page);
   await page.locator('.reviewbox .btn.solid').last().click();
   await sleep(2200);
   ok('第二批 plan 无分批意图 → 接受后停止续发', bodies.length === n);

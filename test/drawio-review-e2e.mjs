@@ -1,5 +1,5 @@
 /** Drawio review regression: deleting a node must restore its connected edge on reject/original view. */
-import { createReporter, openApp, sleep } from './harness.mjs';
+import { acceptNextConfirm, createReporter, openApp, sleep } from './harness.mjs';
 
 const initialBoard = {
   pages: [{
@@ -66,6 +66,10 @@ try {
   await sleep(500);
 
   reporter.ok('proposal deletion removes the node and its connected edge', await waitForCounts(1, 0));
+  reporter.ok('proposal starts unapproved', await page.evaluate(() => {
+    const accepted = JSON.parse(localStorage.getItem('oa.accepted') ?? '[]');
+    return accepted.length === 0 && !document.querySelector('.reviewbox .gd-state.ok');
+  }));
 
   await page.locator('.board-difftoggle .rd-dt-seg').first().click();
   await sleep(500);
@@ -79,8 +83,11 @@ try {
   await sleep(500);
   reporter.ok('reject restores the node and connected edge', await waitForCounts(2, 1));
 
-  await page.locator('.reviewbox .rv-acts.done .btn.solid').click();
+  let confirmation = '';
+  acceptNextConfirm(page, (message) => { confirmation = message; });
+  await page.getByRole('button', { name: '全部接受', exact: true }).click();
   await sleep(500);
+  reporter.ok('accept all confirmation summarizes risk and deletion scope', /风险/.test(confirmation) && /删除 1/.test(confirmation));
   reporter.ok('accept all reapplies deletion after rejection', await waitForCounts(1, 0));
   reporter.ok('accepted turn reaches its final state', await page.locator('.reviewbox .rv-final.ok').count() === 1);
   reporter.ok('no console errors', errors.length === 0, errors.join(' | '));

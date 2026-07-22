@@ -8,6 +8,7 @@ interface ReviewThreadTurn {
 export interface UseReviewStateOptions<Turn extends ReviewThreadTurn> {
   setThread: Dispatch<SetStateAction<Turn[]>>;
   setAccepted: Dispatch<SetStateAction<Set<string>>>;
+  setRejected: Dispatch<SetStateAction<Set<string>>>;
 }
 
 export interface UseReviewStateResult {
@@ -22,9 +23,11 @@ export interface UseReviewStateResult {
 export function useReviewState<Turn extends ReviewThreadTurn>({
   setThread,
   setAccepted,
+  setRejected,
 }: UseReviewStateOptions<Turn>): UseReviewStateResult {
   const clearAccepted = (): void => {
     setAccepted(new Set());
+    setRejected(new Set());
   };
 
   const toggleAccept = (id: string, on: boolean): void => {
@@ -34,10 +37,21 @@ export function useReviewState<Turn extends ReviewThreadTurn>({
       else next.delete(id);
       return next;
     });
+    setRejected((prev) => {
+      const next = new Set(prev);
+      if (on) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
   const acceptMany = (ids: string[]): void => {
     setAccepted((prev) => new Set([...prev, ...ids]));
+    setRejected((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) next.delete(id);
+      return next;
+    });
   };
 
   const markCommitted = (index: number, count: number): void => {

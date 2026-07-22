@@ -79,8 +79,15 @@ before-snapshot (prior/next) exactly — it no longer risks deleting the user's 
 The old dual representation ("git-diff list + current change card") is gone; everything converges
 on one **ReviewBox**: an always-visible git-style unified diff (`@@ ref label` hunks with red − /
 green + lines and `~` format lines) where every row has inline quick ✓/✕, dispositioned rows show
-a ✓/✕ badge, and a fixed bottom action bar handles accept/reject-all. Hovering a hunk lights up
-the corresponding inline change and vice versa.
+a ✓/✕ badge, and the fixed bottom action bar submits only explicitly accepted items. Hovering a
+hunk lights up the corresponding inline change and vice versa.
+
+**Approval is fail-closed.** A new proposal is visible as an optimistic workspace preview, but every
+item starts unapproved. Accepted and rejected decisions are disjoint and persist across refreshes.
+After reviewing the list, **Commit accepted** sends only the accepted subset; rejected items remain
+reverted. **Accept all** always opens a confirmation that summarizes safe/caution/destructive counts
+and calls out deletions, structural edits, and document-wide changes. Missing risk metadata is treated
+as caution, and each hunk displays its effective risk level.
 
 **Re-reviewing past turns**: on uncommitted older turns the inline ✓/✕ stays live (silent
 disposition, doesn't move the review cursor); in Excel a row locks (🔒) if a later turn touched

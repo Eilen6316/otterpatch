@@ -57,9 +57,10 @@ as opening a pull request against an `.xlsx` / `.docx` / `.drawio` file.
 - **Anchors are logical, not positional.** Word edits anchor on `quote` (verified real & unique),
   Excel on A1 refs, drawio on cell ids. The doc verifier / grid verifier / topology verifier reject
   anchors that can't land, and the model repairs them in-turn.
-- **The desktop applies proposals optimistically** as reviewable marks (tracked changes / grid
-  values with captured before-state), so review happens in-place. Rejection replays the captured
-  before-state; acceptance physically finalizes.
+- **The desktop previews proposals optimistically, but approves nothing implicitly.** Reviewable
+  marks (tracked changes / grid values with captured before-state) make in-place review possible,
+  while each item starts in an unapproved state. Rejection replays the captured before-state;
+  acceptance physically finalizes, and commit receives only the explicitly accepted subset.
 - **Server-side commit is independent**: the accepted subset of the ChangeSet is applied to the
   uploaded original file by the surgical write-back — the in-app preview never touches your file.
 - **Desktop credentials stay in the main process.** The preload exposes bounded proposal,

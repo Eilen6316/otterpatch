@@ -1,5 +1,5 @@
 /** Live Excel eval — 复制到不存在的表(真实模型):期待【一轮】addSheet+copy 闭环,不追问不分批不手抄。 */
-import { openApp, sleep, createReporter } from './harness.mjs';
+import { acceptNextConfirm, openApp, sleep, createReporter } from './harness.mjs';
 const KEY = process.env.OA_EVAL_KEY ?? '';
 if (!KEY) { console.error('缺少 OA_EVAL_KEY'); process.exit(2); }
 const { page, teardown } = await openApp({
@@ -40,7 +40,7 @@ try {
   r.ok('提案精炼(≤4 条,非 36 条 setValue)', st.n <= 4, `${st.n} 条`);
   // 接受并确认 Sheet2 真出现
   const btn = page.locator('.reviewbox .btn.solid').last();
-  if (await btn.count()) { await btn.click().catch(() => {}); await sleep(2000); }
+  if (await btn.count()) { acceptNextConfirm(page); await btn.click().catch(() => {}); await sleep(2000); }
   const sheet2 = await page.evaluate(() => document.body.textContent?.includes('Sheet2'));
   r.ok('接受后 Sheet2 页签出现', !!sheet2);
   await page.screenshot({ path: (process.env.SHOT_DIR || '.') + '/ec1-copysheet.png' });

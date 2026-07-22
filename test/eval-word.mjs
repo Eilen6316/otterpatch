@@ -5,7 +5,7 @@
  *  3) vague request → expect a clarify card, no document changes
  * Screenshots after each stage for visual verification.
  */
-import { openApp, sleep } from './harness.mjs';
+import { acceptNextConfirm, openApp, sleep } from './harness.mjs';
 const KEY = process.env.OA_EVAL_KEY ?? '';
 if (!KEY) { console.error('缺少 OA_EVAL_KEY 环境变量(DeepSeek API key),live eval 需要真实模型'); process.exit(2); }
 
@@ -43,7 +43,7 @@ async function ask(text) {
 async function shot(name) { await page.screenshot({ path: `${SHOT}/${name}.png`, fullPage: false }); console.log('shot:', name); }
 async function acceptAllIfAny() {
   const btn = page.locator('.reviewbox .btn.solid').last();
-  if (await btn.count()) { try { await btn.click(); await sleep(1200); } catch {} }
+  if (await btn.count()) { try { acceptNextConfirm(page); await btn.click(); await sleep(1200); } catch {} }
 }
 async function newConvo() { try { await page.locator('.convo-new').click(); await sleep(600); } catch {} }
 

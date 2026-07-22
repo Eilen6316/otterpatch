@@ -10,6 +10,7 @@ import type { DiffTurn } from './app-thread-types.js';
 import type { RichDocHandle } from './RichDoc.js';
 import { previewValueText } from './proposal-materializers.js';
 import { akey, BATCH_RX } from './review-shared.js';
+import { reviewRiskLevel } from './review-policy.js';
 
 export interface ReviewBoxProps {
   turn: DiffTurn;
@@ -18,6 +19,7 @@ export interface ReviewBoxProps {
   active: boolean;
   reviewIdx: number;
   accepted: Set<string>;
+  rejected: Set<string>;
   hoverCid: string | null;
   autoBatch: boolean;
   /** 历史重审守卫:这些 editId 的目标格已被后续回合改过,行内 ✓/✕ 锁住(避免旧回合处置踩坏新改动)。 */
@@ -28,16 +30,27 @@ export interface ReviewBoxProps {
   onAccept(idx: number): void;
   onReject(idx: number): void;
   onAcceptAll(): void;
+  onCommitAccepted(): void;
   onRevertTurn(): void;
   onSend(text: string): void;
   onSetAutoBatch(v: boolean): void;
 }
 
-export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBatch, lockedEdits, wordRef, onSetReviewIdx, onHoverCid, onAccept, onReject, onAcceptAll, onRevertTurn, onSend, onSetAutoBatch }: ReviewBoxProps): ReactNode {
+export function ReviewBox({ turn, active, reviewIdx, accepted, rejected, hoverCid, autoBatch, lockedEdits, wordRef, onSetReviewIdx, onHoverCid, onAccept, onReject, onAcceptAll, onCommitAccepted, onRevertTurn, onSend, onSetAutoBatch }: ReviewBoxProps): ReactNode {
   const t = useT();
   const d = turn.diff;
   const total = d.items.length;
-  const ridx = Math.min(reviewIdx, total);
+  const acceptedCount = d.items.filter((item) => accepted.has(akey(d.changeSetId, item.editId))).length;
+  const reviewedCount = d.items.filter((item) => {
+    const key = akey(d.changeSetId, item.editId);
+    return accepted.has(key) || rejected.has(key);
+  }).length;
+  const requestedIdx = Math.min(reviewIdx, total);
+  const firstPendingIdx = d.items.findIndex((item) => {
+    const key = akey(d.changeSetId, item.editId);
+    return !accepted.has(key) && !rejected.has(key);
+  });
+  const ridx = requestedIdx >= total && firstPendingIdx >= 0 ? firstPendingIdx : requestedIdx;
   const cur = active && ridx < total ? d.items[ridx] : undefined;
   const badgeText = (b: string): string => (b === 'add' ? t('新增') : b === 'remove' ? t('删除') : b === 'move' ? t('移动') : t('修改'));
   return (
@@ -62,16 +75,20 @@ export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBat
               const newV = table ? '' : w ? (w.replacement ?? '') : previewValueText(it.after ?? it.proposedAfter);
               const fmtDesc = it.proposalSummary || previewValueText(it.after) || (w?.style ? Object.keys(w.style).join('/') : '') || t('改格式');
               const curHunk = active && k === ridx;
-              const acc = accepted.has(akey(d.changeSetId, it.editId));
-              const seen = active ? k < ridx : true; // active:游标已过=已处置;历史回合:直接亮处置结果
+              const decisionKey = akey(d.changeSetId, it.editId);
+              const acc = accepted.has(decisionKey);
+              const rej = rejected.has(decisionKey);
+              const seen = acc || rej;
+              const risk = reviewRiskLevel(it);
               const canAct = !turn.committed && !turn.reverted; // 历史回合(未提交/未撤销)也可重审
               const lockedRow = lockedEdits?.has(it.editId) ?? false;
               return (
-                <div key={it.editId} data-cid={w?.domId} className={'gd-hunk' + (curHunk ? ' cur' : '') + (w && hoverCid && hoverCid === w.domId ? ' is-linked' : '') + (acc ? '' : ' gd-rej')}
+                <div key={it.editId} data-cid={w?.domId} className={'gd-hunk' + (curHunk ? ' cur' : '') + (w && hoverCid && hoverCid === w.domId ? ' is-linked' : '') + (rej ? ' gd-rej' : '')}
                   onMouseEnter={() => { if (w) { onHoverCid(w.domId); wordRef.current?.linkChange(w.domId); } }}
                   onMouseLeave={() => { onHoverCid(null); wordRef.current?.linkChange(null); }}
                   onClick={() => { if (active) onSetReviewIdx(k); if (w) wordRef.current?.activateChange(w.domId); }} title={it.label}>
                   <div className="gd-ref"><span className="gd-at">@@</span> {refShort} <span className="gd-lbl">{it.label}</span>
+                    <span className={'gd-risk ' + risk} title={it.risk?.reasons?.join(' · ')}>{risk === 'safe' ? t('安全') : risk === 'destructive' ? t('破坏性') : t('谨慎')}</span>
                     {canAct ? (
                       <span className="gd-acts" onClick={(e) => e.stopPropagation()}>
                         {seen ? <span className={'gd-state ' + (acc ? 'ok' : 'no')}>{acc ? '✓' : '✕'}</span> : null}
@@ -113,7 +130,7 @@ export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBat
             })}
           </div>
       ) : null}
-      {total > 0 && active && <div className="rv-prog"><div className="rv-prog-fill" style={{ width: `${(ridx / total) * 100}%` }} /></div>}
+      {total > 0 && active && <div className="rv-prog"><div className="rv-prog-fill" style={{ width: `${(reviewedCount / total) * 100}%` }} /></div>}
 
       {total === 0 ? (
         <div className="rv-empty">{t('Agent 未提出改动')}</div>
@@ -148,10 +165,11 @@ export function ReviewBox({ turn, active, reviewIdx, accepted, hoverCid, autoBat
         </div>
       ) : active ? (
         <div className="rv-acts done">
-          <span className="rv-donen">{t('已逐条过完')} · {d.items.filter((x) => accepted.has(akey(d.changeSetId, x.editId))).length}/{total}</span>
+          <span className="rv-donen">{t('已逐条过完')} · {acceptedCount}/{total}</span>
           <span className="grow" />
           <button className="rv-step" onClick={() => onSetReviewIdx(0)} title={t('重看')}><IconUndo size={14} /></button>
-          <button className="btn solid" onClick={onAcceptAll}><IconCheck size={14} /> {t('全部接受')}</button>
+          {acceptedCount < total ? <button className="btn" onClick={onAcceptAll}>{t('全部接受')}</button> : null}
+          <button className="btn solid" disabled={acceptedCount === 0} onClick={onCommitAccepted}><IconCheck size={14} /> {t('提交已接受')} · {acceptedCount}</button>
         </div>
       ) : (
         <div className="rv-final dim">{total} {t('处改动')}<span className="grow" /><button className="link-btn" onClick={onRevertTurn}>↩ {t('撤销改动')}</button></div>

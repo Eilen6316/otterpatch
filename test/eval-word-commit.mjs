@@ -9,7 +9,7 @@
  * 需要本地 serve (http://localhost:4319) + OA_EVAL_KEY。
  */
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
-import { openApp, sleep, createReporter } from './harness.mjs';
+import { acceptNextConfirm, openApp, sleep, createReporter } from './harness.mjs';
 const KEY = process.env.OA_EVAL_KEY ?? '';
 if (!KEY) { console.error('缺少 OA_EVAL_KEY 环境变量(DeepSeek API key),live eval 需要真实模型'); process.exit(2); }
 
@@ -76,6 +76,7 @@ try {
   // 全部接受 → doCommit → 捕获下载
   const dlPromise = page.waitForEvent('download', { timeout: 60000 });
   dlPromise.catch(() => {}); // teardown 竞态时别让未处理拒绝炸掉进程
+  acceptNextConfirm(page);
   await page.locator('.reviewbox .btn.solid').last().click();
   const dl = await dlPromise;
   const name = dl.suggestedFilename();

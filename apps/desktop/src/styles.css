@@ -795,6 +795,10 @@ svg { display: block; }
 .gd-ref { display: flex; align-items: center; gap: 7px; padding: 4px 11px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
 .gd-at { color: var(--accent); font-weight: 700; opacity: 0.7; }
 .gd-lbl { color: var(--faint); font-family: var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gd-risk { flex-shrink: 0; border: 1px solid var(--line-2); border-radius: 3px; padding: 0 4px; font: 9px/1.5 var(--sans); }
+.gd-risk.safe { color: #16784a; background: #ecfdf3; border-color: #a7e1c1; }
+.gd-risk.caution { color: #8a5a00; background: #fff8df; border-color: #e8cf7a; }
+.gd-risk.destructive { color: #b42318; background: #fff0ee; border-color: #f0aaa3; }
 /* 行内快速处置:✓/✕ 迷你键(hover 或当前行浮现) + 已处置状态徽标 —— 列表即审阅,单一交互面 */
 .gd-acts { margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px; }
 .gd-btn { width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid var(--line-2); border-radius: 5px; background: var(--surface); color: var(--muted); cursor: pointer; opacity: 0; transition: opacity var(--dur-micro), border-color var(--dur-micro), color var(--dur-micro); }

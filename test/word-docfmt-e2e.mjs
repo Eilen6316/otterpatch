@@ -3,7 +3,7 @@
  * 现在:切换条出现"全文改动 chip"(标签+✓/✕)、原文视图真回退(字体/分栏)、改后视图真应用、
  * chip ✓ 定稿后样式留下 chip 收起、chip ✕ 精确回退;另验证分批任务的「继续下一批」续接按钮。
  */
-import { openApp, sleep } from './harness.mjs';
+import { acceptNextConfirm, openApp, sleep } from './harness.mjs';
 
 const { page, errors, teardown } = await openApp({ storage: { 'oa.fmt': 'word', 'oa.apiKey': 'test-key', 'oa.server': 'http://localhost:4319' } });
 let pass = 0, fail = 0;
@@ -48,6 +48,7 @@ try {
   ok('chip✓ → chip 收起 + 样式留下', await page.evaluate(() => { const cs = getComputedStyle(document.querySelector('.rd-page')); return !document.querySelector('.rd-dt-docchg') && cs.columnCount === '2' && /Times New Roman/i.test(cs.fontFamily); }));
 
   // ④ 分批续接:plan 带"先做第一批"→ 已采纳行出现「继续下一批」,点击自动续发
+  acceptNextConfirm(page);
   await page.locator('.reviewbox .btn.solid').click().catch(() => {}); // 若审阅still当前条,先全部接受把 turn 落为已采纳
   await sleep(400);
   const nextBtn = page.locator('.rv-next');

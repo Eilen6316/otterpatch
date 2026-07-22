@@ -110,10 +110,15 @@ export function applyBoardPatchView(
 export function revertBoardPatch(
   patch: BoardPatch,
   board: DrawioReviewBoard | null | undefined,
+  editIds?: readonly string[],
 ): void {
   if (!board) return;
-  const mutations = patch.muts ?? {};
+  const selected = editIds ? new Set(editIds) : undefined;
+  const mutations = Object.fromEntries(
+    Object.entries(patch.muts ?? {}).filter(([editId]) => !selected || selected.has(editId)),
+  );
   const addedIds = [...new Set(patch.objs
+    .filter((object) => !selected || selected.has(object.editId))
     .filter((object) => !mutations[object.editId])
     .map((object) => patch.byEdit[object.editId] ?? object.node?.id ?? object.edge?.id)
     .filter((id): id is string => !!id))];

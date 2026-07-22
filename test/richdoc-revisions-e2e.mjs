@@ -1,5 +1,5 @@
 /** Browser contract for accepting, reverting, and closing RichDoc revision undo windows. */
-import { openApp, sleep } from './harness.mjs';
+import { acceptNextConfirm, openApp, sleep } from './harness.mjs';
 
 const { page, errors, teardown } = await openApp({ storage: { 'oa.fmt': 'word', 'oa.apiKey': 'test-key', 'oa.server': 'http://localhost:4319' } });
 let pass = 0, fail = 0;
@@ -69,6 +69,7 @@ try {
   await page.locator('.composer textarea').fill('更新进度、插入状态表并删除备注');
   await page.locator('.composer textarea').press('Enter');
   await page.waitForSelector('.reviewbox', { timeout: 8000 });
+  acceptNextConfirm(page);
   await page.locator('.reviewbox .rv-acts .btn.solid').click();
   await sleep(450);
   ok('accept-all flattens text, table, and paragraph deletion', await page.evaluate((note) => {

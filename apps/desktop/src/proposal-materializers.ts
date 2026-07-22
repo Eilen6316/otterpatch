@@ -1,3 +1,4 @@
+import type { AbstractStyle } from '@otterpatch/core';
 import { cleanLabel, innerForStyle, parseDrawioStyle, snap } from './DrawioBoard.js';
 import type { BEdge, BNode } from './DrawioBoard.js';
 import type { DocFmt, DocTable } from './richdoc-editing.js';
@@ -30,14 +31,7 @@ export interface GridOp {
   editId?: string;
 }
 
-export interface AgentStyle {
-  bold?: boolean;
-  italic?: boolean;
-  color?: string;
-  bgColor?: string;
-  align?: string;
-  numberFormat?: string;
-}
+export type AgentStyle = AbstractStyle;
 
 export type AgentPreviewValue =
   | { kind: 'cell'; value: string | number | boolean | null; formula?: string; style?: AgentStyle }
@@ -59,6 +53,8 @@ export interface AgentDiffItem {
   backendSupport?: 'verified' | 'partial' | 'unsupported';
   affectedCount?: number;
   boundary?: string;
+  risk?: { level: 'safe' | 'caution' | 'destructive'; reasons: string[] };
+  expectedTouchedParts?: string[];
 }
 
 export interface AgentDiff {

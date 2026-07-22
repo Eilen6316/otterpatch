@@ -4,7 +4,7 @@
  *  2) 图片感知 → 上下文含 [图片],问"文档里有没有图片"应答得出来
  * 需要本地 serve (http://localhost:4319)。
  */
-import { openApp, sleep, createReporter } from './harness.mjs';
+import { acceptNextConfirm, openApp, sleep, createReporter } from './harness.mjs';
 const KEY = process.env.OA_EVAL_KEY ?? '';
 if (!KEY) { console.error('缺少 OA_EVAL_KEY 环境变量(DeepSeek API key),live eval 需要真实模型'); process.exit(2); }
 
@@ -62,7 +62,7 @@ try {
   r.ok('出现整段删除修订标记(.rd-chg-blkdel ≥ 2,含空段)', marks >= 2, `实际 ${marks}`);
   // 全部接受
   const btn = page.locator('.reviewbox .btn.solid').last();
-  if (await btn.count()) { await btn.click(); await sleep(1500); }
+  if (await btn.count()) { acceptNextConfirm(page); await btn.click(); await sleep(1500); }
   const after = await page.evaluate(() => ({
     blkdel: document.querySelectorAll('.rd-chg-blkdel').length,
     emptyP: Array.from(document.querySelectorAll('.rd-page > p')).filter((p) => !p.textContent.trim() && !p.querySelector('img')).length,
@@ -90,7 +90,7 @@ try {
   const ok3 = await ask('文档里那张验收流程图太大了,缩小到 60 像素宽');
   r.ok('图片缩放回合完成', ok3);
   let btn2 = page.locator('.reviewbox .btn.solid').last();
-  if (await btn2.count()) { await btn2.click().catch(() => {}); await sleep(1200); }
+  if (await btn2.count()) { acceptNextConfirm(page); await btn2.click().catch(() => {}); await sleep(1200); }
   const w = await page.evaluate(() => { const im = document.querySelector('.rd-page img'); return im ? im.style.width : null; });
   r.ok('图片已缩放到 60px', w === '60px', `实际 ${w}`);
   await shot('ws3-img-resized');
@@ -101,7 +101,7 @@ try {
   const ok4 = await ask('把这张图删掉');
   r.ok('图片删除回合完成', ok4);
   btn2 = page.locator('.reviewbox .btn.solid').last();
-  if (await btn2.count()) { await btn2.click().catch(() => {}); await sleep(1200); }
+  if (await btn2.count()) { acceptNextConfirm(page); await btn2.click().catch(() => {}); await sleep(1200); }
   const after4 = await page.evaluate(() => ({
     imgs: document.querySelectorAll('.rd-page img').length,
     text: (document.querySelector('.rd-page')?.innerText ?? '').includes('验收范围包括表格'),

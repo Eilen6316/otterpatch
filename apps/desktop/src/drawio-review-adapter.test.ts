@@ -112,6 +112,12 @@ test('revertBoardPatch removes all additions before restoring mutation snapshots
   ]);
 });
 
+test('revertBoardPatch can leave already-rejected edits untouched', () => {
+  const { board, calls } = fakeBoard();
+  revertBoardPatch(patch, board, ['change-edit']);
+  assert.deepEqual(calls, [{ method: 'restore', object: oldNode }]);
+});
+
 test('deletion snapshots restore connected edges after their endpoint nodes', () => {
   const leftNode: BoardObject = {
     node: { id: 'left', x: 0, y: 0, w: 80, h: 40, inner: '<rect/>', label: 'Left' },

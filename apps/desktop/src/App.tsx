@@ -38,7 +38,8 @@ import type {
 import { useFileImport } from './use-file-import.js';
 import { useCommitWriteback } from './use-commit-writeback.js';
 import { useReviewState } from './use-review-state.js';
-import { reviewItemKind, useReviewActions } from './use-review-actions.js';
+import { useReviewActions } from './use-review-actions.js';
+import { reviewItemKind } from './review-policy.js';
 import { ReviewBox } from './ReviewBox.js';
 import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
@@ -528,8 +529,10 @@ export function App() {
   const [realDiff, setRealDiff] = useState<AgentDiff | null>(null);
   const [realCs, setRealCs] = useState<unknown>(null);
   const [accepted, setAccepted] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('oa.accepted') ?? '[]') as string[]); } catch { return new Set(); } }); // 随 thread 持久化:刷新后审批处置不丢
-  const { clearAccepted, toggleAccept, acceptMany, markCommitted, markReverted, markClarifyAnswered } = useReviewState({ setThread, setAccepted });
+  const [rejected, setRejected] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('oa.rejected') ?? '[]') as string[]); } catch { return new Set(); } });
+  const { clearAccepted, toggleAccept, acceptMany, markCommitted, markReverted, markClarifyAnswered } = useReviewState({ setThread, setAccepted, setRejected });
   useEffect(() => { try { localStorage.setItem('oa.accepted', JSON.stringify([...accepted])); } catch { /* 配额忽略 */ } }, [accepted]);
+  useEffect(() => { try { localStorage.setItem('oa.rejected', JSON.stringify([...rejected])); } catch { /* 配额忽略 */ } }, [rejected]);
   useEffect(() => { // 接受率遥测读取口:控制台 __otterTelemetry() 看 格式×改动类型 的 accept/reject 分布
     (window as unknown as { __otterTelemetry?: () => unknown }).__otterTelemetry = () => { try { return JSON.parse(localStorage.getItem('oa.telemetry') ?? '{}'); } catch { return {}; } };
   }, []);
@@ -818,7 +821,6 @@ export function App() {
                 const proposal = e.proposal ?? null;
                 setRealCs(cs);
                 setRealDiff(diff);
-                acceptMany(diff.items.map((it) => akey(diff.changeSetId, it.editId))); // 合并而非覆写:老回合的处置不被新提案冲掉
                 setReviewIdx(0);
                 if (fmt === 'drawio') {
                   // drawio:先把【改/删/移动现有节点】落到画板;新增节点则复用流式已画的、或一次性补画
@@ -924,13 +926,19 @@ export function App() {
     const turn = thread[idx];
     if (!turn || turn.role !== 'assistant' || turn.kind !== 'diff') return;
     if (turn.board) {
-      revertBoardPatch(turn.board, boardRef.current);
+      revertBoardPatch(
+        turn.board,
+        boardRef.current,
+        turn.diff.items.filter((item) => !rejected.has(akey(turn.diff.changeSetId, item.editId))).map((item) => item.editId),
+      );
     } else if (turn.word) {
       let missed = 0;
-      for (const w of turn.word) if (accepted.has(akey(turn.diff.changeSetId, w.editId))) { if (!wordRef.current?.revert(w.domId)) missed++; } // 按 domId 精确还原每条(undoMap 缺失走 DOM 兜底)
+      for (const w of turn.word) if (!rejected.has(akey(turn.diff.changeSetId, w.editId))) { if (!wordRef.current?.revert(w.domId)) missed++; } // 按 domId 精确还原仍在预览/已接受的改动
       if (missed) notify(t('部分改动已定稿,无法自动回退') + ` · ${missed}`);
     } else {
-      for (const op of turn.ops) revertGridOp(univerRef.current, op); // 走维度级精确回放(公式/填充/加粗/数字格式不丢)
+      for (const op of [...turn.ops].reverse()) {
+        if (!op.editId || !rejected.has(akey(turn.diff.changeSetId, op.editId))) revertGridOp(univerRef.current, op);
+      }
     }
     markReverted(idx);
     notify(t('已撤销该回合改动'));
@@ -956,7 +964,7 @@ export function App() {
     applyBoardPatchView(b, {
       editIds: turn.diff.items.map((item) => item.editId),
       view,
-      isAccepted: (editId) => accepted.has(akey(turn.diff.changeSetId, editId)),
+      isAccepted: (editId) => !rejected.has(akey(turn.diff.changeSetId, editId)),
       board: boardRef.current,
     });
     setBoardDiff(view);
@@ -968,7 +976,7 @@ export function App() {
       univerRef.current,
       turn,
       view,
-      (editId) => accepted.has(akey(turn.diff.changeSetId, editId)),
+      (editId) => !rejected.has(akey(turn.diff.changeSetId, editId)),
     );
     setExcelDiff(view);
   };
@@ -997,10 +1005,12 @@ export function App() {
     if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
     const it = turn.diff.items[idx]; if (!it) return;
     const k = akey(turn.diff.changeSetId, it.editId);
-    if (!accepted.has(k)) { // 之前被拒 → 重新落回工作区(applyEdit 幂等,重复接受不叠标记)
-      if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(univerRef.current, op); }
-      else if (turn.format === 'drawio' && turn.board) setBoardEditState(turn.board, it.editId, 'next', boardRef.current);
-      else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) applyWordEdit(w); }
+    if (!accepted.has(k)) {
+      if (rejected.has(k)) { // Only rejected edits were removed from the optimistic preview and need replay.
+        if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(univerRef.current, op); }
+        else if (turn.format === 'drawio' && turn.board) setBoardEditState(turn.board, it.editId, 'next', boardRef.current);
+        else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) applyWordEdit(w); }
+      }
       toggleAccept(k, true);
     }
     if (turn.format === 'excel' && excelDiff === 'mark') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) univerRef.current?.setBackground(op.a1, gridOpBackground(op, true)); } // 已处置的格退出着色 → 网格上直观看到审阅进度
@@ -1026,16 +1036,19 @@ export function App() {
     if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
     const it = turn.diff.items[idx]; if (!it) return;
     const k = akey(turn.diff.changeSetId, it.editId);
-    if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) { revertGridOp(univerRef.current, op); if (excelDiff === 'mark') univerRef.current?.setBackground(op.a1, gridOpBackground(op, false)); } }
-    else if (turn.format === 'drawio' && turn.board) setBoardEditState(turn.board, it.editId, 'prior', boardRef.current);
-    else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w && !wordRef.current?.revert(w.domId) && accepted.has(k)) notify(t('该改动已定稿,未找到可还原的位置')); } // undoMap 缺失时 revert 自带 DOM 兜底
+    if (!rejected.has(k)) {
+      if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) { revertGridOp(univerRef.current, op); if (excelDiff === 'mark') univerRef.current?.setBackground(op.a1, gridOpBackground(op, false)); } }
+      else if (turn.format === 'drawio' && turn.board) setBoardEditState(turn.board, it.editId, 'prior', boardRef.current);
+      else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w && !wordRef.current?.revert(w.domId) && accepted.has(k)) notify(t('该改动已定稿,未找到可还原的位置')); }
+    }
     toggleAccept(k, false);
     telemetry(turn.format, 'reject', reviewItemKind(turn, it));
     if (!silent) setReviewIdx(idx + 1);
   };
-  const { acceptAll } = useReviewActions({
+  const { acceptAll, commitAccepted } = useReviewActions({
     format: fmt,
     accepted,
+    rejected,
     autoBatch,
     autoBatchRun,
     excelDiff,
@@ -1053,6 +1066,7 @@ export function App() {
     applyWordEdit,
     boardRef,
     telemetry,
+    confirmAcceptAll: (message) => window.confirm(message),
     send,
   });
   const openDrop = (it: string, el: HTMLElement): void => {
@@ -1300,6 +1314,7 @@ export function App() {
                             active={active}
                             reviewIdx={reviewIdx}
                             accepted={accepted}
+                            rejected={rejected}
                             hoverCid={hoverCid}
                             autoBatch={autoBatch}
                             wordRef={wordRef}
@@ -1314,6 +1329,7 @@ export function App() {
                             onAccept={(k) => acceptItem(turn, k, !active)}
                             onReject={(k) => rejectItem(turn, k, !active)}
                             onAcceptAll={() => acceptAll(turn, i)}
+                            onCommitAccepted={() => commitAccepted(turn, i)}
                             onRevertTurn={() => revertTurn(i)}
                             onSend={(s) => { void send(s); }}
                             onSetAutoBatch={setAutoBatch}

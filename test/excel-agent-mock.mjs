@@ -3,7 +3,7 @@
  * setValue(C2 120→200)出红减/绿加行、setStyle(标红)出格式 ~ 行,改动乐观落进网格。
  * 不依赖真实大模型/Key(route 拦截固定 SSE)。
  */
-import { openApp, sleep } from './harness.mjs';
+import { acceptNextConfirm, openApp, sleep } from './harness.mjs';
 
 const { page, errors, teardown } = await openApp({ storage: { 'oa.fmt': 'excel', 'oa.apiKey': 'test-key', 'oa.server': 'http://localhost:4319' } });
 let pass = 0, fail = 0;
@@ -64,6 +64,7 @@ try {
   await sleep(250);
   ok('切"改后"→ 被拒的值不复活(仍 120)', await page.evaluate(() => Number(window.__univerGet('C2')) === 120));
 
+  acceptNextConfirm(page);
   await page.locator('.reviewbox .btn.solid').click();
   await sleep(400);
   ok('全部接受 → 显示"已采纳"', await page.evaluate(() => /已采纳/.test(document.querySelector('.reviewbox')?.textContent || '')));

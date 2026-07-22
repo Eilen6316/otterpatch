@@ -4,7 +4,7 @@
  *  · 审阅区出现 diff 卡片;点"全部接受"后写入并显示"已采纳"。
  * 不依赖真实大模型/Key(route 拦截,返回固定 SSE)。
  */
-import { openApp, sleep } from './harness.mjs';
+import { acceptNextConfirm, openApp, sleep } from './harness.mjs';
 
 const { page, errors, teardown } = await openApp({ storage: { 'oa.fmt': 'word', 'oa.apiKey': 'test-key', 'oa.server': 'http://localhost:4319' } });
 let pass = 0, fail = 0;
@@ -90,6 +90,7 @@ try {
   await page.screenshot({ path: `${process.env.SHOT_DIR || '.'}/word-gitdiff.png` });
 
   // 全部接受 → 物理定稿(flatten):不是 CSS 化妆,是真的删 del、解包 ins、剥标识
+  acceptNextConfirm(page);
   await page.locator('.reviewbox .btn.solid').click();
   await sleep(400);
   ok('全部接受 → 显示"已采纳"', await page.evaluate(() => /已采纳/.test(document.querySelector('.reviewbox')?.textContent || '')));

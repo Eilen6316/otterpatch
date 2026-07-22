@@ -6,7 +6,7 @@
  * 断言:节点数、连线数、容器标签贴顶(.bnode-label.top)、任意两个节点标签矩形零重叠。
  * 需要本地 serve (http://localhost:4319) + OA_EVAL_KEY。
  */
-import { openApp, sleep, createReporter } from './harness.mjs';
+import { acceptNextConfirm, openApp, sleep, createReporter } from './harness.mjs';
 const KEY = process.env.OA_EVAL_KEY ?? '';
 if (!KEY) { console.error('缺少 OA_EVAL_KEY 环境变量(DeepSeek API key),live eval 需要真实模型'); process.exit(2); }
 
@@ -56,7 +56,7 @@ try {
   let st = await boardStat();
   if (st.nodes === 0) { await ask('标准单 Master 双 Worker 即可,直接画,不用再确认'); st = await boardStat(); }
   const btn = page.locator('.reviewbox .btn.solid').last();
-  if (await btn.count()) { await btn.click().catch(() => {}); await sleep(1200); }
+  if (await btn.count()) { acceptNextConfirm(page); await btn.click().catch(() => {}); await sleep(1200); }
   st = await boardStat();
   console.log('画板:', JSON.stringify(st));
 

@@ -5,7 +5,7 @@
  *       ③ 不再产出"修正 11.3pt 怪字号"式幻影改动(字号改动若有,理由应是统一基线——这里只硬断言①②)。
  * 需要本地 serve (http://localhost:4319) + OA_EVAL_KEY。
  */
-import { openApp, sleep, createReporter } from './harness.mjs';
+import { acceptNextConfirm, openApp, sleep, createReporter } from './harness.mjs';
 const KEY = process.env.OA_EVAL_KEY ?? '';
 if (!KEY) { console.error('缺少 OA_EVAL_KEY 环境变量(DeepSeek API key),live eval 需要真实模型'); process.exit(2); }
 
@@ -55,7 +55,7 @@ try {
   r.ok('提案感知到对齐问题(plan/items/style 提及对齐)', /对齐|align/.test(plan));
 
   const btn = page.locator('.reviewbox .btn.solid').last();
-  if (await btn.count()) { await btn.click().catch(() => {}); await sleep(1500); }
+  if (await btn.count()) { acceptNextConfirm(page); await btn.click().catch(() => {}); await sleep(1500); }
   const stretched1 = await page.evaluate(() => [...document.querySelectorAll('.rd-page p')].filter((p) => getComputedStyle(p).textAlignLast === 'justify').length);
   r.ok('接受后分散对齐事故清零(末行不再撑满)', stretched1 === 0, `残留 ${stretched1}`);
   await page.screenshot({ path: (process.env.SHOT_DIR || '.') + '/wa1-fixed.png' });

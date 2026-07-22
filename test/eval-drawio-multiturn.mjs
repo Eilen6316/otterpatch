@@ -5,7 +5,7 @@
  *  断言:第 2 轮不重画 A/B(节点恰 3 个)、新连线真的挂在 B 上(连线 ≥2)。
  * 需要本地 serve + OA_EVAL_KEY。
  */
-import { openApp, sleep, createReporter } from './harness.mjs';
+import { acceptNextConfirm, openApp, sleep, createReporter } from './harness.mjs';
 const KEY = process.env.OA_EVAL_KEY ?? '';
 if (!KEY) { console.error('缺少 OA_EVAL_KEY 环境变量'); process.exit(2); }
 
@@ -29,7 +29,7 @@ async function ask(text) {
   await sleep(1000);
   return ok;
 }
-async function acceptAll() { const b = page.locator('.reviewbox .btn.solid').last(); if (await b.count()) { await b.click().catch(() => {}); await sleep(1000); } }
+async function acceptAll() { const b = page.locator('.reviewbox .btn.solid').last(); if (await b.count()) { acceptNextConfirm(page); await b.click().catch(() => {}); await sleep(1000); } }
 const stat = () => page.evaluate(() => ({
   nodes: document.querySelectorAll('.bnode').length,
   edges: document.querySelectorAll('svg g > path[style*="pointer-events"]').length,

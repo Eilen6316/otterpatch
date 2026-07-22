@@ -71,6 +71,18 @@ export async function openApp({ storage } = {}) {
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Accept the next explicit bulk-approval confirmation opened by the app. */
+export function acceptNextConfirm(page, onMessage) {
+  page.once('dialog', async (dialog) => {
+    if (dialog.type() !== 'confirm') {
+      await dialog.dismiss();
+      return;
+    }
+    onMessage?.(dialog.message());
+    await dialog.accept();
+  });
+}
+
 /** 极简断言收集器。 */
 export function createReporter() {
   let pass = 0;
