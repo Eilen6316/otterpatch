@@ -38,14 +38,14 @@ export interface VerificationMetrics {
 }
 
 export interface FidelityReport {
-  /** Legacy compatibility field. When verification is present, this mirrors locality.unchangedPartRatio. */
+  /** Compatibility alias; always mirrors verification.locality.unchangedPartRatio. */
   score: number;
   drift: Array<{
     part: string;
     kind: 'style' | 'layout' | 'content' | 'formula';
     note: string;
   }>;
-  verification?: VerificationMetrics;
+  verification: VerificationMetrics;
 }
 export interface DocHandle {
   readonly hostId: string;

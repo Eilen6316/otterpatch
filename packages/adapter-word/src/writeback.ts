@@ -18,7 +18,7 @@ import type {
   WritebackKind,
   WritebackResult,
 } from '@otterpatch/core';
-import { comparePartsIntegrity, readOoxmlParts, repackOoxml } from '@otterpatch/writeback-surgical';
+import { ooxmlFidelityReport, readOoxmlParts, repackOoxml, type OoxmlSemanticOutcome } from '@otterpatch/writeback-surgical';
 import { redlineDocumentXml, type DocEdit } from './document.js';
 import { patchSectPr, type PagePatch } from './sect.js';
 import type { CharProps, ParaProps } from './style.js';
@@ -39,6 +39,7 @@ export interface WordRedlineOptions {
 export class WordRedlineWriteback implements WritebackBackend {
   readonly id = 'word-redline' as WritebackId;
   readonly strategy: WritebackKind = 'surgical-ooxml';
+  private readonly verificationByOutput = new WeakMap<Uint8Array, { intendedParts: string[]; semantic: OoxmlSemanticOutcome; warnings: string[] }>();
 
   constructor(private readonly opts: WordRedlineOptions = {}) {}
 
@@ -146,24 +147,29 @@ export class WordRedlineWriteback implements WritebackBackend {
     const totalChanged = redline.changed + (sect.changed ? 1 : 0);
     const bytes = repackOoxml(doc.bytes, { [DOC_PART]: enc.encode(sect.xml) });
 
-    const integrity = comparePartsIntegrity(doc.bytes, bytes);
+    const intendedParts = totalChanged > 0 ? [DOC_PART] : [];
+    const semantic: OoxmlSemanticOutcome = { verifiedEdits: [], unverifiableEdits: applied, failedEdits: dropped };
+    const warnings = applied.length ? ['Word redline writeback does not perform edit-level semantic readback'] : [];
+    this.verificationByOutput.set(bytes, { intendedParts, semantic, warnings });
+    const fidelity = ooxmlFidelityReport(doc.bytes, bytes, intendedParts, semantic, warnings);
     return {
-      ok: totalChanged > 0 && dropped.length === 0,
+      ok: fidelity.verification.packageValid && fidelity.drift.length === 0 && totalChanged > 0 && dropped.length === 0,
       bytes,
       touchedParts: totalChanged > 0 ? [DOC_PART] : [],
-      fidelity: { score: integrity.total === 0 ? 1 : integrity.identical / integrity.total, drift: [] },
+      fidelity,
       appliedEditIds: applied,
       ...(dropped.length ? { droppedEdits: dropped } : {}),
     };
   }
 
-  async verify(before: DocHandle, after: DocHandle, _cs: ChangeSet): Promise<FidelityReport> {
+  async verify(before: DocHandle, after: DocHandle, cs: ChangeSet): Promise<FidelityReport> {
     if (!before.bytes || !after.bytes) throw new Error('WordRedlineWriteback.verify: before/after bytes required');
-    const integrity = comparePartsIntegrity(before.bytes, after.bytes);
-    const drift = integrity.changed
-      .filter((change) => change.slice(1) !== 'word/document.xml')
-      .map((change) => ({ part: change.slice(1), kind: 'content' as const, note: `unexpected: ${change}` }));
-    return { score: integrity.total === 0 ? 1 : integrity.identical / integrity.total, drift };
+    const expected = this.verificationByOutput.get(after.bytes) ?? {
+      intendedParts: [DOC_PART],
+      semantic: { verifiedEdits: [], unverifiableEdits: cs.edits.map((edit) => edit.id), failedEdits: [] },
+      warnings: ['Word redline writeback does not perform edit-level semantic readback'],
+    };
+    return ooxmlFidelityReport(before.bytes, after.bytes, expected.intendedParts, expected.semantic, expected.warnings);
   }
 }
 

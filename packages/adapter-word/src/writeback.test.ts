@@ -69,6 +69,14 @@ test('Word 红线写回:replaceText → w:ins,保留 w:pPr,仅 document.xml 变'
 
   assert.equal(res.ok, true);
   assert.deepEqual(res.touchedParts, ['word/document.xml']);
+  assert.equal(res.fidelity.score, 1);
+  assert.deepEqual(res.fidelity.verification.locality, {
+    intendedParts: ['word/document.xml'], unexpectedParts: [], unchangedPartRatio: 1,
+  });
+  assert.deepEqual(res.fidelity.verification.semantic, {
+    verifiedEdits: [], unverifiableEdits: ['e0'], failedEdits: [],
+  });
+  assert.match(res.fidelity.verification.compatibility.warnings[0] ?? '', /semantic readback/);
   const docXml = dec.decode(unzipSync(res.bytes)['word/document.xml']!);
   assert.match(docXml, /<w:ins\b/);
   assert.match(docXml, /<w:pPr>/);
@@ -76,6 +84,12 @@ test('Word 红线写回:replaceText → w:ins,保留 w:pPr,仅 document.xml 变'
   const a = unzipSync(original);
   const b = unzipSync(res.bytes);
   assert.equal(Buffer.compare(Buffer.from(a['word/styles.xml']!), Buffer.from(b['word/styles.xml']!)), 0);
+  const verification = await wb.verify(
+    { hostId: 'h', bytes: original, rev: 0 as DocRev },
+    { hostId: 'h', bytes: res.bytes, rev: 1 as DocRev },
+    cs,
+  );
+  assert.deepEqual(verification.verification.semantic.unverifiableEdits, ['e0']);
 });
 
 test('Word writeback drops an ambiguous quote without changing document.xml', async () => {

@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync } from 'fflate';
-import { AdapterRegistry, STRICT_POLICY, capabilityManifestFor, type AnchorId, type ChangeSet, type DocRev, type HostId, type WritebackBackend, type WritebackId } from '@otterpatch/core';
+import { AdapterRegistry, STRICT_POLICY, capabilityManifestFor, type AnchorId, type ChangeSet, type DocRev, type FidelityReport, type HostId, type WritebackBackend, type WritebackId } from '@otterpatch/core';
 import { UniverAdapter } from '@otterpatch/adapter-univer';
 import { MockModelClient, type ModelClient, type ProposeRequest, type RespondOptions, type AgentResponse } from '@otterpatch/agent';
 import { comparePartsIntegrity, readOoxmlParts } from '@otterpatch/writeback-surgical';
@@ -54,6 +54,31 @@ function singleCellChangeSet(id = 'single', op: ChangeSet['edits'][number]['op']
     id, hostId: 'h', baseRev: 0 as DocRev,
     anchors: { [aid]: { id: aid, hostId: 'h' as HostId, kind: 'grid', ref: null, baseRev: 0 as DocRev, portable: { kind: 'grid', sheet: 'Sheet1', a1: 'B1' } } },
     origin: { by: 'human' }, meta: { intent: 'x' }, edits: [{ id: 'e1', target: aid, op }],
+  };
+}
+
+function fidelityReport(options: {
+  verifiedEditIds?: string[];
+  unverifiableEditIds?: string[];
+  failedEdits?: Array<{ editId: string; reason: string }>;
+  unexpectedParts?: string[];
+  packageValid?: boolean;
+} = {}): FidelityReport {
+  const unexpectedParts = options.unexpectedParts ?? [];
+  const unchangedPartRatio = unexpectedParts.length ? 0 : 1;
+  return {
+    score: unchangedPartRatio,
+    drift: unexpectedParts.map((part) => ({ part, kind: 'content', note: 'changed' })),
+    verification: {
+      packageValid: options.packageValid ?? true,
+      locality: { intendedParts: ['test'], unexpectedParts, unchangedPartRatio },
+      semantic: {
+        verifiedEdits: options.verifiedEditIds ?? ['e1'],
+        unverifiableEdits: options.unverifiableEditIds ?? [],
+        failedEdits: options.failedEdits ?? [],
+      },
+      compatibility: { warnings: [] },
+    },
   };
 }
 
@@ -458,11 +483,11 @@ test('runtime: serializes same-source commits, verifies output, and isolates eve
       maxActive = Math.max(maxActive, active);
       await new Promise((resolve) => setTimeout(resolve, 15));
       active--;
-      return { ok: true, bytes: new Uint8Array([...(doc.bytes ?? []), 4]), touchedParts: ['test'], fidelity: { score: 1, drift: [] }, appliedEditIds: ['e1'] };
+      return { ok: true, bytes: new Uint8Array([...(doc.bytes ?? []), 4]), touchedParts: ['test'], fidelity: fidelityReport(), appliedEditIds: ['e1'] };
     },
     verify: async () => {
       verified++;
-      return { score: 1, drift: unexpectedDrift ? [{ part: 'outside-target', kind: 'content', note: 'changed' }] : [] };
+      return fidelityReport({ unexpectedParts: unexpectedDrift ? ['outside-target'] : [] });
     },
   };
   rt.registerWriteback('test', () => backend);
@@ -509,9 +534,9 @@ test('runtime: serializes different source versions of the same document', async
       maxActive = Math.max(maxActive, active);
       await new Promise((resolve) => setTimeout(resolve, 15));
       active--;
-      return { ok: true, bytes: doc.bytes!, touchedParts: ['test'], fidelity: { score: 1, drift: [] }, appliedEditIds: ['e1'] };
+      return { ok: true, bytes: doc.bytes!, touchedParts: ['test'], fidelity: fidelityReport(), appliedEditIds: ['e1'] };
     },
-    verify: async () => ({ score: 1, drift: [] }),
+    verify: async () => fidelityReport(),
   };
   rt.registerWriteback('document-lock-test', () => backend);
   const firstBytes = new Uint8Array([1]);
@@ -539,8 +564,8 @@ test('runtime: falls back when the primary backend cannot handle the reviewed ch
   };
   const fallback: WritebackBackend = {
     id: 'fallback' as WritebackId, strategy: 'native-command', supports: () => true, canHandle: () => ({ ok: true }),
-    commit: async () => ({ ok: true, bytes: new Uint8Array([8]), touchedParts: ['test'], fidelity: { score: 1, drift: [] }, appliedEditIds: ['e1'] }),
-    verify: async () => { fallbackVerified = true; return { score: 1, drift: [] }; },
+    commit: async () => ({ ok: true, bytes: new Uint8Array([8]), touchedParts: ['test'], fidelity: fidelityReport(), appliedEditIds: ['e1'] }),
+    verify: async () => { fallbackVerified = true; return fidelityReport(); },
   };
   rt.registerWriteback('fallback-test', () => unavailable);
   rt.registerWritebackFallback('fallback-test', () => fallback);
@@ -568,12 +593,12 @@ test('runtime: never cascades to a fallback after backend execution starts', asy
         ok: false,
         bytes: new Uint8Array([8]),
         touchedParts: ['partially-updated'],
-        fidelity: { score: 1, drift: [] },
+        fidelity: fidelityReport({ verifiedEditIds: [], failedEdits: [{ editId: 'e1', reason: 'native host rejected the edit' }] }),
         appliedEditIds: [],
         droppedEdits: [{ editId: 'e1', reason: 'native host rejected the edit' }],
       };
     },
-    verify: async () => ({ score: 1, drift: [] }),
+    verify: async () => fidelityReport({ verifiedEditIds: [], failedEdits: [{ editId: 'e1', reason: 'native host rejected the edit' }] }),
   };
   const fallback: WritebackBackend = {
     id: 'must-not-replay' as WritebackId,
@@ -582,9 +607,9 @@ test('runtime: never cascades to a fallback after backend execution starts', asy
     canHandle: () => ({ ok: true }),
     commit: async () => {
       fallbackCalls++;
-      return { ok: true, bytes: new Uint8Array([9]), touchedParts: ['fallback'], fidelity: { score: 1, drift: [] } };
+      return { ok: true, bytes: new Uint8Array([9]), touchedParts: ['fallback'], fidelity: fidelityReport() };
     },
-    verify: async () => ({ score: 1, drift: [] }),
+    verify: async () => fidelityReport(),
   };
   rt.registerWriteback('partial-failure-test', () => primary);
   rt.registerWritebackFallback('partial-failure-test', () => fallback);
@@ -618,7 +643,7 @@ test('runtime rejects verification metrics that report an invalid package', asyn
     strategy: 'native-command',
     supports: () => true,
     canHandle: () => ({ ok: true }),
-    commit: async () => ({ ok: true, bytes: new Uint8Array([8]), touchedParts: ['test'], fidelity: { score: 1, drift: [] }, appliedEditIds: ['e1'] }),
+    commit: async () => ({ ok: true, bytes: new Uint8Array([8]), touchedParts: ['test'], fidelity: fidelityReport(), appliedEditIds: ['e1'] }),
     verify: async () => ({
       score: 1,
       drift: [],
@@ -635,6 +660,36 @@ test('runtime rejects verification metrics that report an invalid package', asyn
   await assert.rejects(
     () => rt.commit({ format: 'invalid-package-test', bytes, changeSet: cs, ...reviewed }),
     /invalid output package/,
+  );
+});
+
+test('runtime rejects legacy and edit-incomplete verification reports', async () => {
+  const rt = new OtterPatchRuntime({ reviewSecret: 'm'.repeat(32) });
+  const cs = singleCellChangeSet('invalid-metrics');
+  const bytes = new Uint8Array([7]);
+  let report: FidelityReport = fidelityReport();
+  const backend: WritebackBackend = {
+    id: 'invalid-metrics-backend' as WritebackId,
+    strategy: 'native-command',
+    supports: () => true,
+    canHandle: () => ({ ok: true }),
+    commit: async () => ({ ok: true, bytes: new Uint8Array([8]), touchedParts: ['test'], fidelity: fidelityReport(), appliedEditIds: ['e1'] }),
+    verify: async () => report,
+  };
+  rt.registerWriteback('invalid-metrics-test', () => backend);
+
+  report = { score: 1, drift: [] } as unknown as FidelityReport;
+  const legacy = rt.reviewProposal(rt.createProposal(cs, 'invalid-metrics-test', 'legacy'), cs, ['e1'], bytes, 'reviewer');
+  await assert.rejects(
+    () => rt.commit({ format: 'invalid-metrics-test', bytes, changeSet: cs, ...legacy }),
+    /omitted structured verification metrics/,
+  );
+
+  report = fidelityReport({ verifiedEditIds: [] });
+  const incomplete = rt.reviewProposal(rt.createProposal(cs, 'invalid-metrics-test', 'incomplete'), cs, ['e1'], bytes, 'reviewer');
+  await assert.rejects(
+    () => rt.commit({ format: 'invalid-metrics-test', bytes, changeSet: cs, ...incomplete }),
+    /inconsistent verification metrics/,
   );
 });
 

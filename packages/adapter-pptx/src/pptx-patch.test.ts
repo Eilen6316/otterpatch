@@ -80,16 +80,30 @@ test('pptx 外科写回:Hello → World,仅 slide1.xml 变', async () => {
   };
 
   const original = makePptx('Hello');
-  const res = await new SurgicalOoxmlWriteback(buildPptxCompiler()).commit(cs, { hostId: 'h', bytes: original, rev: 0 as DocRev });
+  const writer = new SurgicalOoxmlWriteback(buildPptxCompiler());
+  const res = await writer.commit(cs, { hostId: 'h', bytes: original, rev: 0 as DocRev });
 
   assert.equal(res.ok, true);
   assert.deepEqual(res.touchedParts, ['ppt/slides/slide1.xml']);
+  assert.equal(res.fidelity.score, 1);
+  assert.deepEqual(res.fidelity.verification.semantic, {
+    verifiedEdits: [], unverifiableEdits: ['e0'], failedEdits: [],
+  });
+  assert.deepEqual(res.fidelity.verification.locality, {
+    intendedParts: ['ppt/slides/slide1.xml'], unexpectedParts: [], unchangedPartRatio: 1,
+  });
   const slide = dec.decode(unzipSync(res.bytes)['ppt/slides/slide1.xml']!);
   assert.match(slide, /<a:t>World<\/a:t>/);
 
   const a = unzipSync(original);
   const b = unzipSync(res.bytes);
   assert.equal(Buffer.compare(Buffer.from(a['ppt/presentation.xml']!), Buffer.from(b['ppt/presentation.xml']!)), 0);
+  const verification = await writer.verify(
+    { hostId: 'h', bytes: original, rev: 0 as DocRev },
+    { hostId: 'h', bytes: res.bytes, rev: 1 as DocRev },
+    cs,
+  );
+  assert.deepEqual(verification.verification.semantic.unverifiableEdits, ['e0']);
 });
 
 test('pptx writeback: missing quote reports dropped edit and ok=false', async () => {

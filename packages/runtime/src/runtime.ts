@@ -397,17 +397,18 @@ export class OtterPatchRuntime {
         const result = await backend.commit(cs, before);
         const after: DocHandle = { hostId: cs.hostId, bytes: result.bytes, rev: (Number(cs.baseRev) + 1) as import('@otterpatch/core').DocRev };
         const verification = await backend.verify(before, after, cs);
-        assertVerification(verification);
-        if (verification.verification?.packageValid === false) {
+        assertVerification(verification, cs);
+        if (!verification.verification.packageValid) {
           throw new Error('writeback verification found an invalid output package');
         }
-        if (result.ok && verification.verification?.semantic.failedEdits.length) {
+        if (result.ok && verification.verification.semantic.failedEdits.length) {
           throw new Error('writeback semantic verification failed: ' + verification.verification.semantic.failedEdits.map((failure) => failure.editId).join(', '));
         }
         if (verification.drift.length) {
           throw new Error('writeback verification found unexpected drift: ' + verification.drift.map((d) => d.part).join(', '));
         }
-        const withFallback = index > 0 ? { ...result, fallbackUsed: backend.strategy } : result;
+        const verifiedResult = { ...result, fidelity: verification };
+        const withFallback = index > 0 ? { ...verifiedResult, fallbackUsed: backend.strategy } : verifiedResult;
         return withFallback;
       } catch (error) {
         if (isResourceLimitError(error)) throw error;
@@ -469,12 +470,12 @@ export class OtterPatchRuntime {
   }
 }
 
-function assertVerification(report: import('@otterpatch/core').FidelityReport): void {
+function assertVerification(report: import('@otterpatch/core').FidelityReport, changeSet: ChangeSet): void {
   if (!Number.isFinite(report.score) || report.score < 0 || report.score > 1 || !Array.isArray(report.drift)) {
     throw new Error('writeback verifier returned an invalid fidelity report');
   }
   const verification = report.verification;
-  if (!verification) return;
+  if (!verification || typeof verification !== 'object') throw new Error('writeback verifier omitted structured verification metrics');
   const ratio = verification.locality?.unchangedPartRatio;
   const validArrays = Array.isArray(verification.locality?.intendedParts)
     && Array.isArray(verification.locality?.unexpectedParts)
@@ -485,6 +486,24 @@ function assertVerification(report: import('@otterpatch/core').FidelityReport): 
   if (typeof verification.packageValid !== 'boolean' || !Number.isFinite(ratio) || ratio < 0 || ratio > 1
     || report.score !== ratio || !validArrays) {
     throw new Error('writeback verifier returned invalid verification metrics');
+  }
+  const intended = verification.locality.intendedParts;
+  const unexpected = verification.locality.unexpectedParts;
+  const verified = verification.semantic.verifiedEdits;
+  const unverifiable = verification.semantic.unverifiableEdits;
+  const failed = verification.semantic.failedEdits;
+  const allStrings = [...intended, ...unexpected, ...verified, ...unverifiable, ...verification.compatibility.warnings].every((value) => typeof value === 'string');
+  const failureShape = failed.every((failure) => failure && typeof failure.editId === 'string' && typeof failure.reason === 'string' && failure.reason.length > 0);
+  const partition = [...verified, ...unverifiable, ...failed.map((failure) => failure.editId)];
+  const expectedIds = changeSet.edits.map((edit) => edit.id);
+  const sameIds = partition.length === expectedIds.length
+    && new Set(partition).size === partition.length
+    && expectedIds.every((editId) => partition.includes(editId));
+  const uniqueParts = new Set(intended).size === intended.length
+    && new Set(unexpected).size === unexpected.length
+    && unexpected.every((part) => !intended.includes(part));
+  if (!allStrings || !failureShape || !sameIds || !uniqueParts) {
+    throw new Error('writeback verifier returned inconsistent verification metrics');
   }
 }
 

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { zipSync } from 'fflate';
 import { ResourceLimitError } from '@otterpatch/core';
 import { comparePartsIntegrity, readOoxmlParts, repackOoxml } from './ooxml.js';
+import { ooxmlFidelityReport } from './index.js';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 
@@ -54,6 +55,24 @@ test('explicit part removal is reported and unrelated parts stay identical', () 
   assert.deepEqual(integrity.changed, ['-stale.xml']);
   assert.equal(integrity.identical, 1);
   assert.equal(readOoxmlParts(patched)['stale.xml'], undefined);
+});
+
+test('OOXML fidelity separates intended locality, semantic uncertainty, and package validity', () => {
+  const original = zipSync({ 'doc.xml': enc('<doc>before</doc>'), 'styles.xml': enc('<styles/>') });
+  const patched = repackOoxml(original, { 'doc.xml': enc('<doc>after</doc>') });
+  const report = ooxmlFidelityReport(original, patched, ['doc.xml'], {
+    verifiedEdits: [], unverifiableEdits: ['e1'], failedEdits: [],
+  }, ['semantic readback unavailable']);
+  assert.equal(report.score, 1, 'intended changes are excluded from locality');
+  assert.deepEqual(report.verification.locality, { intendedParts: ['doc.xml'], unexpectedParts: [], unchangedPartRatio: 1 });
+  assert.deepEqual(report.verification.semantic.unverifiableEdits, ['e1']);
+  assert.equal(report.verification.packageValid, true);
+
+  const malformed = ooxmlFidelityReport(original, enc('not a zip'), ['doc.xml'], {
+    verifiedEdits: [], unverifiableEdits: ['e1'], failedEdits: [],
+  });
+  assert.equal(malformed.verification.packageValid, false);
+  assert.deepEqual(malformed.verification.semantic.failedEdits.map((failure) => failure.editId), ['e1']);
 });
 
 test('part removal rejects missing, duplicate, overlapping, and unsafe paths', () => {

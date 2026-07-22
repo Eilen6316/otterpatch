@@ -52,6 +52,13 @@ test('意图 → ChangeSet(Mock)→ 外科写回:B1 改为 99,其余部件字节
 
   assert.equal(res.ok, true);
   assert.deepEqual(comparePartsIntegrity(original, res.bytes).changed, ['~xl/worksheets/sheet1.xml']);
+  assert.equal(res.fidelity.score, 1);
+  assert.deepEqual(res.fidelity.verification.locality, {
+    intendedParts: ['xl/worksheets/sheet1.xml'], unexpectedParts: [], unchangedPartRatio: 1,
+  });
+  assert.deepEqual(res.fidelity.verification.semantic, {
+    verifiedEdits: [], unverifiableEdits: ['e0'], failedEdits: [],
+  });
   const sheet = dec.decode(readOoxmlParts(res.bytes)['xl/worksheets/sheet1.xml']!);
   assert.match(sheet, /<c r="B1" s="2"><v>99<\/v><\/c>/);
 });

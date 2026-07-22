@@ -44,6 +44,69 @@ export type OoxmlPatchCompiler = (
   original: Uint8Array,
 ) => Promise<OoxmlParts | OoxmlPatchResult>;
 
+export interface OoxmlSemanticOutcome {
+  verifiedEdits: EditId[];
+  unverifiableEdits: EditId[];
+  failedEdits: Array<{ editId: EditId; reason: string }>;
+}
+
+interface OoxmlOutputExpectation {
+  intendedParts: string[];
+  semantic: OoxmlSemanticOutcome;
+  warnings: string[];
+}
+
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
+/** Build one comparable report: score is locality only; package, semantics, and compatibility stay separate. */
+export function ooxmlFidelityReport(
+  before: Uint8Array,
+  after: Uint8Array,
+  intendedPartNames: readonly string[],
+  semantic: OoxmlSemanticOutcome,
+  compatibilityWarnings: readonly string[] = [],
+): FidelityReport {
+  const intendedParts = unique(intendedPartNames);
+  try {
+    const integrity = comparePartsIntegrity(before, after);
+    const intended = new Set(intendedParts);
+    const unexpectedChanges = integrity.changed.filter((change) => !intended.has(change.slice(1)));
+    const unexpectedParts = unexpectedChanges.map((change) => change.slice(1));
+    const outsideTotal = Math.max(0, integrity.total - intended.size);
+    const unchangedOutside = Math.max(0, outsideTotal - unexpectedChanges.length);
+    const unchangedPartRatio = outsideTotal === 0 ? 1 : unchangedOutside / outsideTotal;
+    return {
+      score: unchangedPartRatio,
+      drift: unexpectedChanges.map((change) => ({ part: change.slice(1), kind: 'content', note: `unexpected: ${change}` })),
+      verification: {
+        packageValid: true,
+        locality: { intendedParts, unexpectedParts, unchangedPartRatio },
+        semantic,
+        compatibility: { warnings: unique(compatibilityWarnings) },
+      },
+    };
+  } catch (error) {
+    const reason = `OOXML package verification failed: ${error instanceof Error ? error.message : String(error)}`;
+    const editIds = unique([
+      ...semantic.verifiedEdits,
+      ...semantic.unverifiableEdits,
+      ...semantic.failedEdits.map((failure) => failure.editId),
+    ]);
+    return {
+      score: 0,
+      drift: [{ part: 'package', kind: 'content', note: reason }],
+      verification: {
+        packageValid: false,
+        locality: { intendedParts, unexpectedParts: ['package'], unchangedPartRatio: 0 },
+        semantic: { verifiedEdits: [], unverifiableEdits: [], failedEdits: editIds.map((editId) => ({ editId, reason })) },
+        compatibility: { warnings: unique([...compatibilityWarnings, reason]) },
+      },
+    };
+  }
+}
+
 /** Distinguishes rich result (OoxmlPatchResult) from bare OoxmlParts: the former has a non-Uint8Array .parts. */
 function asPatchResult(r: OoxmlParts | OoxmlPatchResult): OoxmlPatchResult {
   if ('parts' in r && !(r.parts instanceof Uint8Array)) return r as OoxmlPatchResult;
@@ -53,7 +116,7 @@ function asPatchResult(r: OoxmlParts | OoxmlPatchResult): OoxmlPatchResult {
 export class SurgicalOoxmlWriteback implements WritebackBackend {
   readonly id = 'surgical-ooxml' as WritebackId;
   readonly strategy: WritebackKind = 'surgical-ooxml';
-  private readonly expectedPartsByOutput = new WeakMap<Uint8Array, ReadonlySet<string>>();
+  private readonly expectationsByOutput = new WeakMap<Uint8Array, OoxmlOutputExpectation>();
 
   constructor(private readonly compile: OoxmlPatchCompiler) {}
 
@@ -79,22 +142,18 @@ export class SurgicalOoxmlWriteback implements WritebackBackend {
     const expected = new Set(touchedParts);
     if (expected.size !== touchedParts.length) throw new Error('OOXML patch contains duplicate touched part paths');
     const bytes = repackOoxml(original, patches, {}, removedParts);
-    this.expectedPartsByOutput.set(bytes, expected);
-
-    const integrity = comparePartsIntegrity(original, bytes);
-    const drift = integrity.changed
-      .filter((c) => !expected.has(c.slice(1)))
-      .map((c) => ({ part: c.slice(1), kind: 'content' as const, note: `unexpected: ${c}` }));
-
-    const fidelity: FidelityReport = {
-      score: integrity.total === 0 ? 1 : integrity.identical / integrity.total,
-      drift,
-    };
     // Honest writeback: any dropped edit ⇒ ok=false; never report success while changes were lost.
     const dropped = report?.dropped ?? [];
     const applied = report?.applied ?? cs.edits.map((e) => e.id);
+    const expectation: OoxmlOutputExpectation = {
+      intendedParts: touchedParts,
+      semantic: { verifiedEdits: [], unverifiableEdits: applied, failedEdits: dropped },
+      warnings: applied.length ? ['generic OOXML writeback does not perform format-specific semantic readback'] : [],
+    };
+    this.expectationsByOutput.set(bytes, expectation);
+    const fidelity = ooxmlFidelityReport(original, bytes, expectation.intendedParts, expectation.semantic, expectation.warnings);
     return {
-      ok: drift.length === 0 && dropped.length === 0,
+      ok: fidelity.verification.packageValid && fidelity.drift.length === 0 && dropped.length === 0,
       bytes,
       touchedParts,
       fidelity,
@@ -108,16 +167,9 @@ export class SurgicalOoxmlWriteback implements WritebackBackend {
     if (!before.bytes || !after.bytes) {
       throw new Error('SurgicalOoxmlWriteback.verify: before/after bytes required');
     }
-    const expectedParts = this.expectedPartsByOutput.get(after.bytes);
-    if (!expectedParts) throw new Error('SurgicalOoxmlWriteback.verify: output was not produced by this backend instance');
-    const integrity = comparePartsIntegrity(before.bytes, after.bytes);
-    const drift = integrity.changed
-      .filter((change) => !expectedParts.has(change.slice(1)))
-      .map((change) => ({ part: change.slice(1), kind: 'content' as const, note: `unexpected: ${change}` }));
-    return {
-      score: integrity.total === 0 ? 1 : integrity.identical / integrity.total,
-      drift,
-    };
+    const expectation = this.expectationsByOutput.get(after.bytes);
+    if (!expectation) throw new Error('SurgicalOoxmlWriteback.verify: output was not produced by this backend instance');
+    return ooxmlFidelityReport(before.bytes, after.bytes, expectation.intendedParts, expectation.semantic, expectation.warnings);
   }
 }
 
