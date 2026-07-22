@@ -76,16 +76,30 @@ export function readOoxmlParts(bytes: Uint8Array, overrides: Partial<OoxmlBudget
 }
 
 /**
- * Surgical patch: rewrite only the parts listed in `patches`; all other parts
- * pass through byte-for-byte unchanged, then repack.
+ * Surgical patch: rewrite only the parts listed in `patches`, remove only the
+ * parts listed in `removedParts`, and pass every other part through unchanged.
  * This is the preferred mechanism for high-fidelity writeback — never
  * re-serialize the whole file.
  */
-export function repackOoxml(originalBytes: Uint8Array, patches: OoxmlParts, overrides: Partial<OoxmlBudget> = {}): Uint8Array {
+export function repackOoxml(
+  originalBytes: Uint8Array,
+  patches: OoxmlParts,
+  overrides: Partial<OoxmlBudget> = {},
+  removedParts: readonly string[] = [],
+): Uint8Array {
   const budget = budgetWith(overrides);
   const parts = readOoxmlParts(originalBytes, budget);
+  const removed = new Set<string>();
+  for (const path of removedParts) {
+    assertSafePartPath(path);
+    if (removed.has(path)) throw new Error('duplicate removed OOXML part path: ' + path);
+    if (path in patches) throw new Error('OOXML part cannot be patched and removed: ' + path);
+    if (!(path in parts)) throw new Error('cannot remove missing OOXML part: ' + path);
+    removed.add(path);
+  }
   const out: Zippable = {};
   for (const [path, data] of Object.entries(parts)) {
+    if (removed.has(path)) continue;
     const patched = patches[path];
     out[path] = patched ?? data; // patched → new content; otherwise → original bytes
   }

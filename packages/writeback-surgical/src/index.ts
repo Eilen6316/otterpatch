@@ -33,6 +33,8 @@ export interface OoxmlPatchReport {
 /** Rich compiler result: part patches + per-edit report. Bare OoxmlParts is also allowed (legacy compilers; treated as all-applied). */
 export interface OoxmlPatchResult {
   parts: OoxmlParts;
+  /** Existing package parts that must be removed as part of this patch. */
+  removedParts?: string[];
   report?: OoxmlPatchReport;
 }
 
@@ -72,14 +74,16 @@ export class SurgicalOoxmlWriteback implements WritebackBackend {
   async commit(cs: ChangeSet, doc: DocHandle): Promise<WritebackResult> {
     const original = doc.bytes;
     if (!original) throw new Error('SurgicalOoxmlWriteback.commit: DocHandle.bytes required');
-    const { parts: patches, report } = asPatchResult(await this.compile(cs, original));
-    const bytes = repackOoxml(original, patches);
-    this.expectedPartsByOutput.set(bytes, new Set(Object.keys(patches)));
+    const { parts: patches, removedParts = [], report } = asPatchResult(await this.compile(cs, original));
+    const touchedParts = [...Object.keys(patches), ...removedParts];
+    const expected = new Set(touchedParts);
+    if (expected.size !== touchedParts.length) throw new Error('OOXML patch contains duplicate touched part paths');
+    const bytes = repackOoxml(original, patches, {}, removedParts);
+    this.expectedPartsByOutput.set(bytes, expected);
 
     const integrity = comparePartsIntegrity(original, bytes);
-    const expected = new Set(Object.keys(patches));
     const drift = integrity.changed
-      .filter((c) => !((c.startsWith('~') || c.startsWith('+')) && expected.has(c.slice(1)))) // expected changes/additions don't count as drift
+      .filter((c) => !expected.has(c.slice(1)))
       .map((c) => ({ part: c.slice(1), kind: 'content' as const, note: `unexpected: ${c}` }));
 
     const fidelity: FidelityReport = {
@@ -92,7 +96,7 @@ export class SurgicalOoxmlWriteback implements WritebackBackend {
     return {
       ok: drift.length === 0 && dropped.length === 0,
       bytes,
-      touchedParts: Object.keys(patches),
+      touchedParts,
       fidelity,
       appliedEditIds: applied,
       droppedEdits: dropped,

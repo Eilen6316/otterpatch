@@ -46,6 +46,24 @@ test('新增部件被纳入', () => {
   assert.equal(integrity.identical, 1);
 });
 
+test('explicit part removal is reported and unrelated parts stay identical', () => {
+  const original = zipSync({ 'a.xml': enc('<a/>'), 'stale.xml': enc('<stale/>') });
+  const patched = repackOoxml(original, {}, {}, ['stale.xml']);
+  const integrity = comparePartsIntegrity(original, patched);
+
+  assert.deepEqual(integrity.changed, ['-stale.xml']);
+  assert.equal(integrity.identical, 1);
+  assert.equal(readOoxmlParts(patched)['stale.xml'], undefined);
+});
+
+test('part removal rejects missing, duplicate, overlapping, and unsafe paths', () => {
+  const original = zipSync({ 'a.xml': enc('<a/>') });
+  assert.throws(() => repackOoxml(original, {}, {}, ['missing.xml']), /cannot remove missing OOXML part/);
+  assert.throws(() => repackOoxml(original, {}, {}, ['a.xml', 'a.xml']), /duplicate removed OOXML part path/);
+  assert.throws(() => repackOoxml(original, { 'a.xml': enc('<changed/>') }, {}, ['a.xml']), /cannot be patched and removed/);
+  assert.throws(() => repackOoxml(original, {}, {}, ['../a.xml']), /unsafe OOXML part path/);
+});
+
 test('OOXML preflight rejects excessive entries, expansion, ratio, and XML depth', () => {
   const entries = zipSync({ 'a.xml': enc('<a/>'), 'b.xml': enc('<b/>'), 'c.xml': enc('<c/>') });
   assert.throws(

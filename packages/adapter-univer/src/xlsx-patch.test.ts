@@ -61,6 +61,31 @@ function makeTwoSheetXlsx(): Uint8Array {
   });
 }
 
+function makeXlsxWithCalcChain(): Uint8Array {
+  return repackOoxml(makeXlsx(), {
+    '[Content_Types].xml': enc(
+      '<?xml version="1.0"?><Types>' +
+        '<Override ContentType=\'application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml\' PartName=\'/xl/calcChain.xml\'/>' +
+        '<Override PartName=\'/xl/styles.xml\' ContentType=\'keep/styles\'/>' +
+        '</Types>',
+    ),
+    'xl/workbook.xml': enc(
+      '<?xml version="1.0"?><workbook xmlns:r="r"><sheets>' +
+        '<sheet name="Sheet1" sheetId="1" r:id="rId1"/>' +
+        '</sheets><calcPr calcOnSave=\'0\' forceFullCalc=\'0\' calcId=\'191029\' fullCalcOnLoad=\'0\' calcMode=\'manual\'/>' +
+        '<extLst><ext uri="keep"/></extLst></workbook>',
+    ),
+    'xl/_rels/workbook.xml.rels': enc(
+      '<?xml version="1.0"?><Relationships>' +
+        '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/>' +
+        '<Relationship Target=\'calcChain.xml\' Type=\'http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain\' Id=\'rIdCalc\'/>' +
+        '<Relationship Id=\'rIdKeep\' Type=\'keep/type\' Target=\'theme/theme1.xml\'/>' +
+        '</Relationships>',
+    ),
+    'xl/calcChain.xml': enc('<?xml version="1.0"?><calcChain><c r="B1" i="1"/></calcChain>'),
+  });
+}
+
 function setB1To(value: number | string): ChangeSet {
   const anchorId = 'a1' as AnchorId;
   return {
@@ -175,8 +200,83 @@ test('P1.3 setFormula:写 <f> 真落盘(保留样式 s),不再静默丢弃', asy
   assert.equal(res.ok, true);
   assert.deepEqual(res.appliedEditIds, ['e1']);
   assert.deepEqual(res.droppedEdits, []);
-  const sheet = dec.decode(readOoxmlParts(res.bytes)['xl/worksheets/sheet1.xml']!);
+  const parts = readOoxmlParts(res.bytes);
+  const sheet = dec.decode(parts['xl/worksheets/sheet1.xml']!);
   assert.match(sheet, /<c r="B1" s="2"><f>C2\*D2<\/f><\/c>/);
+  assert.match(
+    dec.decode(parts['xl/workbook.xml']!),
+    /<\/sheets><calcPr calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"\/><\/workbook>/,
+  );
+});
+
+test('formula write forces full recalculation and removes stale calc chain metadata', async () => {
+  const original = makeXlsxWithCalcChain();
+  const cs = csOp({ family: 'value', kind: 'setFormula', formula: '=C2*D2' });
+  const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
+  const res = await wb.commit(cs, { hostId: 'h1', bytes: original, rev: 0 as DocRev });
+
+  assert.equal(res.ok, true);
+  assert.deepEqual(new Set(res.touchedParts), new Set([
+    'xl/worksheets/sheet1.xml',
+    'xl/workbook.xml',
+    'xl/_rels/workbook.xml.rels',
+    '[Content_Types].xml',
+    'xl/calcChain.xml',
+  ]));
+  assert.deepEqual(res.fidelity.drift, []);
+
+  const parts = readOoxmlParts(res.bytes);
+  const workbook = dec.decode(parts['xl/workbook.xml']!);
+  const calcPr = /<calcPr\b[^>]*\/>/.exec(workbook)?.[0] ?? '';
+  assert.match(calcPr, /\bcalcMode="auto"/);
+  assert.match(calcPr, /\bfullCalcOnLoad="1"/);
+  assert.match(calcPr, /\bforceFullCalc="1"/);
+  assert.match(calcPr, /\bcalcId='191029'/, 'unrelated calculation attributes are preserved');
+  assert.match(calcPr, /\bcalcOnSave='0'/, 'unrelated calculation attributes are preserved');
+  assert.match(workbook, /<extLst><ext uri="keep"\/><\/extLst>/);
+  assert.equal(parts['xl/calcChain.xml'], undefined);
+
+  const relationships = dec.decode(parts['xl/_rels/workbook.xml.rels']!);
+  assert.doesNotMatch(relationships, /calcChain|rIdCalc/);
+  assert.match(relationships, /rId1/);
+  assert.match(relationships, /rIdKeep/);
+  const contentTypes = dec.decode(parts['[Content_Types].xml']!);
+  assert.doesNotMatch(contentTypes, /calcChain/);
+  assert.match(contentTypes, /keep\/styles/);
+
+  const verification = await wb.verify(
+    { hostId: 'h1', bytes: original, rev: 0 as DocRev },
+    { hostId: 'h1', bytes: res.bytes, rev: 1 as DocRev },
+    cs,
+  );
+  assert.deepEqual(verification.drift, [], 'expected calcChain deletion is not integrity drift');
+});
+
+test('non-formula writes leave calculation settings and calc chain byte-identical', async () => {
+  const original = makeXlsxWithCalcChain();
+  const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
+  const res = await wb.commit(setB1To(99), { hostId: 'h1', bytes: original, rev: 0 as DocRev });
+
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.touchedParts, ['xl/worksheets/sheet1.xml']);
+  const before = readOoxmlParts(original);
+  const after = readOoxmlParts(res.bytes);
+  for (const path of ['xl/workbook.xml', 'xl/_rels/workbook.xml.rels', '[Content_Types].xml', 'xl/calcChain.xml']) {
+    assert.deepEqual(after[path], before[path], `${path} must remain byte-identical`);
+  }
+});
+
+test('a dropped formula edit does not change workbook calculation metadata', async () => {
+  const original = makeXlsx();
+  const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
+  const res = await wb.commit(
+    csOp({ family: 'value', kind: 'setFormula', formula: '=1+1' }, 'B1', 'Missing'),
+    { hostId: 'h1', bytes: original, rev: 0 as DocRev },
+  );
+
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.touchedParts, []);
+  assert.deepEqual(readOoxmlParts(res.bytes)['xl/workbook.xml'], readOoxmlParts(original)['xl/workbook.xml']);
 });
 
 test('P1.3 setStyle:登记到 styles.xml 并改单元格 s(保留原值),ok=true', async () => {

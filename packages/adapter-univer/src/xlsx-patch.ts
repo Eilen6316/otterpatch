@@ -7,11 +7,12 @@
  *  - Each edit reports applied / dropped (with reason); edits are isolated — one failure does not sink the batch;
  *  - Unsupported ops (structural/object/raw) are explicitly dropped with a reason, never silently "succeed";
  *  - If the target cell does not exist, insert a new <c> (creating a <row> if needed) instead of throwing.
- *  - Strings use inlineStr (sharedStrings untouched); formulas write <f> without a cached value (Excel recalculates on open).
+ *  - Strings use inlineStr (sharedStrings untouched); formulas clear cached values and force a full workbook recalculation.
  */
 import { assertA1RangeBudget, supportsFormatOperation, type CellValue, type ChangeSet, type EditId, type LogicalAnchor } from '@otterpatch/core';
 import { readOoxmlParts, type OoxmlParts, type OoxmlPatchResult } from '@otterpatch/writeback-surgical';
 import { XlsxStyles, type AbstractCellStyle } from './xlsx-styles.js';
+import { prepareFormulaRecalculation, type FormulaRecalculationPatch } from './xlsx-recalculation.js';
 import { WorksheetXmlEditor } from './worksheet-editor.js';
 
 const dec = new TextDecoder();
@@ -138,6 +139,7 @@ export function buildXlsxCompiler() {
     const sheetEditors = new Map<string, WorksheetXmlEditor>();
     const applied: EditId[] = [];
     const dropped: Array<{ editId: EditId; reason: string }> = [];
+    let formulaRecalculation: FormulaRecalculationPatch | undefined;
 
     const stylesPath = resolveStylesPath(parts);
     const styleBox: { ed: XlsxStyles | null } = { ed: null };
@@ -190,7 +192,9 @@ export function buildXlsxCompiler() {
         } else {
           for (const ref of cells) {
             if (kind === 'setFormula') {
+              const recalculation = formulaRecalculation ?? prepareFormulaRecalculation(parts);
               sheet.setCellFormula(ref, (edit.op as { formula: string }).formula ?? '');
+              formulaRecalculation = recalculation;
             } else if (kind === 'deleteRange') {
               if (!sheet.hasCell(ref)) continue; // target already empty; clearing is a no-op
               sheet.setCellValue(ref, null);
@@ -214,6 +218,11 @@ export function buildXlsxCompiler() {
       if (!original || dec.decode(original) !== xml) out[path] = encoder.encode(xml);
     }
     if (styleBox.ed && styleBox.ed.dirty && stylesPath) out[stylesPath] = encoder.encode(styleBox.ed.toXml());
-    return { parts: out, report: { applied, dropped } };
+    if (formulaRecalculation) Object.assign(out, formulaRecalculation.parts);
+    return {
+      parts: out,
+      ...(formulaRecalculation?.removedParts.length ? { removedParts: formulaRecalculation.removedParts } : {}),
+      report: { applied, dropped },
+    };
   };
 }
