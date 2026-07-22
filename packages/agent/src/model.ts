@@ -27,6 +27,8 @@ export interface ProposeRequest {
   };
   /** Full Word document snapshot (per-paragraph text + styles; likewise not in the prompt, fetched on demand via read_blocks/find_text/get_outline/get_style_usage). */
   doc?: { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> };
+  /** Exact PowerPoint text boundaries used to reject ambiguous and cross-run anchors before review. */
+  ppt?: { slides: Array<{ paragraphs: Array<{ runs: string[] }> }> };
   /** Multi-turn conversation history (user messages + agent answers/change summaries) so this request carries context. */
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }

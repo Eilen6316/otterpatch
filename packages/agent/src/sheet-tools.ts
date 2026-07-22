@@ -77,6 +77,7 @@ export function assertProposeRequestBudget(req: ProposeRequest): void {
     assertSheetSnapshotBudget(req.sheet);
   }
   if (req.doc) assertJsonBudget(req.doc, 'document_snapshot');
+  if (req.ppt) assertJsonBudget(req.ppt, 'pptx_snapshot');
   if (req.board) {
     assertJsonBudget(req.board, 'drawio_snapshot');
     const encoding = req.board.sourceEncoding;

@@ -114,8 +114,14 @@ const manifests = [
     version: CAPABILITY_MANIFEST_VERSION,
     format: 'ppt',
     aliases: ['ppt', 'pptx'],
+    features: {
+      singleRunTextReplacement: 'supported',
+      crossRunTextReplacement: 'unsupported',
+      structuredProposalVerification: 'supported',
+      semanticVerification: 'incomplete',
+    },
     operations: [
-      writebackOnly({ op: 'replaceText', maxScope: 'slide', risk: 'safe', backend: ['surgical-ooxml'] }),
+      writebackOnly({ op: 'replaceText', maxScope: 'range', risk: 'safe', backend: ['surgical-ooxml'], maturity: 'preview' }),
     ],
   },
 ] as const satisfies readonly FormatCapabilityManifest[];

@@ -4,3 +4,4 @@
  * Future work: anchor resolution for shapes/layouts/masters, chart data sources.
  */
 export * from './pptx-patch.js';
+export * from './pptx-text.js';

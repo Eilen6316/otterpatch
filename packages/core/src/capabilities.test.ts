@@ -46,6 +46,7 @@ test('capability manifest does not advertise writeback-only formats as preview o
   assert.ok(capabilityManifestFor('word')?.operations.every((operation) => !operation.preview && !operation.verify));
   assert.ok(capabilityManifestFor('drawio')?.operations.every((operation) => !operation.preview && operation.verify));
   assert.ok(capabilityManifestFor('pdf')?.operations.every((operation) => !operation.preview && !operation.verify));
+  assert.ok(capabilityManifestFor('pptx')?.operations.every((operation) => !operation.preview && !operation.verify));
   assert.equal(capabilityManifestFor('drawio')?.features?.compressed, 'unsupported');
 });
 
@@ -56,6 +57,18 @@ test('PDF capabilities disclose experimental form fill and verification limits',
     acroFormTextFill: 'experimental',
     semanticVerification: 'incomplete',
     byteLocality: 'not-guaranteed',
+  });
+});
+
+test('PPTX capabilities disclose the narrow single-run preview boundary', () => {
+  const ppt = capabilityManifestFor('pptx');
+  assert.equal(ppt?.operations[0]?.maturity, 'preview');
+  assert.equal(ppt?.operations[0]?.maxScope, 'range');
+  assert.deepEqual(ppt?.features, {
+    singleRunTextReplacement: 'supported',
+    crossRunTextReplacement: 'unsupported',
+    structuredProposalVerification: 'supported',
+    semanticVerification: 'incomplete',
   });
 });
 

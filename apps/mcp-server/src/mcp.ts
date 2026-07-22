@@ -76,6 +76,12 @@ const boardSchema = z.object({
   sourceEncoding: z.enum(['uncompressed', 'compressed']).optional(),
 }).strict();
 
+const pptSchema = z.object({
+  slides: z.array(z.object({
+    paragraphs: z.array(z.object({ runs: z.array(z.string()) }).strict()),
+  }).strict()),
+}).strict();
+
 server.registerTool(
   'otterpatch_skills',
   { description: 'List OtterPatch built-in (universal) document skills (xlsx/docx/pptx/pdf/drawio).', inputSchema: {} },
@@ -99,6 +105,7 @@ server.registerTool(
       sheet: sheetSchema.optional(),
       board: boardSchema.optional(),
       doc: z.object({ blocks: z.array(z.object({ style: z.string(), text: z.string(), font: z.string().optional(), size: z.number().optional(), align: z.string().optional(), lineSpacing: z.number().optional() })) }).optional(),
+      ppt: pptSchema.optional().describe('required for PPTX proposals; preserves slide, paragraph, and text-run boundaries'),
       history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).optional(),
     },
   },
@@ -119,6 +126,7 @@ server.registerTool(
           ...(a.sheet ? { sheet: a.sheet } : {}),
           ...(a.board ? { board: a.board } : {}),
           ...(a.doc ? { doc: a.doc } : {}),
+          ...(a.ppt ? { ppt: a.ppt } : {}),
           ...(a.history ? { history: a.history } : {}),
         },
         model,

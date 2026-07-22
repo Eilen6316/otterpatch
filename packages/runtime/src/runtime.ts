@@ -42,7 +42,7 @@ import {
 import { DrawioSurgicalWriteback } from '@otterpatch/adapter-drawio';
 import { WordRedlineWriteback } from '@otterpatch/adapter-word';
 import { PdfFormWriteback } from '@otterpatch/adapter-pdf';
-import { buildPptxCompiler } from '@otterpatch/adapter-pptx';
+import { buildPptxCompiler, buildPptxVerifier } from '@otterpatch/adapter-pptx';
 import { defaultLibrary } from '@otterpatch/skills';
 import type { SkillLibrary } from '@otterpatch/skills';
 import {
@@ -117,6 +117,8 @@ export class OtterPatchRuntime {
       word: (req) => (req.doc ? buildDocVerifier(req.doc) : req.context.trim() ? buildDocVerifier(req.context) : undefined),
       docx: (req) => (req.doc ? buildDocVerifier(req.doc) : req.context.trim() ? buildDocVerifier(req.context) : undefined),
       drawio: (req) => (req.board ? buildDrawioVerifier(req.board) : req.context.trim() ? buildDrawioVerifier(req.context) : undefined),
+      ppt: (req) => buildPptxVerifier(req.ppt),
+      pptx: (req) => buildPptxVerifier(req.ppt),
     };
     this.backends = {
       excel: () => new SurgicalOoxmlWriteback(buildXlsxCompiler()),
@@ -187,7 +189,7 @@ export class OtterPatchRuntime {
   }
 
   /** Format check after a proposal: Excel performs simulation; Word performs anchor lint;
-   *  drawio simulates topology when a structured board snapshot is supplied. */
+   *  drawio simulates topology and PPTX resolves text against exact run boundaries. */
   private verifyOpts(req: ProposeRequest): RespondOptions | undefined {
     const structural = this.verifiers[req.format]?.(req);
     if (!structural) return undefined;

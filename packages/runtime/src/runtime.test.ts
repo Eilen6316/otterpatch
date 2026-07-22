@@ -200,7 +200,7 @@ test('runtime diff preserves explicit format removal and null proposal semantics
   assert.equal(cleared.items[0]?.proposalSummary, 'null');
 });
 
-test('runtime: verifyOpts 给 word/drawio 挂上分级检查、未注册格式不挂', async () => {
+test('runtime: verifyOpts 给 word/drawio/pptx 挂上分级检查、未注册格式不挂', async () => {
   const rt = new OtterPatchRuntime();
   const captured: Array<RespondOptions | undefined> = [];
   const cap: ModelClient = {
@@ -215,10 +215,31 @@ test('runtime: verifyOpts 给 word/drawio 挂上分级检查、未注册格式�
   const base = { hostId: 'h1', intent: 'x', baseRev: 0 as DocRev, anchors: [] };
   await rt.respondStream({ ...base, format: 'word', context: '全省财政收入逐年增长。' }, cap, () => {});
   await rt.respondStream({ ...base, format: 'drawio', context: '<mxGraphModel/>' }, cap, () => {});
+  await rt.respondStream({ ...base, format: 'pptx', context: 'Hello', ppt: { slides: [{ paragraphs: [{ runs: ['Hello'] }] }] } }, cap, () => {});
   await rt.respondStream({ ...base, format: 'pdf', context: 'AcroForm 字段…' }, cap, () => {});
   assert.ok(captured[0]?.verify, 'word 应挂上 verify(锚点可落地性自检)');
   assert.ok(captured[1]?.verify, 'drawio 也应挂上 verify(拓扑完整性自检)');
-  assert.equal(captured[2]?.verify, undefined, '未注册校验器的格式(pdf)不挂');
+  assert.ok(captured[2]?.verify, 'pptx 应挂上 verify(页内唯一且单 run)');
+  assert.equal(captured[3]?.verify, undefined, '未注册校验器的格式(pdf)不挂');
+});
+
+test('runtime: PPTX proposal verifier rejects missing, duplicate, and cross-run targets before review', async () => {
+  const rt = new OtterPatchRuntime();
+  const model = new MockModelClient(() => ({ plan: 'retitle', edits: [{ slide: 0, find: 'Hello', replace: 'World' }] }));
+  const base: ProposeRequest = { hostId: 'h', format: 'pptx', intent: 'retitle', baseRev: 0 as DocRev, anchors: [], context: 'Hello' };
+
+  await assert.rejects(() => rt.propose(base, model), /PPTX_SNAPSHOT_REQUIRED/);
+  await assert.rejects(
+    () => rt.propose({ ...base, ppt: { slides: [{ paragraphs: [{ runs: ['Hello'] }, { runs: ['Hello'] }] }] } }, model),
+    /PPTX_AMBIGUOUS_QUOTE/,
+  );
+  await assert.rejects(
+    () => rt.propose({ ...base, ppt: { slides: [{ paragraphs: [{ runs: ['Hel', 'lo'] }] }] } }, model),
+    /PPTX_CROSS_RUN_QUOTE/,
+  );
+
+  const cs = await rt.propose({ ...base, ppt: { slides: [{ paragraphs: [{ runs: ['Hello'] }] }] } }, model);
+  assert.equal(cs.edits.length, 1);
 });
 
 test('runtime: 未注册格式 commit 抛错;已注册含 excel/word/pdf/ppt/drawio', async () => {

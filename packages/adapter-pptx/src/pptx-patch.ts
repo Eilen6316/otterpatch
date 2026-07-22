@@ -8,24 +8,10 @@
  */
 import { supportsFormatOperation, type ChangeSet, type EditId } from '@otterpatch/core';
 import { readOoxmlParts, type OoxmlParts, type OoxmlPatchCompiler, type OoxmlPatchResult } from '@otterpatch/writeback-surgical';
+import { replaceUniquePptxText } from './pptx-text.js';
 
 const dec = new TextDecoder();
 const enc = new TextEncoder();
-const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-function replaceInSlide(xml: string, oldText: string, neu: string): { xml: string; hit: boolean } {
-  const eo = esc(oldText);
-  const en = esc(neu);
-  let hit = false;
-  const out = xml.replace(/<a:t>([\s\S]*?)<\/a:t>/g, (m, txt: string) => {
-    if (!hit && txt.includes(eo)) {
-      hit = true;
-      return `<a:t>${txt.replace(eo, en)}</a:t>`;
-    }
-    return m;
-  });
-  return { xml: out, hit };
-}
 
 /** pptx compiler for SurgicalOoxmlWriteback (same shape as buildXlsxCompiler). */
 export function buildPptxCompiler(): OoxmlPatchCompiler {
@@ -40,11 +26,11 @@ export function buildPptxCompiler(): OoxmlPatchCompiler {
         continue;
       }
       const anchor = cs.anchors[e.target];
-      if (!anchor || anchor.portable.kind !== 'flow') {
+      if (!anchor || anchor.portable.kind !== 'flow' || anchor.portable.path.length !== 1) {
         dropped.push({ editId: e.id, reason: 'missing slide text anchor' });
         continue;
       }
-      const slideIdx = anchor.portable.path[0] ?? 0;
+      const slideIdx = anchor.portable.path[0]!;
       const oldText = anchor.portable.quote.text;
       if (!oldText) {
         dropped.push({ editId: e.id, reason: 'missing quote text' });
@@ -56,12 +42,20 @@ export function buildPptxCompiler(): OoxmlPatchCompiler {
         dropped.push({ editId: e.id, reason: `slide part ${path} not found` });
         continue;
       }
-      const { xml, hit } = replaceInSlide(dec.decode(src), oldText, e.op.text);
-      if (!hit) {
+      const replacement = replaceUniquePptxText(dec.decode(src), oldText, e.op.text);
+      if (replacement.kind === 'missing') {
         dropped.push({ editId: e.id, reason: 'quote text not found in slide' });
         continue;
       }
-      patches[path] = enc.encode(xml);
+      if (replacement.kind === 'ambiguous') {
+        dropped.push({ editId: e.id, reason: `quote text is ambiguous in slide (${replacement.matches} matches)` });
+        continue;
+      }
+      if (replacement.kind === 'cross-run') {
+        dropped.push({ editId: e.id, reason: 'quote text spans multiple <a:t> runs and is unsupported' });
+        continue;
+      }
+      patches[path] = enc.encode(replacement.xml);
       applied.push(e.id);
     }
     return { parts: patches, report: { applied, dropped } };
