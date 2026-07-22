@@ -1,8 +1,13 @@
 ---
 name: docx-coauthoring
+namespace: otterpatch
+version: 1.0.0
+locale: zh-CN
 description: 文档共创协议:写作/大改类任务的三阶段工作法(补上下文→逐节精修→读者盲测),把"帮我写/重写这篇"变成可审阅的分批协作 —— 起草/重写/扩写类请求先加载。
 formats: [word, docx]
 keywords: [写作, 起草, 共创, 重写, 扩写, 初稿, 帮我写, 文案, 报告撰写]
+triggers: [文档共创, 分段起草]
+allowed_ops: [replaceText, setStyle]
 ---
 
 # 文档共创协议(写作/大改类任务)

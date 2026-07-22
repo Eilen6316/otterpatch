@@ -1,8 +1,13 @@
 ---
 name: pptx-design
+namespace: otterpatch
+version: 1.0.0
+locale: zh-CN
 description: 幻灯片设计打法手册:配色 60/30/10、字号体系、版式库、QA 缺陷清单与 AI 味禁则 —— PPT 内容/排版类任务先加载。
 formats: [ppt, pptx]
 keywords: [幻灯片, 演示, 设计, 配色, 版式, 字号, slide, 美化]
+triggers: [幻灯片设计, presentation design]
+allowed_ops: [replaceText]
 ---
 
 # 幻灯片设计打法(PPT)

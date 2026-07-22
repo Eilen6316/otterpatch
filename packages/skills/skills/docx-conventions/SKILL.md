@@ -1,8 +1,13 @@
 ---
 name: docx-conventions
+namespace: otterpatch
+version: 1.0.0
+locale: zh-CN
 description: Word 文档专业惯例手册:真样式/真列表/修订最小化/标点排印底线 —— 任何 Word 排版/整理/规范化任务先加载。
 formats: [word, docx]
 keywords: [规范, 样式, 列表, 目录, 编号, 排版惯例, 引号, 整理文档, 专业化]
+triggers: [Word 规范, 文档规范化]
+allowed_ops: [replaceText, setStyle]
 ---
 
 # Word 文档专业惯例(通用)

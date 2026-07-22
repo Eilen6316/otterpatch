@@ -85,7 +85,15 @@ const pptSchema = z.object({
 server.registerTool(
   'otterpatch_skills',
   { description: 'List OtterPatch built-in (universal) document skills (xlsx/docx/pptx/pdf/drawio).', inputSchema: {} },
-  async () => ok(BUILTIN_SKILLS.map((s) => ({ name: s.name, formats: s.formats, description: s.description }))),
+  async () => ok(BUILTIN_SKILLS.map((skill) => ({
+    id: `${skill.namespace}/${skill.name}`,
+    version: skill.version,
+    checksum: skill.checksum,
+    locale: skill.locale,
+    formats: skill.formats,
+    allowedOps: skill.allowedOps,
+    description: skill.description,
+  }))),
 );
 
 server.registerTool(

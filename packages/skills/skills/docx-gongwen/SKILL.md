@@ -1,8 +1,13 @@
 ---
 name: docx-gongwen
+namespace: otterpatch
+version: 1.0.0
+locale: zh-CN
 description: 党政机关公文排版打法手册(GB/T 9704):标题/正文字体字号、层级序号体系、行距标点规范 —— 公文/通知/报告排版前先加载。
 formats: [word, docx]
 keywords: [公文, 通知, 红头, 党政, 机关, 发文, gb/t 9704, 9704, 仿宋, 排版规范]
+triggers: [公文排版, GB/T 9704]
+allowed_ops: [replaceText, setStyle]
 ---
 
 # 党政机关公文排版(GB/T 9704-2012)

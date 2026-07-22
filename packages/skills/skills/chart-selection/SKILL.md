@@ -1,8 +1,13 @@
 ---
 name: chart-selection
+namespace: otterpatch
+version: 1.0.0
+locale: zh-CN
 description: 图表选型决策树:按问题选图型、零基线/配色/排序/标题写结论等专业底线 —— 做图/可视化建议前先加载。
 formats: [excel, xlsx]
 keywords: [图表, 可视化, 柱状, 折线, 饼图, 趋势, chart, 透视图]
+triggers: [图表选型, chart selection]
+allowed_ops: []
 ---
 
 # 图表选型决策树

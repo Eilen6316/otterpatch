@@ -8,14 +8,14 @@
  * the load_skill tool once the model matches a skill).
  */
 import { readFileSync } from 'node:fs';
-import { parseSkillMd, type SkillCard } from './parse.js';
+import { parseBuiltinSkillMd, type SkillCard } from './parse.js';
 
 const PLAYBOOK_NAMES = ['docx-gongwen', 'docx-conventions', 'docx-coauthoring', 'xlsx-financial', 'xlsx-authoring', 'chart-selection', 'pptx-design'] as const;
 
 function loadPlaybook(name: string): SkillCard {
   // src/ and dist/ sit at the same depth, so ../skills resolves to the skills/ dir at the package root (shipped with the package) from either
   const url = new URL(`../skills/${name}/SKILL.md`, import.meta.url);
-  return parseSkillMd(readFileSync(url, 'utf8'), 'otterpatch/playbooks', 'builtin');
+  return parseBuiltinSkillMd(readFileSync(url, 'utf8'), 'otterpatch/playbooks');
 }
 
-export const PLAYBOOK_SKILLS: SkillCard[] = PLAYBOOK_NAMES.map(loadPlaybook);
+export const PLAYBOOK_SKILLS: readonly SkillCard[] = Object.freeze(PLAYBOOK_NAMES.map(loadPlaybook));

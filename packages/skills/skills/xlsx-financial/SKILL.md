@@ -1,8 +1,13 @@
 ---
 name: xlsx-financial
+namespace: otterpatch
+version: 1.0.0
+locale: zh-CN
 description: 财务/经营数据表打法手册:勾稽校验、合计必公式、金额格式、异常侦测红线 —— 财务/报表/对账类任务先加载。
 formats: [excel, xlsx]
 keywords: [财务, 报表, 对账, 勾稽, 合计, 毛利, 利润, 资产负债, 现金流, 审计]
+triggers: [财务建模, 报表勾稽]
+allowed_ops: [setValue, setFormula, setStyle, setNumberFormat]
 ---
 
 # 财务/经营数据表规范(Excel)

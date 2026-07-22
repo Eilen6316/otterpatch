@@ -9,6 +9,9 @@
     "build": "tsc -b",
     "test": "node --import tsx --test src/skills.test.ts src/playbooks.test.ts"
   },
+  "dependencies": {
+    "@noble/hashes": "2.2.0"
+  },
   "devDependencies": {
     "tsx": "^4.19.0"
   }

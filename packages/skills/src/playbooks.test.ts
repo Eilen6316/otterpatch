@@ -30,8 +30,20 @@ test('意图匹配:财务/图表请求各命中对应手册', () => {
 test('render:带手册的技能有【有打法手册】标注与 load_skill 指引', () => {
   const lib = defaultLibrary();
   const r = lib.render('word', '公文排版');
-  assert.match(r, /docx-gongwen【有打法手册】/);
+  assert.match(r, /otterpatch\/docx-gongwen@1\.0\.0【有打法手册】/);
   assert.match(r, /load_skill/);
+});
+
+test('playbook metadata is namespaced, versioned, checksummed, localized, and capability-bounded', () => {
+  for (const card of PLAYBOOK_SKILLS) {
+    assert.equal(card.namespace, 'otterpatch');
+    assert.equal(card.version, '1.0.0');
+    assert.match(card.checksum, /^sha256:[0-9a-f]{64}$/);
+    assert.equal(card.locale, 'zh-CN');
+    assert.equal(card.immutable, true);
+    assert.ok(card.triggers.length > 0);
+    assert.ok(Array.isArray(card.allowedOps));
+  }
 });
 
 test('instructionsFor:能按名拉到手册正文(GB/T 9704 内容在)', () => {

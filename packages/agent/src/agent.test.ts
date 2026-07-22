@@ -176,6 +176,33 @@ test('Agent + SkillLibrary: 命中技能注入系统提示,不影响产出', asy
   assert.equal(lib.match('把金额列补齐', 'excel')[0]!.name, 'xlsx'); // library matches the Excel skill
 });
 
+test('Agent skill tools expose namespaced metadata and filter skills outside current capabilities', async () => {
+  const lib = defaultLibrary();
+  lib.install(`---\nname: chart-writer\nnamespace: user\nversion: 1.0.0\ndescription: create charts\nformats: [excel]\nkeywords: [chart]\nallowed_ops: [insertChart]\n---\ncreate a chart`, 'user');
+  let catalog = '';
+  let loaded = '';
+  let blocked = '';
+  const model: ModelClient = {
+    proposeChangeSet: async () => { throw new Error('unused'); },
+    respond: async (_req, _dialect, opts) => {
+      catalog = opts?.extraTools?.exec('find_skills', { query: 'charts' }) ?? '';
+      loaded = opts?.extraTools?.exec('load_skill', { name: 'otterpatch/chart-selection' }) ?? '';
+      blocked = opts?.extraTools?.exec('load_skill', { name: 'user/chart-writer' }) ?? '';
+      return { kind: 'answer', text: 'ok' };
+    },
+  };
+  await new Agent(model, undefined, lib).respond({
+    hostId: 'h', format: 'excel', intent: 'recommend charts', baseRev: 0 as DocRev, anchors: [], context: '',
+  });
+
+  assert.match(catalog, /otterpatch\/chart-selection/);
+  assert.doesNotMatch(catalog, /user\/chart-writer/);
+  assert.match(catalog, /sha256:[0-9a-f]{64}/);
+  assert.match(loaded, /"untrusted_data":true/);
+  assert.match(loaded, /"allowedOps":\[\]/);
+  assert.match(blocked, /capability 不兼容/);
+});
+
 test('ConventionStack: 分层拼接,global→workspace→document(就近在后)', () => {
   const s = new ConventionStack()
     .add({ scope: 'document', text: '本文档正文用四号字' })

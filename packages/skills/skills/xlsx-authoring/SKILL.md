@@ -1,8 +1,13 @@
 ---
 name: xlsx-authoring
+namespace: otterpatch
+version: 1.0.0
+locale: zh-CN
 description: 电子表格建模惯例手册:公式勿硬编码、假设集中、金融色码、数字格式与查错闭环 —— 建模/公式/整理表格类任务先加载。
 formats: [excel, xlsx]
 keywords: [建模, 公式, 模型, 假设, 硬编码, 色码, 数字格式, 整理, 规范化, 预测]
+triggers: [电子表格建模, spreadsheet modeling]
+allowed_ops: [setValue, setFormula, setStyle, setNumberFormat]
 ---
 
 # 电子表格建模惯例(通用)
