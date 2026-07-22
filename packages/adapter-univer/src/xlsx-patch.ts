@@ -12,7 +12,7 @@
 import { assertA1RangeBudget, supportsFormatOperation, type CellValue, type ChangeSet, type EditId, type LogicalAnchor } from '@otterpatch/core';
 import { readOoxmlParts, type OoxmlParts, type OoxmlPatchResult } from '@otterpatch/writeback-surgical';
 import { XlsxStyles, type AbstractCellStyle } from './xlsx-styles.js';
-import { setWorksheetCellFormula, setWorksheetCellStyle, setWorksheetCellValue, worksheetCellStyleIndex, worksheetHasCell } from './worksheet-xml.js';
+import { WorksheetXmlEditor } from './worksheet-editor.js';
 
 const dec = new TextDecoder();
 const encoder = new TextEncoder();
@@ -135,7 +135,7 @@ function resolveStylesPath(parts: OoxmlParts): string | null {
 export function buildXlsxCompiler() {
   return async function compile(cs: ChangeSet, original: Uint8Array): Promise<OoxmlPatchResult> {
     const parts = readOoxmlParts(original);
-    const sheetCache = new Map<string, string>();
+    const sheetEditors = new Map<string, WorksheetXmlEditor>();
     const applied: EditId[] = [];
     const dropped: Array<{ editId: EditId; reason: string }> = [];
 
@@ -147,14 +147,14 @@ export function buildXlsxCompiler() {
       styleBox.ed = new XlsxStyles(dec.decode(parts[stylesPath]));
       return styleBox.ed;
     };
-    const getSheet = (path: string): string => {
-      const cached = sheetCache.get(path);
-      if (cached !== undefined) return cached;
+    const getSheetEditor = (path: string): WorksheetXmlEditor => {
+      const cached = sheetEditors.get(path);
+      if (cached) return cached;
       const b = parts[path];
       if (!b) throw new Error(`missing part ${path}`);
-      const xml = dec.decode(b);
-      sheetCache.set(path, xml);
-      return xml;
+      const editor = new WorksheetXmlEditor(dec.decode(b));
+      sheetEditors.set(path, editor);
+      return editor;
     };
 
     for (const edit of cs.edits) {
@@ -173,6 +173,7 @@ export function buildXlsxCompiler() {
         }
         const path = resolveSheetPart(parts, ac.sheet);
         const cells = expandCells(ac.a1);
+        const sheet = getSheetEditor(path);
 
         if (kind === 'setStyle' || kind === 'setNumberFormat') {
           const ed = ensureStyles();
@@ -184,26 +185,20 @@ export function buildXlsxCompiler() {
             kind === 'setNumberFormat'
               ? { numberFormat: (edit.op as { pattern: string }).pattern }
               : ((edit.op as { style: AbstractCellStyle }).style ?? {});
-          for (const ref of cells) {
-            let xml = getSheet(path);
-            const newS = ed.resolveXf(worksheetCellStyleIndex(xml, ref), style);
-            xml = setWorksheetCellStyle(xml, ref, newS);
-            sheetCache.set(path, xml);
-          }
+          const updates = cells.map((ref) => ({ ref, styleIndex: ed.resolveXf(sheet.cellStyleIndex(ref), style) }));
+          for (const update of updates) sheet.setCellStyle(update.ref, update.styleIndex);
         } else {
           for (const ref of cells) {
-            let xml = getSheet(path);
             if (kind === 'setFormula') {
-              xml = setWorksheetCellFormula(xml, ref, (edit.op as { formula: string }).formula ?? '');
+              sheet.setCellFormula(ref, (edit.op as { formula: string }).formula ?? '');
             } else if (kind === 'deleteRange') {
-              if (!worksheetHasCell(xml, ref)) continue; // target already empty; clearing is a no-op
-              xml = setWorksheetCellValue(xml, ref, null);
+              if (!sheet.hasCell(ref)) continue; // target already empty; clearing is a no-op
+              sheet.setCellValue(ref, null);
             } else {
               const value = (edit.op as { value: CellValue }).value ?? null;
-              if (value === null && !worksheetHasCell(xml, ref)) continue; // writing null to an empty cell; skip
-              xml = setWorksheetCellValue(xml, ref, value);
+              if (value === null && !sheet.hasCell(ref)) continue; // writing null to an empty cell; skip
+              sheet.setCellValue(ref, value);
             }
-            sheetCache.set(path, xml);
           }
         }
         applied.push(edit.id);
@@ -213,8 +208,9 @@ export function buildXlsxCompiler() {
     }
 
     const out: OoxmlParts = {};
-    for (const [path, xml] of sheetCache) {
+    for (const [path, editor] of sheetEditors) {
       const original = parts[path];
+      const xml = editor.toXml();
       if (!original || dec.decode(original) !== xml) out[path] = encoder.encode(xml);
     }
     if (styleBox.ed && styleBox.ed.dirty && stylesPath) out[stylesPath] = encoder.encode(styleBox.ed.toXml());

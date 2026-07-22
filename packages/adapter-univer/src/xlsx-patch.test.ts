@@ -193,6 +193,18 @@ test('P1.3 setStyle:登记到 styles.xml 并改单元格 s(保留原值),ok=true
   assert.match(sheet, /<c r="B1" s="\d+"><v>20<\/v><\/c>/, 'B1 原值保留、仅样式索引改变');
 });
 
+test('xlsx batch editor merges sequential value and style edits on one cell', async () => {
+  const cs = setB1To(99);
+  cs.edits.push({ id: 'e2', target: cs.edits[0]!.target, op: { family: 'style', kind: 'setStyle', style: { bold: true } } });
+  const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
+  const res = await wb.commit(cs, { hostId: 'h1', bytes: makeXlsx(), rev: 0 as DocRev });
+
+  assert.equal(res.ok, true);
+  const parts = readOoxmlParts(res.bytes);
+  assert.match(dec.decode(parts['xl/worksheets/sheet1.xml']!), /<c r="B1" s="\d+"><v>99<\/v><\/c>/);
+  assert.match(dec.decode(parts['xl/styles.xml']!), /<b\/>/);
+});
+
 test('P1.3 setNumberFormat:登记 numFmt(custom id≥164)到 styles.xml', async () => {
   const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
   const res = await wb.commit(csOp({ family: 'style', kind: 'setNumberFormat', pattern: '0%' }), { hostId: 'h1', bytes: makeXlsx(), rev: 0 as DocRev });
@@ -211,6 +223,23 @@ test('P1.3 写入空/不存在的单元格:插入新 <c>(必要时建 <row>),不
   const sheet = dec.decode(readOoxmlParts(res.bytes)['xl/worksheets/sheet1.xml']!);
   assert.match(sheet, /<row r="5"><c r="C5"><v>42<\/v><\/c><\/row>/);
   assert.match(sheet, /<c r="A1"><v>10<\/v><\/c>/, '原有单元格不受影响');
+});
+
+test('xlsx writeback batches a large range into one worksheet render', { timeout: 10_000 }, async () => {
+  const original = repackOoxml(makeXlsx(), {
+    'xl/worksheets/sheet1.xml': enc('<?xml version="1.0"?><worksheet><sheetData/></worksheet>'),
+  });
+  const wb = new SurgicalOoxmlWriteback(buildXlsxCompiler());
+  const res = await wb.commit(
+    csOp({ family: 'value', kind: 'setValue', value: 7 }, 'Sheet1!A1:CV50'),
+    { hostId: 'h1', bytes: original, rev: 0 as DocRev },
+  );
+
+  assert.equal(res.ok, true);
+  const sheet = dec.decode(readOoxmlParts(res.bytes)['xl/worksheets/sheet1.xml']!);
+  assert.equal((sheet.match(/<c r=/g) ?? []).length, 5_000);
+  assert.match(sheet, /<c r="A1"><v>7<\/v><\/c>/);
+  assert.match(sheet, /<c r="CV50"><v>7<\/v><\/c>/);
 });
 
 test('P0 诚实写回:不支持的 op 进 droppedEdits 且 ok=false(不再静默成功)', async () => {
