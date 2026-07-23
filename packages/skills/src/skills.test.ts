@@ -11,14 +11,14 @@ namespace: university
 version: 2.1.0
 locale: zh-CN
 description: >
-  把一篇中文学术论文程序化生成为排版规范的 Word(.docx),再转 PDF。
-  关键词:python-docx、三线表、docx、pdf
+  把一篇中文学术论文程序化生成为排版规范的 Word(.docx)。
+  关键词:python-docx、三线表、docx
 formats: [word, docx]
 triggers: [学术论文, academic paper]
 allowed_ops: [replaceText, setStyle, insertTable]
 ---
 
-# 中文学术论文 → Word/PDF
+# 中文学术论文 → Word
 正文说明……`;
 
 test('parseSkillMd: 解析 frontmatter + 折叠 description + 正文', () => {
@@ -75,9 +75,9 @@ test('SkillLibrary.render: 生成可注入系统提示的片段', () => {
 
 test('内置能力卡不再宣称当前后端无法写回的理想化能力', () => {
   const descriptions = BUILTIN_SKILLS.map((card) => card.description).join('\n');
-  assert.doesNotMatch(descriptions, /openpyxl|python-pptx|数据透视|母版|PDF 的读取\/文本抽取\/表单填写\/生成/);
+  assert.equal(BUILTIN_SKILLS.some((card) => card.name === 'pdf'), false);
+  assert.doesNotMatch(descriptions, /openpyxl|python-pptx|数据透视|母版/);
   assert.match(BUILTIN_SKILLS.find((card) => card.name === 'pptx')?.description ?? '', /单个文本 run/);
-  assert.match(BUILTIN_SKILLS.find((card) => card.name === 'pdf')?.description ?? '', /AcroForm/);
 });
 
 test('外部 skill 描述不得进入 system prompt fragment', () => {

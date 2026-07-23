@@ -23,7 +23,6 @@
     "@otterpatch/adapter-univer": "0.0.1",
     "@otterpatch/adapter-drawio": "0.0.1",
     "@otterpatch/adapter-word": "0.0.1",
-    "@otterpatch/adapter-pdf": "0.0.1",
     "@otterpatch/adapter-pptx": "0.0.1"
   },
   "devDependencies": {

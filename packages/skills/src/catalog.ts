@@ -45,16 +45,6 @@ export const BUILTIN_SKILLS: readonly SkillCard[] = Object.freeze([
     source: ANTHROPIC,
   }),
   defineBuiltinSkill({
-    name: 'pdf',
-    description: 'PDF 实验性写回:仅填写未签名 PDF 的 AcroForm 文本字段。',
-    formats: ['pdf'],
-    keywords: ['pdf', '表单', '抽取', '生成'],
-    triggers: ['acroform'],
-    allowedOps: ['setValue'],
-    locale: 'und',
-    source: ANTHROPIC,
-  }),
-  defineBuiltinSkill({
     name: 'drawio',
     description: 'drawio/流程图的读取与编辑:按 mxCell id 增删改节点与连线、样式与布局。',
     formats: ['drawio'],

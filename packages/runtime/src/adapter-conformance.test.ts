@@ -5,7 +5,7 @@ import { createBuiltinAdapterRegistry } from './adapters.js';
 
 test('built-in adapters conform to their capability manifests and writeback declarations', () => {
   const registry = createBuiltinAdapterRegistry();
-  const expectedFormats = ['drawio', 'excel', 'pdf', 'ppt', 'word'];
+  const expectedFormats = ['drawio', 'excel', 'ppt', 'word'];
   assert.deepEqual(registry.manifests().map((manifest) => manifest.format).sort(), expectedFormats);
 
   for (const manifest of registry.manifests()) {

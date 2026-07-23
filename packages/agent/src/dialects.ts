@@ -8,7 +8,7 @@ import type { HostDialect, ProposeRequest } from './model.js';
 import { requireAgentTrace } from './provenance.js';
 import {
   EXCEL_SYSTEM, EXCEL_TOOL_DESC, DRAWIO_SYSTEM, DRAWIO_TOOL_DESC,
-  WORD_SYSTEM, WORD_TOOL_DESC, PDF_SYSTEM, PDF_TOOL_DESC, PPT_SYSTEM, PPT_TOOL_DESC,
+  WORD_SYSTEM, WORD_TOOL_DESC, PPT_SYSTEM, PPT_TOOL_DESC,
 } from './prompts/index.js';
 
 function newChangeSet(
@@ -535,59 +535,6 @@ export const wordDialect: HostDialect = {
   buildChangeSet: (req, proposal) => buildWordChangeSet(req, proposal as WordProposal),
 };
 
-// ───────────────────────── PDF ─────────────────────────
-
-export interface PdfProposal {
-  plan: string;
-  edits: Array<{ field: string; value: string }>;
-}
-
-function buildPdfChangeSet(req: ProposeRequest, p: PdfProposal): ChangeSet {
-  const anchors: Record<AnchorId, LogicalAnchor> = {};
-  const edits: Edit[] = [];
-  assertProposalItemCount(p.edits ?? []);
-  (p.edits ?? []).forEach((e, i) => {
-    const aid = ('a' + i) as AnchorId;
-    anchors[aid] = {
-      id: aid,
-      hostId: req.hostId as HostId,
-      kind: 'object',
-      ref: null,
-      baseRev: req.baseRev,
-      portable: { kind: 'object', slide: 0, elementId: e.field },
-    };
-    edits.push({ id: 'e' + i, target: aid, op: { family: 'value', kind: 'setValue', value: e.value } });
-  });
-  return newChangeSet(req, p.plan, anchors, edits);
-}
-
-export const pdfDialect: HostDialect = {
-  format: 'pdf',
-  systemPrompt: PDF_SYSTEM,
-  toolName: 'propose_changeset',
-  toolDescription: PDF_TOOL_DESC,
-  parameters: {
-    type: 'object',
-    properties: {
-      plan: { type: 'string', description: '一句话说明你打算做什么' },
-      edits: {
-        type: 'array',
-        maxItems: RESOURCE_LIMITS.changeSetEdits,
-        items: {
-          type: 'object',
-          properties: {
-            field: { type: 'string', description: 'AcroForm 表单字段名' },
-            value: { type: 'string', description: '要填入的文本' },
-          },
-          required: ['field', 'value'],
-        },
-      },
-    },
-    required: ['plan', 'edits'],
-  },
-  buildChangeSet: (req, proposal) => buildPdfChangeSet(req, proposal as PdfProposal),
-};
-
 // ───────────────────────── PPT ─────────────────────────
 
 export interface PptProposal {
@@ -647,7 +594,6 @@ export const DIALECTS: Record<string, HostDialect> = {
   drawio: drawioDialect,
   word: wordDialect,
   docx: wordDialect,
-  pdf: pdfDialect,
   ppt: pptDialect,
   pptx: pptDialect,
 };

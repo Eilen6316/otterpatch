@@ -14,7 +14,6 @@
     { "path": "../adapter-univer" },
     { "path": "../adapter-drawio" },
     { "path": "../adapter-word" },
-    { "path": "../adapter-pdf" },
     { "path": "../adapter-pptx" }
   ]
 }

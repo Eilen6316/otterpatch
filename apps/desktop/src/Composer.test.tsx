@@ -46,4 +46,5 @@ test('Composer exposes local service credentials only when browser development e
   const electronMarkup = renderToStaticMarkup(<Composer {...baseProps} />);
   assert.doesNotMatch(electronMarkup, /data-role="local-service-token"/);
   assert.doesNotMatch(electronMarkup, /data-role="local-review-token"/);
+  assert.doesNotMatch(electronMarkup, /\.pdf/);
 });

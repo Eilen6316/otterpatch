@@ -116,7 +116,7 @@ export function Composer(p: ComposerProps): ReactNode {
           <input
             ref={p.fileRef}
             type="file"
-            accept=".xlsx,.docx,.pdf,.drawio"
+            accept=".xlsx,.docx,.drawio"
             data-role="attach"
             style={{ display: 'none' }}
             onChange={(e) => p.onFile(e.target.files?.[0] ?? undefined)}

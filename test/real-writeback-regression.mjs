@@ -1,6 +1,5 @@
 ﻿import assert from 'node:assert/strict';
 import { zipSync, unzipSync } from 'fflate';
-import { PDFDocument } from 'pdf-lib';
 import { OtterPatchRuntime } from '@otterpatch/runtime';
 
 const enc = (s) => new TextEncoder().encode(s);
@@ -45,15 +44,6 @@ function pptxSample() {
 
 function drawioSample() {
   return enc('<mxfile><diagram id="d0"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="2" value="Old" vertex="1" parent="1"><mxGeometry x="0" y="0" width="80" height="40" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>');
-}
-
-async function pdfSample() {
-  const doc = await PDFDocument.create();
-  const page = doc.addPage([300, 200]);
-  const field = doc.getForm().createTextField('name');
-  field.setText('old');
-  field.addToPage(page, { x: 20, y: 100, width: 160, height: 24 });
-  return doc.save();
 }
 
 function gridCs() {
@@ -122,14 +112,7 @@ async function checkDrawio() {
   assert.match(dec.decode(res.bytes), /value="New"/);
 }
 
-async function checkPdf() {
-  const res = await reviewedCommit('pdf', await pdfSample(), objectCs('pdf', 'name', 'Alice'));
-  assert.equal(res.ok, true);
-  const out = await PDFDocument.load(res.bytes);
-  assert.equal(out.getForm().getTextField('name').getText(), 'Alice');
-}
-
-for (const [name, fn] of Object.entries({ xlsx: checkXlsx, docx: checkDocx, docxTable: checkDocxTable, pptx: checkPptx, drawio: checkDrawio, pdf: checkPdf })) {
+for (const [name, fn] of Object.entries({ xlsx: checkXlsx, docx: checkDocx, docxTable: checkDocxTable, pptx: checkPptx, drawio: checkDrawio })) {
   await fn();
   console.log(`[real-writeback] ${name} ok`);
 }

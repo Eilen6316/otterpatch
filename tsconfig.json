@@ -7,7 +7,6 @@
     { "path": "packages/adapter-univer" },
     { "path": "packages/adapter-drawio" },
     { "path": "packages/adapter-word" },
-    { "path": "packages/adapter-pdf" },
     { "path": "packages/adapter-pptx" },
     { "path": "packages/writeback-surgical" },
     { "path": "packages/runtime" },

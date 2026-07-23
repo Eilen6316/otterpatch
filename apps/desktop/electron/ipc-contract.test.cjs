@@ -36,6 +36,10 @@ test('Electron proposal IPC accepts only the bounded local-service schema', () =
     /unsupported document format/,
   );
   assert.throws(
+    () => validateProposeInvocation({ requestId: 'r', payload: { format: 'pdf', intent: 'x' } }),
+    /unsupported document format/,
+  );
+  assert.throws(
     () => validateProposeInvocation({ requestId: 'r', payload: { format: 'excel', intent: 'x', baseRev: 0, sourceFileSha256 } }),
     /baseRev must match/,
   );

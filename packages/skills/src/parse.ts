@@ -56,7 +56,6 @@ function inferFormats(name: string, explicit: string[]): string[] {
   if (n.includes('xlsx') || n.includes('excel') || n.includes('sheet')) return ['excel', 'xlsx'];
   if (n.includes('docx') || n.includes('word') || n.includes('paper') || n.includes('论文')) return ['word', 'docx'];
   if (n.includes('pptx') || n.includes('ppt') || n.includes('slide')) return ['ppt', 'pptx'];
-  if (n.includes('pdf')) return ['pdf'];
   if (n.includes('drawio') || n.includes('diagram')) return ['drawio'];
   if (n.includes('frontend') || n.includes('design') || n.includes('ui')) return ['ui'];
   return [];

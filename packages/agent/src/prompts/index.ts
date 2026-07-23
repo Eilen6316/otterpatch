@@ -8,5 +8,4 @@ export * from './doc.js';
 export * from './excel.js';
 export * from './drawio.js';
 export * from './word.js';
-export * from './pdf.js';
 export * from './ppt.js';

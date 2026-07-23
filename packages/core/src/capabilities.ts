@@ -98,19 +98,6 @@ const manifests = [
   },
   {
     version: CAPABILITY_MANIFEST_VERSION,
-    format: 'pdf',
-    aliases: ['pdf'],
-    features: {
-      acroFormTextFill: 'experimental',
-      semanticVerification: 'incomplete',
-      byteLocality: 'not-guaranteed',
-    },
-    operations: [
-      writebackOnly({ op: 'setValue', maxScope: 'field', risk: 'safe', backend: ['pdf-form'], maturity: 'experimental' }),
-    ],
-  },
-  {
-    version: CAPABILITY_MANIFEST_VERSION,
     format: 'ppt',
     aliases: ['ppt', 'pptx'],
     features: {

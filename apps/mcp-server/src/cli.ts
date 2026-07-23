@@ -36,15 +36,12 @@ const rt = new OtterPatchRuntime();
 rt.on(emit);
 
 const isWord = format === 'word' || format === 'docx';
-const isPdf = format === 'pdf';
 const isPpt = format === 'ppt' || format === 'pptx';
 const mockProposal = isWord
   ? { plan: intent || 'demo edit', edits: [{ quote: 'hello world', replacement: 'hello brave world' }] }
-  : isPdf
-    ? { plan: intent || 'demo edit', edits: [{ field: 'name', value: 'Alice' }] }
-    : isPpt
-      ? { plan: intent || 'demo edit', edits: [{ slide: 0, find: 'Hello', replace: 'World' }] }
-      : { plan: intent || 'demo edit', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] };
+  : isPpt
+    ? { plan: intent || 'demo edit', edits: [{ slide: 0, find: 'Hello', replace: 'World' }] }
+    : { plan: intent || 'demo edit', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] };
 const client: ModelClient = mock
   ? new MockModelClient(() => mockProposal)
   : createModelClient(provider, { apiKey: process.env.OtterPatch_API_KEY, ...(model ? { model } : {}) });

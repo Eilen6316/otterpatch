@@ -28,7 +28,7 @@ export interface SkillPromptBundle {
 }
 
 const FORMAT_ALIASES: Readonly<Record<string, string>> = Object.freeze({
-  excel: 'excel', xlsx: 'excel', word: 'word', docx: 'word', ppt: 'ppt', pptx: 'ppt', pdf: 'pdf', drawio: 'drawio',
+  excel: 'excel', xlsx: 'excel', word: 'word', docx: 'word', ppt: 'ppt', pptx: 'ppt', drawio: 'drawio',
 });
 
 const SYNONYM_GROUPS = [

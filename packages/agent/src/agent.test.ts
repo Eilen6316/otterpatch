@@ -190,10 +190,12 @@ test('Agent word: 二维 table 提案 → insertTable ChangeSet', async () => {
 
 test('Agent: 未知格式抛错', async () => {
   const mock = new MockModelClient(() => ({ plan: '', edits: [] }));
-  await assert.rejects(
-    () => new Agent(mock).propose({ hostId: 'h1', format: 'csv', intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' }),
-    /no dialect/,
-  );
+  for (const format of ['csv', 'pdf']) {
+    await assert.rejects(
+      () => new Agent(mock).propose({ hostId: 'h1', format, intent: 'x', baseRev: 0 as DocRev, anchors: [], context: '' }),
+      /no dialect/,
+    );
+  }
 });
 
 test('Agent + SkillLibrary: 命中技能注入系统提示,不影响产出', async () => {

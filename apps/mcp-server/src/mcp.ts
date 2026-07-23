@@ -91,7 +91,7 @@ const docSchema = z.object({
 
 server.registerTool(
   'otterpatch_skills',
-  { description: 'List OtterPatch built-in (universal) document skills (xlsx/docx/pptx/pdf/drawio).', inputSchema: {} },
+  { description: 'List OtterPatch built-in document skills.', inputSchema: {} },
   async () => ok(BUILTIN_SKILLS.map((skill) => ({
     id: `${skill.namespace}/${skill.name}`,
     version: skill.version,

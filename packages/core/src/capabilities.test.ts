@@ -33,6 +33,7 @@ const flowChangeSet = (style: Record<string, unknown>, quote = '', path: number[
 
 test('capability manifest exposes only verified Excel writeback operations', () => {
   assert.equal(capabilityManifestFor('xlsx')?.version, CAPABILITY_MANIFEST_VERSION);
+  assert.equal(capabilityManifestFor('pdf'), undefined);
   assert.deepEqual(proposalOperationNamesFor('excel'), ['setValue', 'setFormula', 'setStyle', 'setNumberFormat', 'clear']);
   for (const manifest of capabilityManifests()) {
     for (const operation of manifest.operations) {
@@ -45,19 +46,8 @@ test('capability manifest advertises only previews backed by adapter shadows', (
   assert.ok(capabilityManifestFor('excel')?.operations.every((operation) => operation.preview && operation.verify));
   assert.ok(capabilityManifestFor('word')?.operations.every((operation) => !operation.preview && !operation.verify));
   assert.ok(capabilityManifestFor('drawio')?.operations.every((operation) => operation.preview && operation.verify));
-  assert.ok(capabilityManifestFor('pdf')?.operations.every((operation) => !operation.preview && !operation.verify));
   assert.ok(capabilityManifestFor('pptx')?.operations.every((operation) => !operation.preview && !operation.verify));
   assert.equal(capabilityManifestFor('drawio')?.features?.compressed, 'unsupported');
-});
-
-test('PDF capabilities disclose experimental form fill and verification limits', () => {
-  const pdf = capabilityManifestFor('pdf');
-  assert.equal(pdf?.operations[0]?.maturity, 'experimental');
-  assert.deepEqual(pdf?.features, {
-    acroFormTextFill: 'experimental',
-    semanticVerification: 'incomplete',
-    byteLocality: 'not-guaranteed',
-  });
 });
 
 test('PPTX capabilities disclose the narrow single-run preview boundary', () => {

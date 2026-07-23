@@ -226,7 +226,7 @@ test('runtime diff preserves explicit format removal and null proposal semantics
   assert.equal(cleared.items[0]?.proposalSummary, 'null');
 });
 
-test('runtime: verifyOpts 给 word/drawio/pptx 挂上分级检查、未注册格式不挂', async () => {
+test('runtime: verifyOpts 给 word/drawio/pptx 挂上分级检查', async () => {
   const rt = new OtterPatchRuntime();
   const captured: Array<RespondOptions | undefined> = [];
   const cap: ModelClient = {
@@ -242,11 +242,9 @@ test('runtime: verifyOpts 给 word/drawio/pptx 挂上分级检查、未注册格
   await rt.respondStream({ ...base, format: 'word', context: '全省财政收入逐年增长。' }, cap, () => {});
   await rt.respondStream({ ...base, format: 'drawio', context: '<mxGraphModel/>' }, cap, () => {});
   await rt.respondStream({ ...base, format: 'pptx', context: 'Hello', ppt: { slides: [{ paragraphs: [{ runs: ['Hello'] }] }] } }, cap, () => {});
-  await rt.respondStream({ ...base, format: 'pdf', context: 'AcroForm 字段…' }, cap, () => {});
   assert.ok(captured[0]?.verify, 'word 应挂上 verify(锚点可落地性自检)');
   assert.ok(captured[1]?.verify, 'drawio 也应挂上 verify(拓扑完整性自检)');
   assert.ok(captured[2]?.verify, 'pptx 应挂上 verify(页内唯一且单 run)');
-  assert.equal(captured[3]?.verify, undefined, '未注册校验器的格式(pdf)不挂');
 });
 
 test('runtime passes its actual approval mode into the trusted Agent capability block', async () => {
@@ -286,9 +284,10 @@ test('runtime: PPTX proposal verifier rejects missing, duplicate, and cross-run 
   assert.equal(cs.edits.length, 1);
 });
 
-test('runtime: 未注册格式 commit 抛错;已注册含 excel/word/pdf/ppt/drawio', async () => {
+test('runtime: 未注册格式 commit 抛错;已注册含 excel/word/ppt/drawio', async () => {
   const rt = new OtterPatchRuntime();
-  for (const f of ['excel', 'word', 'pdf', 'ppt', 'drawio']) assert.ok(rt.formats().includes(f), `missing backend ${f}`);
+  for (const f of ['excel', 'word', 'ppt', 'drawio']) assert.ok(rt.formats().includes(f), `missing backend ${f}`);
+  assert.equal(rt.formats().includes('pdf'), false);
   await assert.rejects(
     () => rt.commit({ format: 'csv', bytes: new Uint8Array(), changeSet: { id: 'c', hostId: 'h', baseRev: 0 as DocRev, anchors: {}, origin: { by: 'human' }, meta: { intent: 'x' }, edits: [] } }),
     /no writeback backend/,
