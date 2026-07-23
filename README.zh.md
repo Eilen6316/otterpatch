@@ -49,12 +49,18 @@ apps/mcp-server/              OtterPatch 作为 MCP server(stdio)+ headless CLI 
 `X-OtterPatch-Review-Token`。可通过 `OtterPatch_TOKEN`、`OtterPatch_REVIEW_TOKEN` 固定令牌，
 通过 `OtterPatch_ALLOWED_ORIGINS` 配置逗号分隔的精确本机 Origin 白名单。
 
+浏览器开发模式需要两个终端：先运行 `npm run serve`，再运行 `npm run dev`。打开驾驶舱的
+模型设置，将服务启动时显示的 POST 令牌和审阅令牌分别填入“本机服务令牌”和“审阅令牌”。
+令牌按 `http://localhost:5173` 的站点存储；服务重启并生成新令牌后需要更新。Electron 桌面版
+通过隔离的 IPC 自动管理令牌，不显示这两个输入框。
+
 ## 开发
 
 ```bash
 npm install
 npm run typecheck                  # 跨 packages/* 与两个 apps 执行 tsc -b
-npm run dev                        # 驾驶舱 UI → http://localhost:5173
+npm run serve                    # 终端 A:本机 HTTP 桥 + 启动令牌
+npm run dev                        # 终端 B:驾驶舱 UI → http://localhost:5173
 npm run app -w @otterpatch/desktop       # 构建并启动 Electron 桌面窗口
 npm test -w @otterpatch/core             # 适配器注册表
 npm test -w @otterpatch/agent            # Agent 循环 / 取数工具 / 校验器(word+drawio)

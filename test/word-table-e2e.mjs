@@ -105,7 +105,7 @@ try {
   // Propose again and accept: the revision shell disappears while the real table remains editable.
   // API keys intentionally live in memory only, so a reload requires re-entry.
   await page.locator('.composer .model').click();
-  await page.locator('.modelcfg input[type="password"]').fill('test-key');
+  await page.locator('[data-role="provider-api-key"]').fill('test-key');
   await page.locator('.composer .model').click();
   await page.locator('.composer textarea').fill('重新插入精简对照表');
   await page.locator('.composer textarea').press('Enter');

@@ -84,12 +84,19 @@ tokens instead of generating them. Browser access defaults to the exact Vite ori
 5173 plus Electron's `null` file origin; customize the comma-separated loopback allowlist with
 `OtterPatch_ALLOWED_ORIGINS`.
 
+Browser development uses two terminals: run `npm run serve`, then `npm run dev`. In the cockpit's
+model settings, enter the POST and review tokens printed by the service under *Local service token*
+and *Review token*. These credentials are stored for the `http://localhost:5173` origin and must be
+updated when a service restart generates new tokens. Electron manages both tokens through isolated
+IPC and does not expose these fields to its renderer.
+
 ## Develop
 
 ```bash
 npm install
 npm run typecheck                  # tsc -b across packages/* and both apps
-npm run dev                        # cockpit UI → http://localhost:5173
+npm run serve                    # terminal A: local HTTP bridge + startup tokens
+npm run dev                        # terminal B: cockpit UI → http://localhost:5173
 npm run app -w @otterpatch/desktop       # build + launch the Electron desktop window
 npm run app:pack -w @otterpatch/desktop  # package installers (electron-builder → release/)
 npm test -w @otterpatch/core             # adapter registry

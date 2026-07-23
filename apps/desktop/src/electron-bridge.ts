@@ -24,6 +24,8 @@ export interface DesktopLocalServiceBridge {
   commitWriteback(input: DesktopCommitInput): Promise<Record<string, unknown>>;
 }
 
+export type BrowserLocalCredentialKey = 'oa.serveToken' | 'oa.reviewToken';
+
 export function desktopLocalServiceBridge(): DesktopLocalServiceBridge | undefined {
   if (typeof window === 'undefined') return undefined;
   const candidate = (window as unknown as { otterpatch?: Partial<DesktopLocalServiceBridge> }).otterpatch;
@@ -36,14 +38,28 @@ export function desktopLocalServiceBridge(): DesktopLocalServiceBridge | undefin
   return candidate as DesktopLocalServiceBridge;
 }
 
-/** Browser-only development fallback. Electron returns through the IPC bridge before calling this. */
-export function browserLocalCredential(key: 'oa.serveToken' | 'oa.reviewToken'): string {
+/** Local credentials are a Vite-development fallback; packaged renderers use narrow IPC instead. */
+export function browserLocalCredentialsAvailable(): boolean {
   const viteEnv = (import.meta as ImportMeta & { readonly env?: { readonly PROD?: boolean } }).env;
-  if (viteEnv?.PROD) return '';
-  if (typeof localStorage === 'undefined') return '';
+  if (viteEnv?.PROD || desktopLocalServiceBridge()) return false;
+  return typeof localStorage !== 'undefined';
+}
+
+export function browserLocalCredential(key: BrowserLocalCredentialKey): string {
+  if (!browserLocalCredentialsAvailable()) return '';
   try {
     return localStorage.getItem(key) ?? '';
   } catch {
     return '';
+  }
+}
+
+export function setBrowserLocalCredential(key: BrowserLocalCredentialKey, value: string): void {
+  if (!browserLocalCredentialsAvailable()) return;
+  try {
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
+  } catch {
+    // Browser storage can be disabled; requests will surface the missing credential.
   }
 }

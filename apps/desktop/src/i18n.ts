@@ -23,6 +23,12 @@ const STATUS_DICT: Record<string, string> = {
   '无法连接 Provider': 'Could not reach the provider',
   'Provider 暂时熔断,请稍后重试': 'Provider circuit is open; retry later',
   'Provider 请求失败': 'Provider request failed',
+  '浏览器开发连接': 'Browser development connection',
+  '本机服务令牌': 'Local service token',
+  '审阅令牌': 'Review token',
+  '未填写本机服务令牌。请在模型设置中粘贴服务启动时显示的 POST token。': 'Enter the POST token shown when the local service started.',
+  '本机服务令牌无效。请更新模型设置中的 POST token。': 'The local service token is invalid. Update the POST token in model settings.',
+  'API Key 仅发送给本机服务和所选模型提供方;本机令牌仅发送给本机服务。': 'The API key is sent only to the local service and selected model provider; local tokens are sent only to the local service.',
 };
 
 export type Lang = 'zh' | 'en';

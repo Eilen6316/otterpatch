@@ -12,7 +12,12 @@ import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
 import type { RichDocHandle, WordSel } from './RichDoc.js';
 import { akey } from './review-shared.js';
-import { streamPropose } from './agent-client.js';
+import { LocalServiceHttpError, streamPropose } from './agent-client.js';
+import {
+  browserLocalCredential,
+  browserLocalCredentialsAvailable,
+  setBrowserLocalCredential,
+} from './electron-bridge.js';
 import {
   countAddedBoardObjects,
   materializeAddedBoardObjects,
@@ -500,6 +505,7 @@ function Section({ label, children, defaultOpen = true }: { label: string; child
 }
 
 export function App() {
+  const browserCredentialsEnabled = browserLocalCredentialsAvailable();
   const [lang, setLang] = useState<Lang>(() => asLang(lsGet('oa.lang', 'zh')));
   const t = makeT(lang);
   const [sent, setSent] = useState(false);
@@ -519,6 +525,8 @@ export function App() {
   const [model, setModel] = useState(() => lsGet('oa.model', 'claude-opus-4-8'));
   const [apiKey, setApiKey] = useState('');
   const [server, setServer] = useState(() => lsGet('oa.server', 'http://localhost:4319'));
+  const [serveToken, setServeToken] = useState(() => browserLocalCredential('oa.serveToken'));
+  const [reviewToken, setReviewToken] = useState(() => browserLocalCredential('oa.reviewToken'));
   useEffect(() => { try { localStorage.removeItem('oa.apiKey'); } catch { /* ignore */ } }, []);
   const [uniSel, setUniSel] = useState<UniSel | null>(null);
   const [excelDiff, setExcelDiff] = useState<ExcelDiffView>('final'); // Excel 改动视图:原文/对照(改动格着色)/改后
@@ -781,6 +789,11 @@ export function App() {
       setSendErr('Agent 服务地址必须是本机地址: http://localhost、http://127.0.0.1 或 http://[::1]');
       return;
     }
+    if (ep && apiKey && browserCredentialsEnabled && !serveToken) {
+      setCfgOpen(true);
+      setSendErr(t('未填写本机服务令牌。请在模型设置中粘贴服务启动时显示的 POST token。'));
+      return;
+    }
     if (ep && apiKey) {
       const requestController = new AbortController();
       streamAbortRef.current = requestController;
@@ -915,7 +928,10 @@ export function App() {
       } catch (e) {
         const m = e instanceof Error ? e.message : String(e);
         const cancelled = requestController.signal.aborted;
+        const localAuthFailed = e instanceof LocalServiceHttpError && e.status === 401;
+        const displayMessage = localAuthFailed ? t('本机服务令牌无效。请更新模型设置中的 POST token。') : m;
         const refused = /failed to fetch|refused|ECONNREFUSED|networkerror|load failed/i.test(m);
+        if (localAuthFailed) setCfgOpen(true);
         if (fmt === 'drawio' && streamObjsRef.current.length) {
           boardRef.current?.removeObjects(Object.values(streamByEditRef.current));
           streamObjsRef.current = [];
@@ -923,13 +939,15 @@ export function App() {
         }
         // 出错不回滚对话:此前把 user 气泡也删掉,用户看到"对话断开/消失"——改为把占位气泡定格成错误说明,
         // 对话完整保留(user/assistant 交替不破坏),指令放回输入框方便重试
-        setThread((th) => interruptLastStreamingAnswer(th, cancelled ? t('本轮请求已取消。') : `⚠ 本轮请求中断(${refused ? '连不上本机 Agent 服务' : m}),对话已保留,可直接重发。`));
+        setThread((th) => interruptLastStreamingAnswer(th, cancelled ? t('本轮请求已取消。') : `⚠ 本轮请求中断(${refused ? '连不上本机 Agent 服务' : displayMessage}),对话已保留,可直接重发。`));
         setIntent(theIntent); // 把指令放回输入框,方便重试
         setSendErr(cancelled
           ? null
           : refused
             ? `连不上本机 Agent 服务(${ep})。改了代码后请在项目根目录跑 npm run serve 重启它(会先重新构建再启动,确保用上最新能力)。`
-            : 'Agent · ' + m);
+            : localAuthFailed
+              ? displayMessage
+              : 'Agent · ' + m);
       } finally {
         if (streamAbortRef.current === requestController) streamAbortRef.current = null;
         setBusy(false);
@@ -1406,6 +1424,12 @@ export function App() {
               onApiKey={(v) => setApiKey(v)}
               server={server}
               onServer={(v) => { setServer(v); lsSet('oa.server', v); }}
+              localCredentials={browserCredentialsEnabled ? {
+                serveToken,
+                reviewToken,
+                onServeToken: (v) => { setServeToken(v); setBrowserLocalCredential('oa.serveToken', v); },
+                onReviewToken: (v) => { setReviewToken(v); setBrowserLocalCredential('oa.reviewToken', v); },
+              } : undefined}
               selChip={
                 isExcel ? (
                   uniSel ? (

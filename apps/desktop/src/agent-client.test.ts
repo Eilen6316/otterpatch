@@ -1,28 +1,85 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { streamPropose } from './agent-client.js';
-import type { DesktopLocalServiceBridge, DesktopProposeEnvelope } from './electron-bridge.js';
+import { LocalServiceHttpError, streamPropose } from './agent-client.js';
+import {
+  browserLocalCredential,
+  setBrowserLocalCredential,
+  type DesktopLocalServiceBridge,
+  type DesktopProposeEnvelope,
+} from './electron-bridge.js';
 
 test('streamPropose forwards AbortSignal and parses SSE frames', async () => {
   const originalFetch = globalThis.fetch;
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   const controller = new AbortController();
   let receivedSignal: AbortSignal | null | undefined;
+  let receivedHeaders = new Headers();
   const events: unknown[] = [];
   globalThis.fetch = (async (_input, init) => {
     receivedSignal = init?.signal;
+    receivedHeaders = new Headers(init?.headers);
     return new Response('data: {"type":"status"}\n\ndata: {"type":"done"}\n\n', {
       status: 200,
       headers: { 'Content-Type': 'text/event-stream' },
     });
   }) as typeof fetch;
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: { getItem: (key: string) => key === 'oa.serveToken' ? 'browser-local-token' : null },
+  });
   try {
     await streamPropose('http://localhost:4319', {}, () => undefined, (event) => { events.push(event); }, controller.signal);
   } finally {
     globalThis.fetch = originalFetch;
+    if (originalStorage) Object.defineProperty(globalThis, 'localStorage', originalStorage);
+    else delete (globalThis as { localStorage?: unknown }).localStorage;
   }
 
   assert.equal(receivedSignal, controller.signal);
+  assert.equal(receivedHeaders.get('X-OtterPatch-Token'), 'browser-local-token');
   assert.deepEqual(events, [{ type: 'status' }, { type: 'done' }]);
+});
+
+test('browser development credentials use the same storage keys as HTTP clients', () => {
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  const values = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    },
+  });
+  try {
+    setBrowserLocalCredential('oa.serveToken', 'local-token');
+    setBrowserLocalCredential('oa.reviewToken', 'review-token');
+    assert.equal(browserLocalCredential('oa.serveToken'), 'local-token');
+    assert.equal(browserLocalCredential('oa.reviewToken'), 'review-token');
+    setBrowserLocalCredential('oa.serveToken', '');
+    assert.equal(browserLocalCredential('oa.serveToken'), '');
+  } finally {
+    if (originalStorage) Object.defineProperty(globalThis, 'localStorage', originalStorage);
+    else delete (globalThis as { localStorage?: unknown }).localStorage;
+  }
+});
+
+test('streamPropose preserves the local HTTP status and service error', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: 'missing or invalid local token' }), {
+    status: 401,
+    headers: { 'Content-Type': 'application/json' },
+  })) as typeof fetch;
+  try {
+    await assert.rejects(
+      streamPropose('http://localhost:4319', {}, () => undefined, () => undefined),
+      (error) => error instanceof LocalServiceHttpError
+        && error.status === 401
+        && error.message.includes('missing or invalid local token'),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('streamPropose exposes cancellation to callers', async () => {

@@ -5,6 +5,13 @@
  */
 import { browserLocalCredential, desktopLocalServiceBridge, type DesktopProposeEnvelope } from './electron-bridge.js';
 
+export class LocalServiceHttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = 'LocalServiceHttpError';
+  }
+}
+
 /** POST `${endpoint}/propose-stream` and dispatch each parsed SSE `data:` JSON event.
  *  `onOpen` fires once after the HTTP response is OK, before the first event (optimistic UI).
  *  Throws on HTTP failure; the caller handles rollback. AbortSignal cancels fetch and stream reads. */
@@ -80,7 +87,12 @@ export async function streamPropose<E>(
     body: JSON.stringify(payload),
     ...(signal ? { signal } : {}),
   });
-  if (!resp.ok || !resp.body) throw new Error('propose failed (' + resp.status + ')');
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => undefined) as { error?: unknown } | undefined;
+    const detail = typeof data?.error === 'string' ? ': ' + data.error : '';
+    throw new LocalServiceHttpError(resp.status, 'propose failed (' + resp.status + ')' + detail);
+  }
+  if (!resp.body) throw new LocalServiceHttpError(resp.status, 'propose failed: response stream is missing');
   onOpen();
   const reader = resp.body.getReader();
   const dec = new TextDecoder();

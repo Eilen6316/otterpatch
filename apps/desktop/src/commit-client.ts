@@ -38,8 +38,9 @@ export async function commitWriteback(input: {
 
   const token = browserLocalCredential('oa.serveToken');
   const reviewToken = browserLocalCredential('oa.reviewToken');
-  const headers = { 'Content-Type': 'application/json', ...(token ? { 'X-OtterPatch-Token': token } : {}) };
-  const reviewHeaders = { ...headers, ...(reviewToken ? { 'X-OtterPatch-Review-Token': reviewToken } : {}) };
+  if (!token || !reviewToken) throw new Error('local service credentials are not configured');
+  const headers = { 'Content-Type': 'application/json', 'X-OtterPatch-Token': token };
+  const reviewHeaders = { ...headers, 'X-OtterPatch-Review-Token': reviewToken };
   const reviewResponse = await fetch(input.endpoint + '/review', {
     method: 'POST',
     headers: reviewHeaders,

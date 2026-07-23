@@ -55,7 +55,7 @@ export async function openApp({ storage } = {}) {
   const apiKey = storage?.['oa.apiKey'];
   if (apiKey) {
     await page.locator('.composer .model').click();
-    await page.locator('.modelcfg input[type="password"]').fill(apiKey);
+    await page.locator('[data-role="provider-api-key"]').fill(apiKey);
     await page.locator('.composer .model').click();
   }
   return {

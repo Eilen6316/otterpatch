@@ -3,6 +3,29 @@ import { test } from 'node:test';
 import { commitWriteback } from './commit-client.js';
 import type { DesktopCommitInput, DesktopLocalServiceBridge } from './electron-bridge.js';
 
+test('browser commit fails before HTTP when local review credentials are missing', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  globalThis.fetch = (async () => { throw new Error('fetch must not run'); }) as typeof fetch;
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: { getItem: () => null },
+  });
+  try {
+    await assert.rejects(
+      commitWriteback({
+        endpoint: 'http://127.0.0.1:4319', format: 'excel', fileBase64: 'aW4=',
+        changeSet: { baseRev: 3 }, proposal: { proposalId: 'unbound' }, acceptedEditIds: ['e1'],
+      }),
+      /local service credentials are not configured/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalStorage) Object.defineProperty(globalThis, 'localStorage', originalStorage);
+    else delete (globalThis as { localStorage?: unknown }).localStorage;
+  }
+});
+
 test('commit client obtains a bound review receipt before commit', async () => {
   const originalFetch = globalThis.fetch;
   const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');

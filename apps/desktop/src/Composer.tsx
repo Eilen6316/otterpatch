@@ -10,6 +10,13 @@ import { IconPlus, IconChevron, IconSend, IconHelp, IconX } from './icons.js';
 
 export interface ComposerProvider { id: string; label: string; model: string }
 
+export interface BrowserLocalCredentials {
+  serveToken: string;
+  reviewToken: string;
+  onServeToken(v: string): void;
+  onReviewToken(v: string): void;
+}
+
 export interface ComposerProps {
   cfgOpen: boolean;
   onToggleCfg(): void;
@@ -24,6 +31,7 @@ export interface ComposerProps {
   onApiKey(v: string): void;
   server: string;
   onServer(v: string): void;
+  localCredentials?: BrowserLocalCredentials;
   selChip: ReactNode;
   intent: string;
   onIntent(v: string): void;
@@ -53,11 +61,38 @@ export function Composer(p: ComposerProps): ReactNode {
           <label>{t('模型')}</label>
           <input value={p.model} onChange={(e) => p.onModel(e.target.value)} placeholder={p.defaultModel} />
           <label>API Key(BYOK)</label>
-          <input type="password" value={p.apiKey} onChange={(e) => p.onApiKey(e.target.value)} placeholder="sk-..." />
+          <input data-role="provider-api-key" type="password" value={p.apiKey} onChange={(e) => p.onApiKey(e.target.value)} placeholder="sk-..." autoComplete="off" />
           <label>{t('本机服务地址(默认即可,一般无需修改)')}</label>
           <input className="dim" value={p.server} onChange={(e) => p.onServer(e.target.value)} placeholder="http://localhost:4319" />
+          {p.localCredentials && (
+            <div className="local-auth">
+              <h5>{t('浏览器开发连接')}</h5>
+              <label htmlFor="local-service-token">{t('本机服务令牌')}</label>
+              <input
+                id="local-service-token"
+                data-role="local-service-token"
+                type="password"
+                value={p.localCredentials.serveToken}
+                onChange={(e) => p.localCredentials?.onServeToken(e.target.value.trim())}
+                placeholder="X-OtterPatch-Token"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <label htmlFor="local-review-token">{t('审阅令牌')}</label>
+              <input
+                id="local-review-token"
+                data-role="local-review-token"
+                type="password"
+                value={p.localCredentials.reviewToken}
+                onChange={(e) => p.localCredentials?.onReviewToken(e.target.value.trim())}
+                placeholder="X-OtterPatch-Review-Token"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+          )}
           <div className="note">
-            <IconHelp size={13} /> {t('密钥只存在你的浏览器本地,绝不上传服务器;桌面版会自动启动本机服务。')}
+            <IconHelp size={13} /> {t('API Key 仅发送给本机服务和所选模型提供方;本机令牌仅发送给本机服务。')}
           </div>
         </div>
       )}
