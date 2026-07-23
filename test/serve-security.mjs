@@ -127,7 +127,10 @@ try {
   const health = await fetch(`http://127.0.0.1:${port + 1}/health`);
   assert.equal(health.status, 200);
   const healthBody = await health.json();
-  assert.equal(healthBody.capabilities?.version, 'capabilities-v1');
+  assert.equal(healthBody.capabilities?.version, 'capabilities-v2');
+  assert.deepEqual([...healthBody.formats].sort(), ['docx', 'drawio', 'excel', 'word', 'xlsx']);
+  assert.equal(healthBody.capabilities?.formats?.some((entry) => entry.format === 'ppt'), false);
+  assert.equal(healthBody.skills?.includes('pptx'), false);
   const excelCapabilities = healthBody.capabilities?.formats?.find((entry) => entry.format === 'excel');
   assert.deepEqual(excelCapabilities?.operations?.map((entry) => entry.proposalName || entry.op), ['setValue', 'setFormula', 'setStyle', 'setNumberFormat', 'clear']);
 
@@ -140,6 +143,14 @@ try {
     body: JSON.stringify({ format: 'excel', intent: 'x' }),
   });
   assert.equal(unauth.status, 401);
+
+  const frozenPptx = await fetch(`http://127.0.0.1:${port + 1}/propose`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-OtterPatch-Token': token },
+    body: JSON.stringify({ format: 'pptx', intent: 'x' }),
+  });
+  assert.equal(frozenPptx.status, 400);
+  assert.match(await frozenPptx.text(), /unsupported document format/);
 
   const sourceFileSha256 = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
   const mismatchedRevision = await fetch(`http://127.0.0.1:${port + 1}/propose`, {

@@ -19,7 +19,6 @@ const rt = new OtterPatchRuntime();
 type SheetInput = NonNullable<ProposeRequest['sheet']>;
 type BoardInput = NonNullable<ProposeRequest['board']>;
 type DocInput = NonNullable<ProposeRequest['doc']>;
-type PptInput = NonNullable<ProposeRequest['ppt']>;
 const PORT = Number(process.env.OtterPatch_PORT ?? 4319);
 const HOST = '127.0.0.1';
 const DEFAULT_MAX_BODY_BYTES = RESOURCE_LIMITS.httpBodyBytes;
@@ -69,6 +68,13 @@ function readDocRev(value: unknown, fallback: number): DocRev {
   return candidate as DocRev;
 }
 
+function readDefaultFormat(value: unknown): string {
+  if (typeof value !== 'string') throw new HttpError(400, 'format must be a string');
+  const format = value.trim().toLowerCase();
+  if (!rt.formats().includes(format)) throw new HttpError(400, 'unsupported document format');
+  return format;
+}
+
 function proposalBinding(body: Record<string, unknown>): { baseRev: DocRev; sourceFileSha256?: string } {
   const sourceFileSha256 = body.sourceFileSha256;
   if (sourceFileSha256 !== undefined && !isSha256(sourceFileSha256)) {
@@ -82,9 +88,9 @@ function proposalBinding(body: Record<string, unknown>): { baseRev: DocRev; sour
   return { baseRev, ...(sourceFileSha256 ? { sourceFileSha256 } : {}) };
 }
 
-function proposalDocumentId(body: Record<string, unknown>, binding: ReturnType<typeof proposalBinding>, fallback: string): string {
+function proposalDocumentId(format: string, body: Record<string, unknown>, binding: ReturnType<typeof proposalBinding>, fallback: string): string {
   return binding.sourceFileSha256
-    ? `${String(body.format).toLowerCase()}:sha256:${binding.sourceFileSha256}`
+    ? `${format}:sha256:${binding.sourceFileSha256}`
     : String(body.documentId ?? fallback);
 }
 
@@ -171,11 +177,10 @@ const emsg = (e: unknown): string => redactSecrets(
 
 function diffInput(body: Record<string, unknown>): DiffInput {
   return {
-    format: String(body.format),
+    format: readDefaultFormat(body.format),
     ...(body.sheet ? { sheet: body.sheet as SheetInput } : {}),
     ...(body.board ? { board: body.board as BoardInput } : {}),
     ...(body.doc ? { doc: body.doc as DocInput } : {}),
-    ...(body.ppt ? { ppt: body.ppt as PptInput } : {}),
   };
 }
 
@@ -227,8 +232,9 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       }
       if (req.method === 'POST' && url === '/propose') {
         const a = await readBody(req);
+        const format = readDefaultFormat(a.format);
         const binding = proposalBinding(a);
-        const documentId = proposalDocumentId(a, binding, 'serve');
+        const documentId = proposalDocumentId(format, a, binding, 'serve');
         const model = createModelClient((a.provider as Provider) || 'claude', {
           apiKey: a.apiKey as string | undefined,
           ...(a.model ? { model: a.model as string } : {}),
@@ -239,7 +245,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
           r = await rt.respond(
             {
               hostId: 'serve',
-              format: String(a.format),
+              format,
               intent: String(a.intent ?? ''),
               baseRev: binding.baseRev,
               anchors: [],
@@ -248,7 +254,6 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}),
               ...(a.board ? { board: a.board as BoardInput } : {}),
               ...(a.doc ? { doc: a.doc as { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> } } : {}),
-              ...(a.ppt ? { ppt: a.ppt as PptInput } : {}),
               ...(Array.isArray(a.history) ? { history: a.history as Array<{ role: 'user' | 'assistant'; content: string }> } : {}),
             },
             model,
@@ -262,14 +267,15 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         else send(req, res, 200, {
           changeSet: r.changeSet,
           diff: await rt.diff(r.changeSet, diffInput(a)),
-          proposal: rt.createProposal(r.changeSet, String(a.format), documentId, binding.sourceFileSha256),
+          proposal: rt.createProposal(r.changeSet, format, documentId, binding.sourceFileSha256),
         });
         return;
       }
       if (req.method === 'POST' && url === '/propose-stream') {
         const a = await readBody(req);
+        const format = readDefaultFormat(a.format);
         const binding = proposalBinding(a);
-        const documentId = proposalDocumentId(a, binding, 'serve');
+        const documentId = proposalDocumentId(format, a, binding, 'serve');
         const model = createModelClient((a.provider as Provider) || 'claude', {
           apiKey: a.apiKey as string | undefined,
           ...(a.model ? { model: a.model as string } : {}),
@@ -285,7 +291,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
           const result = await rt.respondStream(
             {
               hostId: 'serve',
-              format: String(a.format),
+              format,
               intent: String(a.intent ?? ''),
               baseRev: binding.baseRev,
               anchors: [],
@@ -294,7 +300,6 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               ...(a.sheet ? { sheet: a.sheet as SheetInput } : {}),
               ...(a.board ? { board: a.board as BoardInput } : {}),
               ...(a.doc ? { doc: a.doc as { blocks: Array<{ style: string; text: string; font?: string; size?: number; align?: string; lineSpacing?: number }> } } : {}),
-              ...(a.ppt ? { ppt: a.ppt as PptInput } : {}),
               ...(Array.isArray(a.history) ? { history: a.history as Array<{ role: 'user' | 'assistant'; content: string }> } : {}),
             },
             model,
@@ -314,7 +319,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
               kind: 'changeset',
               changeSet: result.changeSet,
               diff: await rt.diff(result.changeSet, diffInput(a)),
-              proposal: rt.createProposal(result.changeSet, String(a.format), documentId, binding.sourceFileSha256),
+              proposal: rt.createProposal(result.changeSet, format, documentId, binding.sourceFileSha256),
             });
           } else if (result.kind === 'clarify') {
             sse({ type: 'done', kind: 'clarify', questions: result.questions });
@@ -357,6 +362,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       if (req.method === 'POST' && url === '/commit') {
         const a = await readBody(req);
         if (!a.proposal || !a.reviewReceipt) throw new HttpError(403, 'signed proposal and review receipt required');
+        const format = readDefaultFormat(a.format);
         const bytes = decodeDocumentBase64(a.fileBase64);
         const sourceRevision = docRevFromSha256(sha256Bytes(bytes));
         if (a.currentRev !== undefined && readDocRev(a.currentRev, sourceRevision) !== sourceRevision) {
@@ -364,7 +370,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         }
         assertChangeSet(a.changeSet);
         const r = await rt.commit({
-          format: String(a.format),
+          format,
           bytes,
           changeSet: a.changeSet as ChangeSet,
           currentRev: sourceRevision,

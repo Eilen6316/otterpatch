@@ -5,13 +5,15 @@ import { createBuiltinAdapterRegistry } from './adapters.js';
 
 test('built-in adapters conform to their capability manifests and writeback declarations', () => {
   const registry = createBuiltinAdapterRegistry();
-  const expectedFormats = ['drawio', 'excel', 'ppt', 'word'];
+  const expectedFormats = ['drawio', 'excel', 'word'];
   assert.deepEqual(registry.manifests().map((manifest) => manifest.format).sort(), expectedFormats);
 
   for (const manifest of registry.manifests()) {
     const registration = registry.resolve(manifest.format);
     assert.ok(registration, `missing registration for ${manifest.format}`);
     assert.equal(manifest.version, CAPABILITY_MANIFEST_VERSION);
+    assert.equal(manifest.availability, 'default');
+    assert.equal(manifest.lifecycle, 'active');
     assert.deepEqual(
       [...new Set([registration.format, ...(registration.aliases ?? [])])].sort(),
       [...new Set(manifest.aliases)].sort(),

@@ -22,7 +22,7 @@ function arg(name: string): string | undefined {
 const has = (name: string): boolean => process.argv.includes('--' + name);
 const emit = (o: unknown): void => void process.stdout.write(JSON.stringify(o) + '\n');
 
-const format = arg('format') ?? 'excel';
+const format = (arg('format') ?? 'excel').toLowerCase();
 const intent = arg('intent') ?? '';
 const context = arg('context') ?? '';
 const inPath = arg('in');
@@ -36,17 +36,17 @@ const rt = new OtterPatchRuntime();
 rt.on(emit);
 
 const isWord = format === 'word' || format === 'docx';
-const isPpt = format === 'ppt' || format === 'pptx';
 const mockProposal = isWord
   ? { plan: intent || 'demo edit', edits: [{ quote: 'hello world', replacement: 'hello brave world' }] }
-  : isPpt
-    ? { plan: intent || 'demo edit', edits: [{ slide: 0, find: 'Hello', replace: 'World' }] }
-    : { plan: intent || 'demo edit', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] };
+  : { plan: intent || 'demo edit', edits: [{ cell: 'Sheet1!B1', op: 'setValue', value: 99 }] };
 const client: ModelClient = mock
   ? new MockModelClient(() => mockProposal)
   : createModelClient(provider, { apiKey: process.env.OtterPatch_API_KEY, ...(model ? { model } : {}) });
 
 try {
+  if (!rt.formats().includes(format)) {
+    throw new Error(`unsupported --format "${format}"; available formats: ${rt.formats().join(', ')}`);
+  }
   const inputBytes = inPath ? readDocumentFile(inPath) : undefined;
   const sourceFileSha256 = inputBytes ? sha256Bytes(inputBytes) : undefined;
   const baseRev = sourceFileSha256 ? docRevFromSha256(sourceFileSha256) : 0 as DocRev;
@@ -62,7 +62,6 @@ try {
     ...(req.sheet ? { sheet: req.sheet } : {}),
     ...(req.board ? { board: req.board } : {}),
     ...(req.doc ? { doc: req.doc } : {}),
-    ...(req.ppt ? { ppt: req.ppt } : {}),
   });
   if (inPath) {
     if (!confirmed) throw new Error('refusing to commit without explicit --yes after reviewing the emitted diff');

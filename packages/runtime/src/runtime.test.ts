@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { zipSync } from 'fflate';
 import { AdapterRegistry, STRICT_POLICY, capabilityManifestFor, type AnchorId, type ChangeSet, type DocRev, type FidelityReport, type HostId, type WritebackBackend, type WritebackId } from '@otterpatch/core';
 import { UniverAdapter } from '@otterpatch/adapter-univer';
+import { pptxAdapterRegistration } from '@otterpatch/adapter-pptx';
 import { MockModelClient, type ModelClient, type ProposeRequest, type RespondOptions, type AgentResponse } from '@otterpatch/agent';
 import { comparePartsIntegrity, readOoxmlParts } from '@otterpatch/writeback-surgical';
 import { OtterPatchRuntime } from './runtime.js';
@@ -226,7 +227,7 @@ test('runtime diff preserves explicit format removal and null proposal semantics
   assert.equal(cleared.items[0]?.proposalSummary, 'null');
 });
 
-test('runtime: verifyOpts 给 word/drawio/pptx 挂上分级检查', async () => {
+test('runtime: default verifyOpts 给 word/drawio 挂上分级检查', async () => {
   const rt = new OtterPatchRuntime();
   const captured: Array<RespondOptions | undefined> = [];
   const cap: ModelClient = {
@@ -241,10 +242,8 @@ test('runtime: verifyOpts 给 word/drawio/pptx 挂上分级检查', async () => 
   const base = { hostId: 'h1', intent: 'x', baseRev: 0 as DocRev, anchors: [] };
   await rt.respondStream({ ...base, format: 'word', context: '全省财政收入逐年增长。' }, cap, () => {});
   await rt.respondStream({ ...base, format: 'drawio', context: '<mxGraphModel/>' }, cap, () => {});
-  await rt.respondStream({ ...base, format: 'pptx', context: 'Hello', ppt: { slides: [{ paragraphs: [{ runs: ['Hello'] }] }] } }, cap, () => {});
   assert.ok(captured[0]?.verify, 'word 应挂上 verify(锚点可落地性自检)');
   assert.ok(captured[1]?.verify, 'drawio 也应挂上 verify(拓扑完整性自检)');
-  assert.ok(captured[2]?.verify, 'pptx 应挂上 verify(页内唯一且单 run)');
 });
 
 test('runtime passes its actual approval mode into the trusted Agent capability block', async () => {
@@ -265,10 +264,17 @@ test('runtime passes its actual approval mode into the trusted Agent capability 
   assert.match(system, /autoApprove=safe;requiresApproval=caution,destructive/);
 });
 
-test('runtime: PPTX proposal verifier rejects missing, duplicate, and cross-run targets before review', async () => {
-  const rt = new OtterPatchRuntime();
+test('runtime: PPTX is unavailable by default and retains its verifier after explicit registration', async () => {
+  const stock = new OtterPatchRuntime();
   const model = new MockModelClient(() => ({ plan: 'retitle', edits: [{ slide: 0, find: 'Hello', replace: 'World' }] }));
   const base: ProposeRequest = { hostId: 'h', format: 'pptx', intent: 'retitle', baseRev: 0 as DocRev, anchors: [], context: 'Hello' };
+
+  await assert.rejects(() => stock.propose(base, model), /no adapter registered/);
+  assert.equal(stock.formats().includes('pptx'), false);
+
+  const rt = new OtterPatchRuntime();
+  rt.registerAdapter(pptxAdapterRegistration);
+  assert.ok(rt.formats().includes('pptx'));
 
   await assert.rejects(() => rt.propose(base, model), /PPTX_SNAPSHOT_REQUIRED/);
   await assert.rejects(
@@ -284,9 +290,10 @@ test('runtime: PPTX proposal verifier rejects missing, duplicate, and cross-run 
   assert.equal(cs.edits.length, 1);
 });
 
-test('runtime: 未注册格式 commit 抛错;已注册含 excel/word/ppt/drawio', async () => {
+test('runtime: default formats contain Excel/Word/drawio and reject frozen or unknown formats', async () => {
   const rt = new OtterPatchRuntime();
-  for (const f of ['excel', 'word', 'ppt', 'drawio']) assert.ok(rt.formats().includes(f), `missing backend ${f}`);
+  for (const f of ['excel', 'word', 'drawio']) assert.ok(rt.formats().includes(f), `missing backend ${f}`);
+  assert.equal(rt.formats().includes('ppt'), false);
   assert.equal(rt.formats().includes('pdf'), false);
   await assert.rejects(
     () => rt.commit({ format: 'csv', bytes: new Uint8Array(), changeSet: { id: 'c', hostId: 'h', baseRev: 0 as DocRev, anchors: {}, origin: { by: 'human' }, meta: { intent: 'x' }, edits: [] } }),
@@ -712,7 +719,7 @@ test('runtime: built-in capability gate rejects proposals that cannot be written
     edits: [{ ...cs.edits[0]!, op: { family: 'structure', kind: 'insertRows', count: 1, before: true } }],
   };
   assert.throws(() => rt.createProposal(unsupported, 'excel'), /does not allow propose for op insertRows/);
-  assert.equal(rt.capabilities().version, 'capabilities-v1');
+  assert.equal(rt.capabilities().version, 'capabilities-v2');
 });
 
 test('runtime: caps concurrent model requests per runtime session', async () => {

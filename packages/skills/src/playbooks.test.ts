@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultLibrary } from './catalog.js';
+import { defaultLibrary, PPTX_OPT_IN_SKILLS } from './catalog.js';
+import { SkillLibrary } from './library.js';
 import { PLAYBOOK_SKILLS } from './playbooks.js';
 import { PLAYBOOK_MARKDOWN } from './playbooks.generated.js';
 
@@ -9,11 +10,17 @@ test('playbook:全部打法手册都带 L1 正文', () => {
   for (const c of PLAYBOOK_SKILLS) assert.ok((c.instructions ?? '').length > 200, c.name + ' 手册太薄');
 });
 
-test('意图匹配:写作/建模/PPT 类请求命中对应新手册', () => {
+test('默认意图匹配只加载产品主线与兼容格式手册', () => {
   const lib = defaultLibrary();
   assert.equal(lib.match('帮我起草一份项目报告', 'word')[0]?.name, 'docx-coauthoring');
   assert.equal(lib.match('这个模型的公式帮我规范化,别硬编码', 'excel')[0]?.name, 'xlsx-authoring');
+  assert.deepEqual(lib.match('这页幻灯片配色帮我美化一下', 'ppt'), []);
+});
+
+test('PPTX 手册仅在显式加载冻结技能集合后可用', () => {
+  const lib = new SkillLibrary([...PPTX_OPT_IN_SKILLS]);
   assert.equal(lib.match('这页幻灯片配色帮我美化一下', 'ppt')[0]?.name, 'pptx-design');
+  assert.match(lib.instructionsFor('pptx-design') ?? '', /仅支持页内唯一、且完整位于单个文本 run/);
 });
 
 test('意图匹配:公文类请求命中 docx-gongwen 且排最前', () => {
@@ -69,5 +76,5 @@ test('playbook instructions stay inside current writeback capabilities', () => {
   assert.doesNotMatch(lib.instructionsFor('docx-conventions') ?? '', /all=true/);
   assert.doesNotMatch(lib.instructionsFor('xlsx-authoring') ?? '', /freeze 表头、开 filter;录入区加 dataValidation/);
   assert.match(lib.instructionsFor('chart-selection') ?? '', /不能创建或修改图表/);
-  assert.match(lib.instructionsFor('pptx-design') ?? '', /仅支持页内唯一、且完整位于单个文本 run/);
+  assert.equal(lib.instructionsFor('pptx-design'), undefined);
 });

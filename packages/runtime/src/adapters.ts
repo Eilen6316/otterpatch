@@ -17,13 +17,11 @@ import {
 import { univerAdapterRegistration } from '@otterpatch/adapter-univer';
 import { drawioAdapterRegistration } from '@otterpatch/adapter-drawio';
 import { wordAdapterRegistration } from '@otterpatch/adapter-word';
-import { pptxAdapterRegistration } from '@otterpatch/adapter-pptx';
 
 const BUILTINS: readonly AdapterRegistration[] = [
   univerAdapterRegistration,
   wordAdapterRegistration,
   drawioAdapterRegistration,
-  pptxAdapterRegistration,
 ];
 
 export function createBuiltinAdapterRegistry(): AdapterRegistry {

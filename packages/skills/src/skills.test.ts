@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MAX_SKILL_MD_BYTES, parseSkillMd, skillId } from './parse.js';
 import { SkillLibrary } from './library.js';
-import { defaultLibrary, BUILTIN_SKILLS } from './catalog.js';
+import { defaultLibrary, BUILTIN_SKILLS, PPTX_OPT_IN_SKILLS } from './catalog.js';
 import { PLAYBOOK_SKILLS } from './playbooks.js';
 
 const SKILL_MD = `---
@@ -76,8 +76,9 @@ test('SkillLibrary.render: 生成可注入系统提示的片段', () => {
 test('内置能力卡不再宣称当前后端无法写回的理想化能力', () => {
   const descriptions = BUILTIN_SKILLS.map((card) => card.description).join('\n');
   assert.equal(BUILTIN_SKILLS.some((card) => card.name === 'pdf'), false);
+  assert.equal(BUILTIN_SKILLS.some((card) => card.name === 'pptx'), false);
   assert.doesNotMatch(descriptions, /openpyxl|python-pptx|数据透视|母版/);
-  assert.match(BUILTIN_SKILLS.find((card) => card.name === 'pptx')?.description ?? '', /单个文本 run/);
+  assert.match(PPTX_OPT_IN_SKILLS.find((card) => card.name === 'pptx')?.description ?? '', /冻结能力/);
 });
 
 test('外部 skill 描述不得进入 system prompt fragment', () => {
@@ -154,8 +155,10 @@ test('add 去重 + toMcpTools', () => {
   const lib = new SkillLibrary();
   lib.add(BUILTIN_SKILLS[0]!).add(BUILTIN_SKILLS[0]!);
   assert.equal(lib.all().length, 1);
-  const tools = defaultLibrary().toMcpTools();
-  assert.equal(tools.length, BUILTIN_SKILLS.length + PLAYBOOK_SKILLS.length); // generic cards + all playbooks
+  const defaults = defaultLibrary();
+  const tools = defaults.toMcpTools();
+  assert.equal(tools.length, defaults.all().length);
+  assert.equal(tools.some((tool) => /pptx/i.test(tool.name)), false);
   assert.ok(tools.every((t) => t.name.startsWith('skill__')));
   assert.ok(tools.every((t) => /sha256:/.test(t.description)));
 });

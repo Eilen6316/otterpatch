@@ -1,13 +1,15 @@
 import type { ChangeSet, Edit, EditOpKind } from './changeset.js';
 import type { RiskLevel } from './risk.js';
 
-export const CAPABILITY_MANIFEST_VERSION = 'capabilities-v1';
+export const CAPABILITY_MANIFEST_VERSION = 'capabilities-v2';
 
 export type CapabilityScope = 'cell' | 'range' | 'sheet' | 'document' | 'object' | 'field' | 'slide';
 export type CapabilityMaturity = 'experimental' | 'preview' | 'verified';
 export type CapabilityStage = 'propose' | 'preview' | 'verify' | 'writeback';
 export type CapabilityFeatureSupport = 'supported' | 'unsupported';
 export type CapabilityFeatureStatus = CapabilityFeatureSupport | 'experimental' | 'incomplete' | 'not-guaranteed';
+export type CapabilityAvailability = 'default' | 'opt-in';
+export type CapabilityLifecycle = 'active' | 'frozen';
 
 export interface OperationCapability {
   op: EditOpKind;
@@ -28,6 +30,8 @@ export interface FormatCapabilityManifest {
   version: typeof CAPABILITY_MANIFEST_VERSION;
   format: string;
   aliases: readonly string[];
+  availability: CapabilityAvailability;
+  lifecycle: CapabilityLifecycle;
   operations: readonly OperationCapability[];
   features?: Readonly<Record<string, CapabilityFeatureStatus>>;
 }
@@ -63,6 +67,8 @@ const manifests = [
     version: CAPABILITY_MANIFEST_VERSION,
     format: 'excel',
     aliases: ['excel', 'xlsx'],
+    availability: 'default',
+    lifecycle: 'active',
     operations: [
       verified({ op: 'setValue', maxScope: 'range', risk: 'safe', backend: ['surgical-ooxml'] }),
       verified({ op: 'setFormula', maxScope: 'range', risk: 'safe', backend: ['surgical-ooxml'], maturity: 'preview' }),
@@ -75,6 +81,8 @@ const manifests = [
     version: CAPABILITY_MANIFEST_VERSION,
     format: 'word',
     aliases: ['word', 'docx'],
+    availability: 'default',
+    lifecycle: 'active',
     operations: [
       writebackOnly({ op: 'replaceText', maxScope: 'range', risk: 'safe', backend: ['word-redline'] }),
       writebackOnly({ op: 'setStyle', maxScope: 'document', risk: 'safe', backend: ['word-redline'] }),
@@ -87,6 +95,8 @@ const manifests = [
     version: CAPABILITY_MANIFEST_VERSION,
     format: 'drawio',
     aliases: ['drawio'],
+    availability: 'default',
+    lifecycle: 'active',
     features: { compressed: 'unsupported' },
     operations: [
       topologyChecked({ op: 'setValue', maxScope: 'object', risk: 'safe', backend: ['drawio-surgical'] }),
@@ -100,6 +110,8 @@ const manifests = [
     version: CAPABILITY_MANIFEST_VERSION,
     format: 'ppt',
     aliases: ['ppt', 'pptx'],
+    availability: 'opt-in',
+    lifecycle: 'frozen',
     features: {
       singleRunTextReplacement: 'supported',
       crossRunTextReplacement: 'unsupported',

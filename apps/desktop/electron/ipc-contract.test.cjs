@@ -39,6 +39,16 @@ test('Electron proposal IPC accepts only the bounded local-service schema', () =
     () => validateProposeInvocation({ requestId: 'r', payload: { format: 'pdf', intent: 'x' } }),
     /unsupported document format/,
   );
+  for (const format of ['ppt', 'pptx']) {
+    assert.throws(
+      () => validateProposeInvocation({ requestId: 'r', payload: { format, intent: 'x' } }),
+      /unsupported document format/,
+    );
+  }
+  assert.throws(
+    () => validateProposeInvocation({ requestId: 'r', payload: { format: 'word', intent: 'x', ppt: { slides: [] } } }),
+    /unsupported fields/,
+  );
   assert.throws(
     () => validateProposeInvocation({ requestId: 'r', payload: { format: 'excel', intent: 'x', baseRev: 0, sourceFileSha256 } }),
     /baseRev must match/,

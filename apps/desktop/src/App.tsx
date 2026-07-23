@@ -125,9 +125,10 @@ function latestProposalId(thread: readonly Turn[]): string | undefined {
 const FORMATS = [
   { id: 'excel', label: 'Excel', file: '月度销售表.xlsx' },
   { id: 'word', label: 'Word', file: '实训报告.docx' },
-  { id: 'ppt', label: 'PPT', file: '季度汇报.pptx' },
   { id: 'drawio', label: '流程图', file: '系统架构.drawio' },
 ] as const satisfies ReadonlyArray<{ id: Fmt; label: string; file: string }>;
+
+const isWorkspaceFormat = (value: string): value is Fmt => FORMATS.some((format) => format.id === value);
 
 /** 仿 Office 功能区:选项卡 → 分组(模块)→ 功能。 */
 interface RibGroup { name: string; items: string[] }
@@ -267,33 +268,6 @@ const RIBBONS: Record<Fmt, RibTab[]> = {
       ],
     },
   ],
-  ppt: [
-    {
-      name: '开始',
-      groups: [
-        { name: '幻灯片', items: ['新建幻灯片', '版式', '重置', '节'] },
-        { name: '字体', items: ['字体', '字号', 'B', 'I', 'U', '字体颜色'] },
-        { name: '段落', items: ['项目符号', '编号', '对齐', '行距', '转换为 SmartArt'] },
-        { name: '绘图', items: ['形状', '排列', '快速样式', '填充', '轮廓'] },
-      ],
-    },
-    {
-      name: '插入',
-      groups: [
-        { name: '图像', items: ['图片', '屏幕截图', '相册'] },
-        { name: '插图', items: ['形状', 'SmartArt', '图表', '图标'] },
-        { name: '文本', items: ['文本框', '页眉和页脚', '艺术字'] },
-        { name: '媒体', items: ['视频', '音频'] },
-      ],
-    },
-    {
-      name: '设计',
-      groups: [
-        { name: '主题', items: ['主题', '变体'] },
-        { name: '自定义', items: ['幻灯片大小', '设置背景格式'] },
-      ],
-    },
-  ],
   drawio: [
     {
       name: '开始',
@@ -377,7 +351,6 @@ const BIG = new Set<string>([
   '粘贴', '条件格式', '套用表格格式', '单元格样式', '插入', '删除', '格式', '自动求和', '排序和筛选', '查找和选择',
   '数据透视表', '推荐的数据透视表', '表格', '主题', '拼写检查', '获取数据', '全部刷新', '名称管理器', '插入函数',
   '目录', '修订', '保护工作表', '模拟分析', '删除重复值', '数据验证', 'SmartArt', '分类汇总', '页边距', '图表',
-  '新建幻灯片', '版式',
 ]);
 const COMBO: Record<string, string> = { 字体: '宋体', 字号: '11', 常规: '常规' };
 const COMBO_W: Record<string, number> = { 字体: 104, 字号: 54, 常规: 92 };
@@ -414,13 +387,11 @@ const PLACEHOLDERS: Record<Fmt, string> = {
   excel: '圈一块区域,说说你想怎么改…',
   word: '选中文字,说说你想怎么改…',
   drawio: '选中节点/连线,说说你想怎么改…',
-  ppt: '选中对象,说说你想怎么改…',
 };
 const CANVAS_HINT: Record<Fmt, string> = {
   excel: '',
   word: '流式文档:选中文字 → 指令 → 红线修订(@otterpatch/adapter-word)',
   drawio: '流程图:选中节点/连线 → 指令 → 按 mxCell id 改(@otterpatch/adapter-drawio)',
-  ppt: '幻灯片:选中对象 → 指令 → 版式/文本(适配器规划中)',
 };
 
 const NCOLS = 14;
@@ -509,8 +480,10 @@ export function App() {
   const [lang, setLang] = useState<Lang>(() => asLang(lsGet('oa.lang', 'zh')));
   const t = makeT(lang);
   const [sent, setSent] = useState(false);
-  const [fmt, setFmt] = useState<Fmt>(() => (lsGet('oa.fmt', 'excel') as Fmt));
-  const [tab, setTab] = useState(0);
+  const [fmt, setFmt] = useState<Fmt>(() => {
+    const stored = lsGet('oa.fmt', 'excel');
+    return isWorkspaceFormat(stored) ? stored : 'excel';
+  });
   const [drop, setDrop] = useState<{ key: string; x: number; y: number } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -563,7 +536,8 @@ export function App() {
   const [localUserId] = useState(() => persistedLocalId('oa.auditUserId'));
   const [conversationSessionId, setConversationSessionId] = useState(() => persistedLocalId('oa.auditSessionId'));
   // Cursor 式连续对话流 + 模型历史,持久化到当前工作区(localStorage)
-  const [thread, setThread] = useState<Turn[]>(() => sanitizeAppThread(lsJson<Turn[]>('oa.thread', [])));
+  const [thread, setThread] = useState<Turn[]>(() => sanitizeAppThread(lsJson<Turn[]>('oa.thread', []))
+    .filter((turn) => turn.role !== 'assistant' || turn.kind !== 'diff' || isWorkspaceFormat(turn.format)));
   const [recent, setRecent] = useState<{ t: string; time: string }[]>([]);
   const [realDiff, setRealDiff] = useState<AgentDiff | null>(null);
   const [realCs, setRealCs] = useState<unknown>(null);
@@ -1188,66 +1162,14 @@ export function App() {
           fmt={fmt}
           fileLabel={curFmt.file}
           lang={lang}
-          onPickFormat={(id) => { setFmt(id as typeof fmt); lsSet('oa.fmt', id); setTab(0); }}
+          onPickFormat={(id) => { setFmt(id as typeof fmt); lsSet('oa.fmt', id); }}
           onPickLang={pickLang}
         />
 
         <main className={'body' + (fmt === 'drawio' ? ' three' : '')}>
           {fmt === 'drawio' && <DrawioPalette onPick={(s) => notify(t('插入形状') + ' · ' + s)} />}
           <section className="editor">
-            {fmt === 'drawio' ? (
-              <DrawioToolbar onAct={act} />
-            ) : fmt === 'excel' || fmt === 'word' ? null : (
-            <div className="ribbon">
-              <div className="ribbon-tabs">
-                {RIBBONS[fmt].map((rt, i) => (
-                  <button key={rt.name} className={'rtab' + (i === tab ? ' on' : '')} onClick={() => setTab(i)}>
-                    {t(rt.name)}
-                  </button>
-                ))}
-              </div>
-              <div className="ribbon-bar">
-                {(RIBBONS[fmt][tab] ?? RIBBONS[fmt][0]!).groups.map((g) => {
-                  const isStyle = g.items.some((it) => STYLE_KIND[it]);
-                  return (
-                    <div className="rgroup" key={g.name}>
-                      <div className="rgbody">
-                        {isStyle ? (
-                          <div className="rstyles">
-                            {g.items.map((it) => (
-                              <button
-                                key={it}
-                                className={'rstyle st-' + (STYLE_KIND[it] ?? 'body')}
-                                title={t(it)}
-                                onClick={() => notify(t('应用样式') + ' · ' + t(it))}
-                              >
-                                {t(it)}
-                              </button>
-                            ))}
-                          </div>
-                        ) : (
-                          buildCells(g.items).map((cell, ci) =>
-                            cell.t === 'combo' ? (
-                              <ComboCell key={ci} it={cell.it} onOpen={act} />
-                            ) : cell.t === 'big' ? (
-                              <BigCell key={ci} it={cell.it} onOpen={act} />
-                            ) : (
-                              <div className="rsmall-grid" key={ci}>
-                                {cell.items.map((it) => (
-                                  <SmallCell key={it} it={it} onOpen={act} />
-                                ))}
-                              </div>
-                            ),
-                          )
-                        )}
-                      </div>
-                      <div className="rgname">{t(g.name)}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            )}
+            {fmt === 'drawio' && <DrawioToolbar onAct={act} />}
             <div className={'canvas' + (isExcel ? ' excel' : fmt === 'drawio' ? ' board' : fmt === 'word' ? ' worddoc' : ' doc')}>
               {isExcel ? (
                 <>

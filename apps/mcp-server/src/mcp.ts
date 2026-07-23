@@ -76,18 +76,14 @@ const boardSchema = z.object({
   sourceEncoding: z.enum(['uncompressed', 'compressed']).optional(),
 }).strict();
 
-const pptSchema = z.object({
-  slides: z.array(z.object({
-    paragraphs: z.array(z.object({ runs: z.array(z.string()) }).strict()),
-  }).strict()),
-}).strict();
-
 const docSchema = z.object({
   blocks: z.array(z.object({
     style: z.string(), text: z.string(), font: z.string().optional(), size: z.number().optional(),
     align: z.string().optional(), lineSpacing: z.number().optional(),
   })),
 });
+
+const defaultFormatSchema = z.enum(['excel', 'xlsx', 'word', 'docx', 'drawio']);
 
 server.registerTool(
   'otterpatch_skills',
@@ -109,7 +105,7 @@ server.registerTool(
     description:
       'Propose a constrained ChangeSet for a document edit (the agent never emits raw OOXML — only a structured ChangeSet). Returns { changeSet, diff }. BYOK: pass apiKey or set OtterPatch_API_KEY.',
     inputSchema: {
-      format: z.string().describe('excel | drawio | word | ...'),
+      format: defaultFormatSchema.describe('excel | xlsx | word | docx | drawio'),
       intent: z.string().describe('natural-language edit intent'),
       context: z.string().default('').describe('read-only snapshot of the selected region, fed to the model'),
       baseRev: z.number().int().nonnegative().optional().describe('document revision used as the ChangeSet base revision; derived when sourceFileSha256 is present'),
@@ -124,7 +120,6 @@ server.registerTool(
       sheet: sheetSchema.optional(),
       board: boardSchema.optional(),
       doc: docSchema.optional(),
-      ppt: pptSchema.optional().describe('required for PPTX proposals; preserves slide, paragraph, and text-run boundaries'),
       history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).optional(),
     },
   },
@@ -156,7 +151,6 @@ server.registerTool(
           ...(a.sheet ? { sheet: a.sheet } : {}),
           ...(a.board ? { board: a.board } : {}),
           ...(a.doc ? { doc: a.doc } : {}),
-          ...(a.ppt ? { ppt: a.ppt } : {}),
           ...(a.history ? { history: a.history } : {}),
         },
         model,
@@ -170,7 +164,6 @@ server.registerTool(
           ...(a.sheet ? { sheet: a.sheet } : {}),
           ...(a.board ? { board: a.board } : {}),
           ...(a.doc ? { doc: a.doc } : {}),
-          ...(a.ppt ? { ppt: a.ppt } : {}),
         }),
         proposal: rt.createProposal(r.changeSet, a.format, documentId, a.sourceFileSha256),
       });
@@ -186,11 +179,10 @@ server.registerTool(
     description: 'Render a reviewable diff from a ChangeSet and a read-only host snapshot. Without a snapshot the result is explicitly marked unavailable.',
     inputSchema: {
       changeSet: z.string().describe('ChangeSet JSON'),
-      format: z.string().optional().describe('excel | drawio | word | ...; inferred conservatively when omitted'),
+      format: defaultFormatSchema.optional().describe('excel | xlsx | word | docx | drawio; inferred conservatively when omitted'),
       sheet: sheetSchema.optional().describe('required for a shadow-derived Excel preview'),
       board: boardSchema.optional().describe('required for a drawio topology shadow preview'),
       doc: docSchema.optional(),
-      ppt: pptSchema.optional(),
     },
   },
   async (a) => {
@@ -202,7 +194,6 @@ server.registerTool(
         ...(a.sheet ? { sheet: a.sheet } : {}),
         ...(a.board ? { board: a.board } : {}),
         ...(a.doc ? { doc: a.doc } : {}),
-        ...(a.ppt ? { ppt: a.ppt } : {}),
       }));
     } catch (e) {
       return failWith('diff', e);
@@ -215,7 +206,7 @@ server.registerTool(
   {
     description: 'Commit a previously reviewed proposal. A trusted host must supply the signed proposal and review receipt. Unreviewed commit is disabled unless OTTERPATCH_ALLOW_UNREVIEWED_COMMIT=1.',
     inputSchema: {
-      format: z.string(),
+      format: defaultFormatSchema,
       fileBase64: z.string().describe('original document bytes, base64'),
       changeSet: z.string().describe('ChangeSet JSON (from otterpatch_propose)'),
       proposal: z.string().optional().describe('signed ProposalEnvelope JSON returned by otterpatch_propose'),

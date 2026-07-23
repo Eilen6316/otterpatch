@@ -15,6 +15,15 @@ try {
   rep.ok('brand logo in header', (await page.locator('.brand-logo').count()) === 1);
   rep.ok('page title is OtterPatch', (await page.title()).includes('OtterPatch'));
   rep.ok('Univer grid renders', (await page.locator('.univer-host canvas').count()) > 0);
+  const formatLabels = await page.locator('.fmttabs button').allTextContents();
+  rep.ok(
+    'default format picker exposes Excel, Word, and drawio only',
+    formatLabels.length === 3
+      && formatLabels.some((label) => /Excel/i.test(label))
+      && formatLabels.some((label) => /Word/i.test(label))
+      && !formatLabels.some((label) => /PPT|PDF/i.test(label)),
+    formatLabels.join(', '),
+  );
 
   // 框选 → 选区上抛 Agent 区
   const host = await page.locator('.univer-host').boundingBox();

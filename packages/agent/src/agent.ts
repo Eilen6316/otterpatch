@@ -71,7 +71,7 @@ function executionConstraints(req: ProposeRequest, opts: AgentOptions): string {
     : 'every commit requires a signed proposal and human review receipt';
 
   return [
-    `【当前执行约束·${manifest.version}】format=${manifest.format}`,
+    `【当前执行约束·${manifest.version}】format=${manifest.format};availability=${manifest.availability};lifecycle=${manifest.lifecycle}`,
     `可提议且可写回的操作:${operationText}`,
     `格式特性:${featureText}`,
     `当前文件验证观测:${snapshotStatus(req, manifest.format)}`,

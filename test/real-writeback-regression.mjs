@@ -33,15 +33,6 @@ function docxSample() {
   });
 }
 
-function pptxSample() {
-  return zipSync({
-    '[Content_Types].xml': enc('<?xml version="1.0"?><Types/>'),
-    '_rels/.rels': enc('<?xml version="1.0"?><Relationships/>'),
-    'ppt/presentation.xml': enc('<?xml version="1.0"?><p:presentation/>'),
-    'ppt/slides/slide1.xml': enc('<?xml version="1.0"?><p:sld xmlns:a="a"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Hello</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>'),
-  });
-}
-
 function drawioSample() {
   return enc('<mxfile><diagram id="d0"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="2" value="Old" vertex="1" parent="1"><mxGeometry x="0" y="0" width="80" height="40" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>');
 }
@@ -99,12 +90,6 @@ async function checkDocxTable() {
   assert.equal([...documentXml.matchAll(/<w:tc>/g)].length, 4);
 }
 
-async function checkPptx() {
-  const res = await reviewedCommit('pptx', pptxSample(), flowCs('pptx', 'Hello', 'World'));
-  assert.equal(res.ok, true);
-  assert.match(dec.decode(unzipSync(res.bytes)['ppt/slides/slide1.xml']), /<a:t>World<\/a:t>/);
-}
-
 async function checkDrawio() {
   const cs = objectCs('drawio', '2', 'New');
   const res = await reviewedCommit('drawio', drawioSample(), cs);
@@ -112,7 +97,7 @@ async function checkDrawio() {
   assert.match(dec.decode(res.bytes), /value="New"/);
 }
 
-for (const [name, fn] of Object.entries({ xlsx: checkXlsx, docx: checkDocx, docxTable: checkDocxTable, pptx: checkPptx, drawio: checkDrawio })) {
+for (const [name, fn] of Object.entries({ xlsx: checkXlsx, docx: checkDocx, docxTable: checkDocxTable, drawio: checkDrawio })) {
   await fn();
   console.log(`[real-writeback] ${name} ok`);
 }

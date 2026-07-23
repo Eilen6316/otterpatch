@@ -6,10 +6,10 @@ const MAX_INTENT_CHARS = 100_000;
 const MAX_API_KEY_CHARS = 8_192;
 const MAX_EDIT_IDS = 500;
 const SHA256_RX = /^[a-f0-9]{64}$/;
-const FORMATS = new Set(['excel', 'xlsx', 'word', 'docx', 'drawio', 'ppt', 'pptx']);
+const FORMATS = new Set(['excel', 'xlsx', 'word', 'docx', 'drawio']);
 const PROPOSE_KEYS = new Set([
   'format', 'intent', 'context', 'baseRev', 'sourceFileSha256', 'provider', 'model', 'apiKey', 'documentId',
-  'sessionId', 'userId', 'parentProposalId', 'sheet', 'board', 'doc', 'ppt', 'history',
+  'sessionId', 'userId', 'parentProposalId', 'sheet', 'board', 'doc', 'history',
 ]);
 const COMMIT_KEYS = new Set(['format', 'fileBase64', 'changeSet', 'proposal', 'acceptedEditIds']);
 const STREAM_EVENT_TYPES = new Set(['status', 'answer', 'draft', 'done', 'error']);

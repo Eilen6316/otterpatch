@@ -33,6 +33,7 @@ const flowChangeSet = (style: Record<string, unknown>, quote = '', path: number[
 
 test('capability manifest exposes only verified Excel writeback operations', () => {
   assert.equal(capabilityManifestFor('xlsx')?.version, CAPABILITY_MANIFEST_VERSION);
+  assert.equal(CAPABILITY_MANIFEST_VERSION, 'capabilities-v2');
   assert.equal(capabilityManifestFor('pdf'), undefined);
   assert.deepEqual(proposalOperationNamesFor('excel'), ['setValue', 'setFormula', 'setStyle', 'setNumberFormat', 'clear']);
   for (const manifest of capabilityManifests()) {
@@ -52,6 +53,8 @@ test('capability manifest advertises only previews backed by adapter shadows', (
 
 test('PPTX capabilities disclose the narrow single-run preview boundary', () => {
   const ppt = capabilityManifestFor('pptx');
+  assert.equal(ppt?.availability, 'opt-in');
+  assert.equal(ppt?.lifecycle, 'frozen');
   assert.equal(ppt?.operations[0]?.maturity, 'preview');
   assert.equal(ppt?.operations[0]?.maxScope, 'range');
   assert.deepEqual(ppt?.features, {

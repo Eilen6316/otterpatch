@@ -1,7 +1,7 @@
 /**
- * @otterpatch/adapter-pptx — PowerPoint adapter (initial scope: surgical write-back of slide body text).
+ * @otterpatch/adapter-pptx — frozen, opt-in PowerPoint adapter for surgical slide-text write-back.
  * ChangeSet replaceText → <a:t> text in ppt/slides/slideN.xml; only the matched slide is modified, all other bytes stay untouched.
- * Future work: anchor resolution for shapes/layouts/masters, chart data sources.
+ * This adapter is intentionally excluded from the stock runtime and receives no feature expansion.
  */
 export * from './pptx-patch.js';
 export * from './pptx-text.js';

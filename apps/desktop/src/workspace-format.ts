@@ -1,1 +1,1 @@
-export type WorkspaceFormat = 'excel' | 'word' | 'ppt' | 'drawio';
+export type WorkspaceFormat = 'excel' | 'word' | 'drawio';
