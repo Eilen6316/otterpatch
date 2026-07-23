@@ -1,26 +1,26 @@
 # OtterPatch 文档
 
-面向贡献者与集成者的文档。请先阅读架构文档，再深入你所改动的那一层。
+这些文档描述当前 `main` 实现，面向贡献者与集成者。能力声明以版本化 manifest 为准；
+安全声明同时列出已执行控制与宿主职责。
 
-| 文档 | 涵盖内容 |
+| 文档 | 内容 |
 |---|---|
-| [architecture.md](./architecture.md) | propose → diff → review → commit 流水线、包结构图、核心不变式 |
-| [agent.md](./agent.md) | Agent 循环：路由、只读工具、分级检查与修复、自检、提示词缓存、批处理 |
-| [skills.md](./skills.md) | 技能系统：能力卡片与操作手册（playbook）的区别、渐进式披露（`load_skill`）、外部 SKILL.md 安装 |
-| [review-ux.md](./review-ux.md) | 审阅体验：三工作区统一的 DiffToggle、Word 行内修订（接受即扁平化 flatten-on-accept）、Excel 三态对照与前置状态回放、drawio 逐条审阅 |
-| [testing.md](./testing.md) | 测试金字塔：包级单元测试、无头 e2e 测试框架、live eval、能力基准测试、验收遥测 |
+| [architecture.md](./architecture.md) | 带信任边界的 propose、review、commit、verification 流水线；包职责；宿主职责 |
+| [security.md](./security.md) | 威胁模型、prompt/skill 隔离、provenance、签名审阅权限、资源/Provider/HTTP/Electron 控制与限制 |
+| [agent.md](./agent.md) | 路由、prompt 边界、只读工具、Provider 预算、提案检查、provenance、分批 |
+| [skills.md](./skills.md) | 内置/生成 playbook、能力感知披露、外部技能 trust 规则 |
+| [review-ux.md](./review-ux.md) | 工作区预览、逐 edit 决策、Word/Excel/drawio 回放、源绑定 commit 流程 |
+| [testing.md](./testing.md) | 当前 CI 基线、workspace/adversarial 测试、真实写回、Playwright 与打包桌面冒烟 |
+| [ooxml-redline-notes.md](./ooxml-redline-notes.md) | Word 原生修订语义、已覆盖行为和剩余 OOXML backlog |
+| [bench.md](./bench.md) | 历史能力 bench 校准记录；当前任务集见 `test/expert-bench.mjs` |
 
-## 一段话简介
+## 不变量
 
-Agent 不应直接编辑你的文件。在 OtterPatch 中，Agent 只**提议**一个结构化的
-`ChangeSet`；系统会执行该格式声明的 lint、模拟或输出验证（并让模型自行修复自己的
-错误），展示一个**可审阅的差异（diff）** —— 工作区中呈现为行内修订，侧栏中呈现为
-git 风格的 diff —— 只有在人工逐项批准之后，才以**外科手术式**的方式写回：文件中只有
-被触及的部分发生变化，其余内容保持逐字节一致。
-
-## 核心不变式（不可破坏）
-
-1. **单一变更出口** —— 所有文档修改都必须经过 `propose_changeset`。任何其他工具都不得改动文档。
-2. **先审阅后提交** —— 未经人工逐项接受/拒绝，任何内容都不会落入文件。
-3. **外科手术式写回** —— 未触及的部分保持逐字节一致；保真度会被度量并上报。
-4. **串行写入** —— 提议锚定于当前文档状态；批处理串行继续（绝不并行写入），以确保锚点不会在执行过程中失效。
+1. **单一变更出口：** 模型驱动的文档修改必须成为结构化 ChangeSet。
+2. **不可信数据始终是数据：** 文档和外部技能内容永远不能获得 system 权限。
+3. **能力失败关闭：** 同一 manifest 约束 propose、preview、verify 和 write-back。
+4. **身份保持绑定：** Agent provenance、源 SHA-256、派生 revision、ChangeSet hash、策略与格式
+   通过 proposal/receipt 全链路绑定。
+5. **审批必须显式：** 默认情况下，每个提交 edit ID 都来自签名且会过期的 review receipt。
+6. **Commit 串行且强制验证：** Runtime 按文档加锁，不重放已开始的后端，并要求输出回读。
+7. **宿主负责持久化：** 已验证字节仍需嵌入应用以备份友好的原子方式保存，并处理长期审计。

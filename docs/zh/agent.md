@@ -1,72 +1,120 @@
 # Agent 循环
 
-模型能做的一切，以及我们如何让它保持诚实。
+模型可以分析文档，但只有可信代码能决定哪些操作存在、提案是否有效，以及内容是否允许提交。
 
-## 路由（三个出口，一个循环）
+## 三个出口
 
-系统提示词（`ROUTING_PREAMBLE`，`packages/agent/src/prompts/agent-loop.ts`）固定了如下契约：模型每一轮必须以恰好一个工具调用结束——
+每个对话回合必须通过且只通过一个工具结束：
 
-- `answer_user` —— 问答/咨询；绝不触碰文档
-- `propose_changeset` —— **唯一**的变更出口；先出计划，编辑在落地前需经审阅
-- `ask_user` —— 引导式澄清表格（每个问题 2–4 个选项），仅在意图确实模糊且猜错代价高时使用
+- `answer_user`：回答或分析，不修改文档；
+- `ask_user`：猜错代价高时，给出小型引导选择；
+- `propose_changeset`：唯一变更出口。返回计划和结构化操作，绝不返回原始 OOXML/XML 或
+  直接文件系统命令。
 
-在这几个出口之间，两条模型通道（`anthropic.ts`、`openai-compat.ts`）基于 `sheet-tools.ts` / `doc-tools.ts` 中与提供商无关的工具定义，执行同一套有界循环。各预算彼此独立：模型调用总数 12 次、读取工具 8 次、提案修复使用调用方配置值（最高 4 次）、截断修复 1 次、累计输出 65,536 token、总耗时 120 秒。有 Provider usage 时按真实输出 token 计数；流式兼容路径按 UTF-8 字节保守估算。任何一种修复预算都不能借用另一种预算。
+各 Provider 通道共享同一套 dialect、只读工具、预算记账、提案验证器和修复协议。若模型只给
+散文而未调用工具，系统只催收一次对应工具；仍无法产出可用结果时明确失败。
 
-Provider 传输由应用显式控制，不依赖 SDK 隐式默认值。每次 HTTP 尝试取 90 秒 Provider 超时与本轮剩余 120 秒预算中的较小值，并关闭 SDK 自带重试。网络错误、超时、409、429 和 5xx 最多重试两次；指数退避从 250 ms 增长到最高 4 秒并加入抖动，Provider 给出的更长 `Retry-After` 则最多遵守到 60 秒。连续 3 个失败请求会让对应 Provider/模型熔断 30 秒，之后只放行一次半开探测。错误统一归类为 `authentication`、`rate_limit`、`timeout`、`network`、`unavailable` 等稳定类型。桌面端取消按钮、HTTP 客户端断连、Runtime、Provider 请求与重试等待共用同一个 `AbortSignal`。
-只对尚未开始输出的请求建连阶段重试；响应流一旦产生内容，传输失败会直接上报，不会重放可能造成重复工具调用或重复草稿的整段请求。
+## Prompt 边界
 
-## 读取工具（先感知，后行动）
+固定策略、当前能力约束和不可变内置技能元数据属于可信 system text。请求专属文档内容编码在
+user message 中：
+
+```json
+{"untrusted_data":true,"kind":"document_context","content":"..."}
+```
+
+因此文档里的“忽略之前规则”等文字始终只是数据。完整快照只对有界只读工具可见；外部技能正文
+同样以不可信工具数据返回。详见 [security.md](./security.md)。
+
+## 独立预算与传输控制
+
+默认循环上限：
+
+| 预算 | 上限 |
+|---|---:|
+| 模型调用总数 | 12 |
+| 只读工具调用 | 8 |
+| 提案修复 | 由调用方设置，最高 4 |
+| 截断修复 | 1 |
+| 累计输出 | 65,536 token |
+| 总耗时 | 120 秒 |
+
+各计数器不能互相借用。Provider 单次输出还受 16,384 token 和 300,000 字符上限约束。
+
+每次 Provider 尝试取 90 秒 timeout 与剩余回合预算中的较小值，并关闭 SDK 自带重试。符合条件的
+网络错误、timeout、409、429 和 5xx 最多进行两次受控重试，使用带抖动的指数退避；
+`Retry-After` 最多遵守到 60 秒。连续失败会打开 Provider/模型熔断，之后只允许一次半开探测。
+错误统一为稳定分类：`authentication`、`permission`、`invalid_request`、`rate_limit`、
+`timeout`、`network`、`unavailable`、`aborted`。
+
+同一个 `AbortSignal` 从 UI 取消或 HTTP 断连贯穿 runtime、Provider 请求和重试等待。响应流一旦
+产出内容就不会被重放。原始 Provider reasoning/thinking delta 不会暴露；调用者只收到系统生成的
+有界状态事件和最终答案数据。
+
+## 只读工具
 
 | 格式 | 工具 | 用途 |
 |---|---|---|
-| Excel | `read_range` | 任意 A1 区域的精确单元格值（绝不凭样本猜测） |
-| Excel | `aggregate` | 带显式 `headerRows` 及 `groupBy` / `where` 的类型安全列聚合 |
-| Word | `read_blocks` | 段落区间的完整文本（提示词上下文会截断长段落——引文必须来自真实文本） |
-| Word | `find_text` | 所有出现位置及其块编号——用于引文唯一性检查 |
-| Word | `get_outline` | 标题树 + 层级跳级诊断 |
-| Word | `get_style_usage` | 样式/字体/字号/对齐方式的分布——排版体检的原始素材 |
-| 任意 | `load_skill` | 拉取某个领域手册（playbook）的完整说明（见 [skills.md](./skills.md)） |
+| Excel | `read_range` | 读取有界 A1 区域的精确类型值 |
+| Excel | `aggregate` | 带显式 `headerRows`、`groupBy` 和 `where` 的类型安全聚合 |
+| Word | `read_blocks` | 读取有界块范围的完整文本 |
+| Word | `find_text` | 返回所有出现位置与块号，用于唯一性检查 |
+| Word | `get_outline` | 标题树与层级跳级诊断 |
+| Word | `get_style_usage` | 样式/字体/字号/对齐分布 |
+| 任意 | `load_skill` | 以不可信工具数据加载与当前能力兼容的 playbook |
 
-快照随请求一同传入（`ProposeRequest.sheet` / `.doc`），且只对工具可见——不会被粘贴进提示词。
-Word 的上下文与快照按段标注图片（`[图片 alt 宽×高]`），Agent 能感知图在哪一段、多大。
-表格单元格携带宿主观测到的标量类型（数值、百分比、货币、日期、文本、空值、错误或布尔值）。
-聚合使用底层数值，绝不把 `"50%"` 等展示文本清洗成数字；调用方必须明确开头有多少行表头。
+表格单元格保留宿主观测的数值、百分比、货币、日期、文本、空值、错误和布尔类型。聚合绝不会
+把 `"50%"` 等显示字符串转换成数字。Word 快照保留块边界和图片元数据。工具结果大小和源范围
+在执行前均受预算限制。
 
-## Word 结构化操作：双通道锚定 / deletePara / 图片
+## 能力驱动的提案构造
 
-- **双通道锚定**：`quote`（原文片段，首选）+ `para`（1-based 段号，来自上下文的"第N段"或
-  `read_blocks`）。空段落、重复文本也能锚定；quote 定位失败自动回落到段号。
-- **deletePara**：整段删除操作（清空段落、删冗余段）。同一批内按段号**降序**落地，防止
-  段号漂移；跨回合仍未决的删段会在新提案到达时物理定稿，保证段号与快照一致。
-- **图片操作**（`setObjectProps`）：`img=remove` 只删图、段内文字保留；`img=resize` +
-  `imgWidth` 等比调宽。用户也可以在工作区点选图片作为圈选目标（选中态描边，上抛"第N段"位置）。
-- **Excel 值×格式硬门槛**（提示词层）：往百分比格写值必须写小数——41% 写 `0.41`，写 `120`
-  会显示成 12000%，是口径事故；mock 数据要求真实感（同列有波动、派生列用公式、比率用小数）。
-- **diff 标签补全**：行距/段落样式/分栏/边距/纸张方向不再塌缩成"套用格式"；`deleteRange`
-  与图片操作有中文标签；空 quote 的 flow 引用显示"第N段"。
+每种格式 dialect 都围绕 runtime 使用的同一份版本化 manifest 构建。只有当前同时支持 propose
+和 write-back 的操作才进入模型 schema。Dialect builder 随后创建锚点/操作、附加可信 provenance，
+并立即执行 `assertChangeSet`。
 
-## 检查分级：lint → simulation → output verification
+Agent provenance 包括 Provider/模型身份、真实 Provider 响应 ID、源 hash、提示策略版本、父
+proposal、修复次数、已加载技能版本/checksum、session、user 和 document identity。ChangeSet ID
+使用单调 UUIDv7。修复回合保留相同可信绑定，同时记录新的响应身份和 attempt 序号。
 
-每个 `propose_changeset` 在成为 diff 前，都会执行该格式当前能提供的最高等级检查（注册表位于 `packages/runtime/src/runtime.ts`，`registerVerifier(format, make)`）。报告显式携带 `level`（`lint`、`simulation` 或 `verification`）和稳定错误码：
+## 提案检查与修复
 
-- **Excel simulation**（`buildGridVerifier`）—— 展开范围内每个单元格，真实应用受支持的值、公式、清空和样式操作，再重算受支持公式。必须提供完整公式矩阵；未知函数、循环引用、缺失样式观测、冲突性重叠编辑和快照越界都会失败关闭。
-- **Word lint**（`buildDocVerifier`）—— quote 必须唯一命中，或携带在结构化文档快照中真实存在的段落索引。重复 quote 是阻断性歧义，不再只是 warning。
-- **drawio topology simulation**（`buildDrawioVerifier`）—— 有结构化画板快照时，会重放新增、关系修改、移动和级联删除，再拒绝重复 id、缺失 parent、parent 循环、自引用与悬空边。旧文本上下文只做精确 token lint，不再用 substring 判断。
+选中的 `HostAdapter` 提供它当前能支持的最强确定性提案验证器：
 
-失败会在同一轮以结构化报告返回给模型。能力清单不再把只有写回能力的格式宣称为支持预览或验证。
+| 格式 | 当前提案检查 |
+|---|---|
+| Excel | 将受支持范围展开到隔离 grid shadow，应用值/公式/样式/清空，再重算已支持公式子集；未知函数、循环、观测不完整、冲突和快照越界均失败关闭 |
+| Word | 要求真实唯一 quote，或结构化快照中有效的段号锚点；两者同时存在时，段号约束 quote |
+| drawio | 重放画板编辑，拒绝重复 ID、缺失 parent、parent 循环、自引用和悬空边 |
+| PowerPoint | 按精确 slide、paragraph、run 边界解析文本；缺失、重复或跨 run 目标均失败 |
+| PDF | 只有能力/payload 校验；不宣称存在面向模型的语义提案验证器 |
 
-**最终自检**（`withFinalSelfCheck`）：当一个*大型*变更集（≥5 条编辑）通过结构校验后，模型会获得恰好一轮"整体审阅自己的工作"的机会——完整性、冲突、更优做法——然后重新提交（若满意则原样提交）。小型变更集跳过此步。
+确定性失败会在同一回合以结构化 code/report 返回模型。Runtime 内置路径最多允许两次提案修复。
 
-## 提示词缓存
+当 ChangeSet 至少包含五个 edit 时，`withFinalModelReview` 会在确定性检查通过后请求一次整体模型
+复盘。它明确标为非确定性的 `model_review`，可以改善完整性，但不是 semantic verification，
+也绝不替代后端输出回读。
 
-Anthropic 通道将系统提示词拆分为**稳定前缀**（路由 + 方言 + 技能——跨轮完全相同）和**易变尾部**（本轮的文档快照），各带一个 `cache_control` 断点。效果：8 步循环中的每一步都能对整个系统提示词命中缓存；跨轮时稳定前缀依然命中。
+## Word 操作细节
 
-## 分批（串行，绝不并行）
+- Flow anchor 可以组合原文 quote 与从 1 开始的顶层 block index。顶层 table 算一个 block，
+  表内段落不单独计数；这与 importer/writer 镜像一致。
+- 整段删除以可审阅 delete 操作表达，并按 block 降序落地，避免索引漂移。
+- 图片操作当前支持删除 image run，或按比例修改 `wp:extent`/`a:ext`。
+- 局部字符样式必须有非空 quote；段落样式必须有段号锚。页面分栏、边距、方向必须使用空的
+  文档级 anchor 和显式 document scope。不支持无锚点的全文字符/段落样式。
+- 插表使用有界、规则的二维字符串数据和明确文档位置。
 
-长输出会被切分为多个批次：计划中声明"先做前 N 项"，用户接受后可点击**继续下一批**——或开启**⚡自动续批**（auto-continue，需主动开启，会持久化保存），它会在每次接受后自动发送"下一批"，上限为连续 5 个自动批次。每个批次都是一轮完整的 propose → verify → review，且锚定于*当前*文档。
+## 技能、分批与历史
 
-为什么不用并行子代理来跑批次？所有锚点（引文 / A1 引用）都是针对同一个文档版本解析的；批次 A 一旦落地，批次 B 的锚点就会失效——导致静默空操作或错位落地的编辑。并行对**读取**（诊断扇出）是安全的，但写入必须收敛为单个串行锚定的变更集。如果将来引入子代理，设计应为：并行读取者 → 单一写入者 → 单一变更集 → 单次审阅。
+内置 playbook 按格式、意图、locale 与当前操作能力匹配，其版本和 checksum 会进入 provenance。
+外部技能不能进入可信 system text，也不能扩展能力。详见 [skills.md](./skills.md)。
 
-## 模型可见的历史与状态
+大任务拆成串行批次。每个已接受批次都会基于当前文档状态发起新请求；自动续批需主动开启，
+最多连续五批。并行读取是安全的，但并行写者会针对陈旧 revision 解析锚点。
 
-`buildHistory` 将过去的每一轮压缩为一行，其中包含**净结果**——"用户接受了 N 项" / "用户回退了这些"——因此模型永远不会重新提出已落地的变更，也不会在已回退的变更之上继续构建。审批状态在上下文裁剪后仍会保留（被裁掉的轮次会留下一条状态摘要）。
+对话历史保存“接受/拒绝了哪些 edit”等压缩净结果，而不是瞬态 UI 状态。这样下一轮能避免重复
+提议已落地工作，同时保持在固定 history 预算内。
+
+Anthropic 只缓存稳定 system block。请求专属文档数据仍留在 user message，不会为缓存效率跨越
+信任边界。

@@ -4,131 +4,182 @@
 
 <p align="center"><b>English</b> · <a href="./README.zh.md">中文</a></p>
 
-> 🦦 **O**ffice **T**ransforms · **T**racked · **E**dited & **R**eviewed · surgical **Patch** write-back — an Agent-driven, reviewable **safe-commit layer** for documents.
-> Circle a region → say what you want → review the diff → high-fidelity write-back.
-> (Think: opening a PR against your `.xlsx` / `.docx` / `.drawio`.)
+> **O**ffice **T**ransforms · **T**racked · **E**dited & **R**eviewed · surgical **Patch** write-back.
+> Circle a region, describe the change, review each edit, then write back to the original format.
 
-> ⚠️ Early scaffold — under active development.
+> **Development preview (`0.0.1`).** The safety boundaries described below are enforced in code,
+> but format support is intentionally narrow and the API may still change. Keep a backup of any
+> important document and check the capability table before relying on a workflow.
 
-## Why
+## What OtterPatch does
 
-Agents shouldn't edit your files directly. In OtterPatch an agent only **proposes** a structured
-`ChangeSet`; the system validates it, applies it to a shadow copy, shows a **reviewable diff**
-(accept/reject per block), then writes back **surgically** — only the touched parts change, the
-rest stays byte-identical.
+An agent never receives a general-purpose file mutation tool. It may answer, ask for clarification,
+or propose one structured `ChangeSet`. OtterPatch then:
 
-Validated on a real 531 KB `.docx`: surgical write-back kept **30/31 parts byte-identical**,
-whereas a model round-trip rewrote 11/31. See `packages/writeback-surgical`.
+1. keeps document content in an explicitly untrusted user-data envelope;
+2. validates the ChangeSet schema, semantics, resource budgets, and format capability manifest;
+3. runs the strongest available deterministic proposal check and builds a reviewable diff;
+4. signs a proposal bound to the ChangeSet, format, policy, source SHA-256, and revision;
+5. commits only the edit IDs in a signed, expiring, single-use review receipt;
+6. serializes writes per document, applies the selected backend, reopens the output, and requires a
+   structured verification report before returning bytes to the host.
 
-## Docs
+For OOXML and uncompressed drawio, surgical write-back changes only intended package parts or
+diagrams. On a 531 KB `.docx` fixture, 30 of 31 package parts remained byte-identical. PDF is a
+documented exception: `pdf-lib` performs a full serialization, so byte locality is not guaranteed.
 
-Documentation lives in [`docs/`](./docs/README.md) (English · 中文):
-[architecture](./docs/en/architecture.md) · [agent loop](./docs/en/agent.md) ·
-[skills & playbooks](./docs/en/skills.md) · [review UX](./docs/en/review-ux.md) ·
-[testing](./docs/en/testing.md) · [bench log](./docs/en/bench.md)
+## Supported scope
 
-## Structure
+The versioned capability manifest in [`packages/core/src/capabilities.ts`](./packages/core/src/capabilities.ts)
+is the source of truth for proposal, preview, verification, and write-back gates.
+
+| Format | Current write-back operations | Proposal preview/check | Important boundary |
+|---|---|---|---|
+| Excel (`xlsx`) | value, formula, style, number format, clear range | headless grid shadow and deterministic simulation | supported formula subset only; unknown functions, cycles, missing observations, and oversized ranges fail closed; output edit-level read-back is `unverifiable` |
+| Word (`docx`) | anchored text replacement/deletion, scoped character and paragraph style, page columns/margins/orientation, image remove/resize, table insertion | unique quote/paragraph anchor checks; rich preview is rendered by the desktop host | writes native revisions in `word/document.xml`; generic edit-level output read-back is reported as `unverifiable` |
+| drawio | label/property updates, move, add, delete | headless board replay and topology verification | only uncompressed diagrams; identity/topology fields are constrained |
+| PDF | AcroForm text-field fill | target-field read-back plus page/metadata/non-target-field checks | experimental; signed PDFs rejected; byte locality and full PDF/A/appearance verification are not guaranteed |
+| PowerPoint (`pptx`) | text replacement | exact slide/paragraph/run boundary check | target text must be unique and contained in one text run; edit-level output read-back is currently `unverifiable` |
+
+Unsupported operations are hidden from the model and rejected again at runtime. A host cannot make
+them available by constructing a plausible-looking ChangeSet.
+
+## Run locally
+
+Prerequisite: Node.js 22 and npm.
+
+```bash
+npm ci
+npm run typecheck
+npm test
+npm run build
+```
+
+### Browser development
+
+Use two terminals:
+
+```bash
+# Terminal A: build TypeScript, start the loopback HTTP service, print one-time local tokens
+npm run serve
+
+# Terminal B: start the Vite cockpit at http://localhost:5173
+npm run dev
+```
+
+In the cockpit model settings, enter a provider API key and the **Local service token** and
+**Review token** printed by `npm run serve`. Browser-development tokens are stored only for the
+local Vite origin and must be updated when a service restart generates new values. Every local
+`POST` requires `X-OtterPatch-Token`; `/review` additionally requires
+`X-OtterPatch-Review-Token`. `GET /health` is the only anonymous endpoint.
+
+To pin development credentials or origins instead of generating defaults:
 
 ```text
-packages/core/                format-agnostic abstraction layer
-                              (Anchor / ChangeSet / Diff / Skill / Adapter / Registry / Transaction / Writeback)
-packages/agent/               intent → constrained ChangeSet; BYOK, 8 providers
-                              (Claude native + OpenAI-compatible: DeepSeek/GLM/Kimi/Doubao/MiniMax/Gemini/ChatGPT)
-packages/adapter-univer/      Excel adapter (Univer) — ChangeSet → sheet XML compiler
-packages/adapter-drawio/      drawio adapter — mxCell op engine + diagram-level surgical write-back
-packages/adapter-word/        Word adapter — word-level redline (w:ins/w:del) surgical write-back
-packages/adapter-pdf/         PDF adapter — AcroForm form-fill write-back (pdf-lib)
-packages/adapter-pptx/        PowerPoint adapter — slide-text surgical write-back (<a:t>)
-packages/writeback-surgical/  surgical OOXML write-back — validated + tested
-packages/runtime/             headless orchestrator: propose → diff → commit + JSON event stream
-apps/desktop/                 progressive-disclosure cockpit UI + BYOK model config (Vite + React; Electron later)
-apps/mcp-server/              OtterPatch as an MCP server (stdio) + headless CLI (otterpatch-run)
+OtterPatch_TOKEN
+OtterPatch_REVIEW_TOKEN
+OtterPatch_ALLOWED_ORIGINS
+OtterPatch_PORT
 ```
 
-## Integrate via MCP
+`OtterPatch_ALLOWED_ORIGINS` accepts only exact loopback HTTP(S) origins or `null`, separated by
+commas. The service always binds to `127.0.0.1`.
 
-OtterPatch ships as an MCP server so any agent / IDE can drive the propose → review → write-back loop:
+### Electron desktop
+
+```bash
+npm run build
+npm run app --workspace @otterpatch/desktop
+
+# Build an unpacked installer directory
+npm run app:pack:dir --workspace @otterpatch/desktop
+```
+
+Electron starts the local service itself. Service and review tokens stay in the main process;
+the sandboxed renderer receives only bounded propose, cancel, and reviewed-commit IPC methods.
+
+## Integrate
+
+`apps/mcp-server` exposes the same runtime through MCP stdio, a headless CLI, and the local HTTP
+bridge.
 
 ```text
-otterpatch_skills   list built-in document skills
-otterpatch_propose  intent (+ selection context) → constrained ChangeSet + reviewable diff   (BYOK)
-otterpatch_diff     ChangeSet + read-only host snapshot → shadow-derived diff (missing snapshot is reported as unavailable)
-otterpatch_commit   signed proposal + review receipt + file → surgical write-back + fidelity report
+otterpatch_skills   list immutable built-in skill metadata
+otterpatch_propose  intent + trusted request identity + read-only snapshot -> ChangeSet, diff, signed proposal
+otterpatch_diff     ChangeSet + host snapshot -> shadow-derived diff or an explicit unavailable reason
+otterpatch_commit   source file + ChangeSet + signed proposal + review receipt -> verified output
 ```
 
-For file-backed proposals, pass the source SHA-256 to `otterpatch_propose`; `baseRev` is then derived
-from that digest. `otterpatch_commit` requires a `currentRev` independently observed by the host and
-never defaults it from the ChangeSet.
+The stock MCP stdio surface does not mint a human review receipt. A host that embeds
+`@otterpatch/runtime` can use its own trusted review UI and the same `ReviewAuthority`; a plain
+stdio client can propose and diff, but cannot use the default reviewed commit by itself. The
+HTTP/Electron path is the complete built-in reviewed flow. Unreviewed MCP commit is off by default
+and can only be enabled explicitly with `OTTERPATCH_ALLOW_UNREVIEWED_COMMIT=1`; even then,
+`acceptedEditIds` and a live `currentRev` are required.
 
-```jsonc
-// register the server (BYOK key via env or per-call apiKey arg)
-{ "mcpServers": { "otterpatch": { "command": "otterpatch-mcp", "env": { "OtterPatch_API_KEY": "sk-..." } } } }
+Build and register the stdio entry point with an MCP client:
+
+```json
+{
+  "mcpServers": {
+    "otterpatch": {
+      "command": "node",
+      "args": ["/absolute/path/to/otterpatch/apps/mcp-server/dist/mcp.js"],
+      "env": { "OtterPatch_API_KEY": "your-provider-key" }
+    }
+  }
+}
 ```
 
-Or run it headless and stream JSON events (one per line):
+Run an explicitly confirmed headless pass:
 
 ```bash
-otterpatch-run --yes --format excel --intent "fill amount = qty × price" --in book.xlsx --out book.out.xlsx
-# {"type":"propose:start",...} {"type":"diff:done",...} {"type":"commit:done","ok":true,"touchedParts":["xl/worksheets/sheet1.xml"],...}
+npm run run --workspace @otterpatch/mcp-server -- \
+  --yes --format excel --intent "fill amount = quantity * price" \
+  --in book.xlsx --out book.out.xlsx
 ```
 
-The cockpit UI talks to the runtime through a local HTTP bridge (`otterpatch-serve`) — start it, then point the model panel's *otterpatch-serve URL* at it (BYOK):
+Without `--yes`, the CLI emits the proposal and diff but refuses to write a file.
 
-```bash
-otterpatch-serve   # prints generated local/review tokens once; GET /health remains anonymous
+## Verification output
+
+`FidelityReport.score` remains only as a compatibility alias for locality. Consumers should use
+the structured dimensions:
+
+```text
+verification.packageValid
+verification.locality       intended parts, unexpected parts, unchanged outside-part ratio
+verification.semantic       verified, unverifiable, and failed edit IDs
+verification.compatibility  explicit format/backend warnings
 ```
 
-Every `POST` requires `X-OtterPatch-Token`; `/review` additionally requires
-`X-OtterPatch-Review-Token`. Set `OtterPatch_TOKEN` and `OtterPatch_REVIEW_TOKEN` to pin the
-tokens instead of generating them. Browser access defaults to the exact Vite origins on port
-5173 plus Electron's `null` file origin; customize the comma-separated loopback allowlist with
-`OtterPatch_ALLOWED_ORIGINS`.
+Runtime rejects legacy or edit-incomplete reports, invalid packages, and unexpected drift. It
+returns the final read-back report, not the backend's optimistic commit-time estimate.
 
-Browser development uses two terminals: run `npm run serve`, then `npm run dev`. In the cockpit's
-model settings, enter the POST and review tokens printed by the service under *Local service token*
-and *Review token*. These credentials are stored for the `http://localhost:5173` origin and must be
-updated when a service restart generates new tokens. Electron manages both tokens through isolated
-IPC and does not expose these fields to its renderer.
+## Repository map
 
-## Develop
-
-```bash
-npm install
-npm run typecheck                  # tsc -b across packages/* and both apps
-npm run serve                    # terminal A: local HTTP bridge + startup tokens
-npm run dev                        # terminal B: cockpit UI → http://localhost:5173
-npm run app -w @otterpatch/desktop       # build + launch the Electron desktop window
-npm run app:pack -w @otterpatch/desktop  # package installers (electron-builder → release/)
-npm test -w @otterpatch/core             # adapter registry
-npm test -w @otterpatch/agent            # intent → ChangeSet (mock model + 8-provider factory)
-npm test -w @otterpatch/adapter-univer   # intent → ChangeSet → surgical .xlsx write-back
-npm test -w @otterpatch/adapter-drawio   # mxCell ops + cross-diagram surgical write-back
-npm test -w @otterpatch/writeback-surgical
+```text
+packages/core/                ChangeSet, validation, capability, risk, limits, adapter contracts
+packages/agent/               bounded multi-provider agent loop, read tools, provenance
+packages/skills/              immutable built-ins, generated playbooks, external-skill isolation
+packages/adapter-univer/      Excel shadow, verifier, and worksheet compiler
+packages/adapter-word/        Word anchors, native redlines, style/page/table/image write-back
+packages/adapter-drawio/      mxCell model, topology verifier, diagram write-back
+packages/adapter-pdf/         experimental AcroForm text-field writer
+packages/adapter-pptx/        constrained single-run slide-text writer
+packages/writeback-surgical/  budgeted OOXML read/repack and locality verification
+packages/runtime/             adapter-owned propose/diff/review/commit orchestration
+apps/mcp-server/              MCP, CLI, and authenticated loopback HTTP service
+apps/desktop/                 Vite/React cockpit and sandboxed Electron shell
 ```
 
-## Status
+## Documentation
 
-- [x] Monorepo scaffold; core abstraction layer + adapter registry
-- [x] Surgical OOXML write-back (validated + tested)
-- [x] Agent turn: natural-language intent → constrained `ChangeSet` (BYOK, 8 providers)
-- [x] drawio adapter: mxCell add/delete/setProps/move + diagram-level surgical write-back
-- [x] Headless runtime: signed review → per-document single-writer queue → risk enforcement → surgical write-back → mandatory backend verification
-- [x] Versioned capability manifest drives model operation exposure, runtime gates, backend support, signed proposals, and `/health`
-- [x] Hard resource budgets for HTTP/document bytes, OOXML expansion/XML depth, ChangeSet/range size, tool/model output, timeouts, and concurrency
-- [x] MCP server + headless CLI with a JSON event stream (BYOK)
-- [x] Word redline + PDF form-fill + PowerPoint slide-text adapters — propose→commit for excel/word/pdf/ppt/drawio
-- [x] Ribbon formatting applies to the live selection (bold/italic/colors/align/number-format)
-- [x] Electron desktop shell + electron-builder packaging config (Chinese/English UI)
-- [x] Closed write-back loop in the cockpit (otterpatch-serve): load a file → SHA-256/revision-bound signed proposal → review diff → receipt-bound subset → server-reverified surgical write-back → download
-- [x] Word: full Office-style six-tab ribbon + **inline tracked-change review** — per-change hover cards, 4-state view toggle (original/markup/clean/final), flatten-on-accept (accepting physically finalizes; no markup pollution)
-- [x] Agent read tools — Excel `read_range`/`aggregate`; Word `read_blocks`/`find_text`/`get_outline`/`get_style_usage` (full-doc snapshot, both model channels)
-- [x] Domain playbooks with progressive disclosure (`load_skill`): GB/T 9704 official-document layout, financial-sheet rules, chart selection
-- [x] Deterministic check registry (Excel recompute · Word anchor landability · drawio topology) with in-turn repair + a separately labeled non-deterministic final model review; prompt caching on the Anthropic channel
-- [x] Page-level layout ops (columns/margins/orientation — two-column IEEE layouts) + doc-level change chips with true before/after toggling
-- [x] Batch continuation ("next batch" button + opt-in auto-continue, serial & re-anchored); per-edit acceptance telemetry; key-gated capability bench (`test/expert-bench.mjs`)
-- [x] Unified review UX across all three workspaces (shared **DiffToggle**): Excel original/compare/final tri-state with change coloring, Word 4-state incl. whole-paragraph deletion redlines, drawio per-hunk review with board highlighting; single ReviewBox interaction surface + re-review of uncommitted past turns
-- [x] Word structured agent ops — dual-channel anchoring (quote + para number), `deletePara`, per-paragraph image awareness + image remove/resize; Excel value×format hard gate in the prompt
-- [x] Word surgical write-back closed loop: accept-all → `/commit` → `WordRedlineWriteback` rewrites only `word/document.xml` (word-level redlines, paragraph-mark deletion revisions, image ops), everything else byte-identical → download `<name>.otterpatch.docx`; live evals (`npm run eval:excel|word|word:struct|word:commit`, gated on `OA_EVAL_KEY`)
+Start at [`docs/`](./docs/README.md):
+[architecture](./docs/en/architecture.md) · [security](./docs/en/security.md) ·
+[agent loop](./docs/en/agent.md) · [skills](./docs/en/skills.md) ·
+[review UX](./docs/en/review-ux.md) · [testing](./docs/en/testing.md) ·
+[Word OOXML notes](./docs/en/ooxml-redline-notes.md)
 
 ## License
 

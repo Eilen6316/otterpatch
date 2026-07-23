@@ -2,96 +2,176 @@
 
 [English](./README.md) · **中文**
 
-> 🦦 **O**ffice **T**ransforms · **T**racked · **E**dited & **R**eviewed · surgical **Patch** —— 由 Agent 驱动、可审阅的文档**安全提交层**。
-> 圈选区域 → 说出诉求 → 审阅差异 → 高保真写回。
-> （可以理解为:给你的 `.xlsx` / `.docx` / `.drawio` 开一个 PR。）
+> **O**ffice **T**ransforms · **T**racked · **E**dited & **R**eviewed · surgical **Patch**。
+> 圈选区域，描述诉求，逐条审阅，再写回原格式文件。
 
-> ⚠️ 早期脚手架,正在积极开发中。
+> **开发预览版（`0.0.1`）。** 下文描述的安全边界已经由代码强制执行，但格式能力仍然
+> 有意保持收敛，API 也可能变化。处理重要文档时请保留备份，并先查看能力表。
 
-## 为什么
+## OtterPatch 做什么
 
-Agent 不该直接改你的文件。在 OtterPatch 里,Agent 只**提议**一份结构化的
-`ChangeSet`;系统对它做影子校验(锚点落不了地就让模型当轮修复)、展示**可审阅的差异**
-——工作区里是行内修订态,侧栏里是 git 风格 diff,逐条接受/拒绝——审阅通过后
-**外科手术式**写回:只有被改动的部分变化,其余字节保持完全一致。
+Agent 不会获得一个通用的文件修改工具。它只能回答、请求澄清，或提议一份结构化的
+`ChangeSet`。随后由 OtterPatch：
 
-已在真实的 531 KB `.docx` 上验证:外科式写回保持 **31 个部件中 30 个字节不变**,
-而模型整文重写会改写 31 个中的 11 个。详见 `packages/writeback-surgical`。
+1. 将文档内容放入明确标记为不可信的用户数据封装中；
+2. 校验 ChangeSet 的结构、语义、资源预算和格式能力清单；
+3. 执行当前格式最强的确定性提案检查，并生成可审阅 diff；
+4. 签发与 ChangeSet、格式、策略、源文件 SHA-256 和 revision 绑定的 proposal；
+5. 只提交签名、限时、单次使用的 review receipt 中列出的 edit ID；
+6. 按文档串行写入，执行选定后端，重新读取输出，并要求结构化验证报告后才把字节交还宿主。
+
+对于 OOXML 和未压缩 drawio，外科式写回只修改预期部件或 diagram。在一个 531 KB 的
+`.docx` 样本上，31 个包部件中有 30 个保持逐字节一致。PDF 是明确的例外：`pdf-lib`
+会完整重序列化文件，因此不保证字节局部性。
+
+## 当前支持范围
+
+[`packages/core/src/capabilities.ts`](./packages/core/src/capabilities.ts) 中的版本化能力清单，
+是 propose、preview、verify 和 write-back 门禁的唯一事实来源。
+
+| 格式 | 当前写回操作 | 提案预览/检查 | 关键边界 |
+|---|---|---|---|
+| Excel（`xlsx`） | 值、公式、样式、数字格式、清空范围 | 无头网格 shadow + 确定性模拟 | 只支持已实现的公式子集；未知函数、循环、缺失观测和超大范围均失败关闭；写后逐 edit 回读为 `unverifiable` |
+| Word（`docx`） | 锚定文本替换/删除、局部字符与段落样式、页面分栏/边距/方向、图片删除/缩放、插表 | 唯一引文/段号锚点检查；富预览由桌面宿主渲染 | 在 `word/document.xml` 中写原生修订；通用逐编辑输出回读会如实标为 `unverifiable` |
+| drawio | 标签/属性更新、移动、新增、删除 | 无头画板重放 + 拓扑验证 | 仅支持未压缩 diagram；身份与拓扑字段受约束 |
+| PDF | AcroForm 文本字段填写 | 目标字段回读 + 页数/元数据/非目标字段检查 | 实验性；拒绝签名 PDF；不保证字节局部性，也不完整验证 PDF/A 和 appearance stream |
+| PowerPoint（`pptx`） | 文本替换 | 精确到 slide/paragraph/run 的边界检查 | 目标文本必须唯一且完整位于单个文本 run；逐编辑输出回读目前标为 `unverifiable` |
+
+不支持的操作不会暴露给模型，并且会在 runtime 再次拒绝。宿主不能靠手工构造一个
+看似合法的 ChangeSet 绕过能力边界。
+
+## 本地运行
+
+前置要求：Node.js 22 和 npm。
+
+```bash
+npm ci
+npm run typecheck
+npm test
+npm run build
+```
+
+### 浏览器开发模式
+
+使用两个终端：
+
+```bash
+# 终端 A：构建 TypeScript、启动 loopback HTTP 服务、显示一次性本机令牌
+npm run serve
+
+# 终端 B：启动驾驶舱，地址为 http://localhost:5173
+npm run dev
+```
+
+在驾驶舱模型设置中填写 Provider API Key，以及 `npm run serve` 显示的**本机服务令牌**和
+**审阅令牌**。浏览器开发令牌只按本机 Vite Origin 保存；服务重启并生成新值后需要更新。
+每个本机 `POST` 都必须携带 `X-OtterPatch-Token`，`/review` 还必须携带
+`X-OtterPatch-Review-Token`。只有 `GET /health` 可匿名访问。
+
+如需固定开发凭据或 Origin，而不是使用自动生成值：
+
+```text
+OtterPatch_TOKEN
+OtterPatch_REVIEW_TOKEN
+OtterPatch_ALLOWED_ORIGINS
+OtterPatch_PORT
+```
+
+`OtterPatch_ALLOWED_ORIGINS` 只接受精确的 loopback HTTP(S) Origin 或 `null`，用逗号分隔。
+服务始终绑定 `127.0.0.1`。
+
+### Electron 桌面版
+
+```bash
+npm run build
+npm run app --workspace @otterpatch/desktop
+
+# 构建未安装的打包目录
+npm run app:pack:dir --workspace @otterpatch/desktop
+```
+
+Electron 会自行启动本机服务。服务令牌和审阅令牌只存在主进程；启用 sandbox 的 renderer
+只能调用有界的提案、取消和已审阅提交 IPC。
+
+## 集成方式
+
+`apps/mcp-server` 通过 MCP stdio、无头 CLI 和本机 HTTP 桥复用同一个 runtime。
+
+```text
+otterpatch_skills   列出不可变的内置技能元数据
+otterpatch_propose  意图 + 可信请求身份 + 只读快照 -> ChangeSet、diff、签名 proposal
+otterpatch_diff     ChangeSet + 宿主快照 -> shadow diff 或明确的 unavailable 原因
+otterpatch_commit   源文件 + ChangeSet + 签名 proposal + review receipt -> 已验证输出
+```
+
+Stock MCP stdio 接口不会签发人工审阅收据。直接嵌入 `@otterpatch/runtime` 的宿主可以让可信
+审阅 UI 与同一个 `ReviewAuthority` 协作；普通 stdio 客户端只能独立完成 propose/diff，不能单靠
+自身调用默认的已审阅 commit。HTTP/Electron 是当前内置的完整审阅闭环。未审阅 MCP commit
+默认关闭，只能通过 `OTTERPATCH_ALLOW_UNREVIEWED_COMMIT=1` 显式开启；即便开启，也必须传入
+`acceptedEditIds` 和实时观测的 `currentRev`。
+
+构建后，将 stdio 入口注册到 MCP 客户端：
+
+```json
+{
+  "mcpServers": {
+    "otterpatch": {
+      "command": "node",
+      "args": ["/absolute/path/to/otterpatch/apps/mcp-server/dist/mcp.js"],
+      "env": { "OtterPatch_API_KEY": "your-provider-key" }
+    }
+  }
+}
+```
+
+通过显式确认运行一次无头写回：
+
+```bash
+npm run run --workspace @otterpatch/mcp-server -- \
+  --yes --format excel --intent "金额 = 数量 * 单价" \
+  --in book.xlsx --out book.out.xlsx
+```
+
+不带 `--yes` 时，CLI 会输出 proposal 和 diff，但拒绝写文件。
+
+## 验证结果
+
+`FidelityReport.score` 只保留为局部性兼容别名。消费者应读取结构化维度：
+
+```text
+verification.packageValid
+verification.locality       预期部件、意外部件、目标外部件不变比例
+verification.semantic       verified / unverifiable / failed edit ID
+verification.compatibility  明确的格式与后端警告
+```
+
+Runtime 会拒绝旧式或编辑覆盖不完整的报告、无效包和意外漂移；返回的是最终回读报告，
+不是后端在 commit 时给出的乐观估计。
+
+## 仓库结构
+
+```text
+packages/core/                ChangeSet、校验、能力、风险、预算、Adapter 契约
+packages/agent/               有界多 Provider Agent 循环、只读工具、来源证明
+packages/skills/              不可变内置技能、生成式 playbook 清单、外部技能隔离
+packages/adapter-univer/      Excel shadow、验证器与 worksheet 编译器
+packages/adapter-word/        Word 锚点、原生修订、样式/页面/表格/图片写回
+packages/adapter-drawio/      mxCell 模型、拓扑验证器、diagram 写回
+packages/adapter-pdf/         实验性 AcroForm 文本字段写回
+packages/adapter-pptx/        受约束的单 run 幻灯片文本写回
+packages/writeback-surgical/  带资源预算的 OOXML 读写与局部性验证
+packages/runtime/             由 Adapter 驱动的 propose/diff/review/commit 编排
+apps/mcp-server/              MCP、CLI、带鉴权的 loopback HTTP 服务
+apps/desktop/                 Vite/React 驾驶舱与 sandboxed Electron 壳
+```
 
 ## 文档
 
-文档在 [`docs/`](./docs/README.md)(中文 · English):
-[架构](./docs/zh/architecture.md) · [Agent 循环](./docs/zh/agent.md) ·
-[技能与打法手册](./docs/zh/skills.md) · [审阅体验](./docs/zh/review-ux.md) ·
-[测试](./docs/zh/testing.md) · [能力基准](./docs/zh/bench.md)
-
-## 结构
-
-```text
-packages/core/                与格式无关的抽象层
-                              (Anchor / ChangeSet / Diff / Skill / Adapter / Registry / Transaction / Writeback)
-packages/agent/               意图 → 受约束的 ChangeSet;BYOK,8 家模型
-                              (Claude 原生 + OpenAI 兼容:DeepSeek/GLM/Kimi/豆包/MiniMax/Gemini/ChatGPT)
-packages/skills/              技能中枢:SKILL.md 解析/匹配/渐进披露 + 内置能力卡片与领域打法手册
-packages/adapter-univer/      Excel 适配器(Univer)—— ChangeSet → 工作表 XML 编译器
-packages/adapter-drawio/      drawio 适配器 —— mxCell 操作引擎 + 图级外科式写回
-packages/adapter-word/        Word 适配器 —— 词级红线(w:ins/w:del)+ 格式修订(rPrChange/pPrChange)外科写回
-packages/adapter-pdf/         PDF 适配器 —— AcroForm 表单填写写回(pdf-lib)
-packages/adapter-pptx/        PowerPoint 适配器 —— 幻灯片文本外科写回(<a:t>)
-packages/writeback-surgical/  外科式 OOXML 写回 —— 已验证 + 有测试
-packages/runtime/             headless 编排器:propose → diff → commit + JSON 事件流(含校验注册表)
-apps/desktop/                 驾驶舱 UI(Vite + React + Electron):Excel/Word/流程图工作区 + 审阅栏 + BYOK
-apps/mcp-server/              OtterPatch 作为 MCP server(stdio)+ headless CLI + otterpatch-serve 本地桥
-```
-
-`otterpatch-serve` 启动时会各显示一次自动生成的本地调用令牌和审阅令牌；`GET /health`
-可匿名访问，所有 `POST` 必须携带 `X-OtterPatch-Token`，`POST /review` 还必须携带
-`X-OtterPatch-Review-Token`。可通过 `OtterPatch_TOKEN`、`OtterPatch_REVIEW_TOKEN` 固定令牌，
-通过 `OtterPatch_ALLOWED_ORIGINS` 配置逗号分隔的精确本机 Origin 白名单。
-
-浏览器开发模式需要两个终端：先运行 `npm run serve`，再运行 `npm run dev`。打开驾驶舱的
-模型设置，将服务启动时显示的 POST 令牌和审阅令牌分别填入“本机服务令牌”和“审阅令牌”。
-令牌按 `http://localhost:5173` 的站点存储；服务重启并生成新令牌后需要更新。Electron 桌面版
-通过隔离的 IPC 自动管理令牌，不显示这两个输入框。
-
-## 开发
-
-```bash
-npm install
-npm run typecheck                  # 跨 packages/* 与两个 apps 执行 tsc -b
-npm run serve                    # 终端 A:本机 HTTP 桥 + 启动令牌
-npm run dev                        # 终端 B:驾驶舱 UI → http://localhost:5173
-npm run app -w @otterpatch/desktop       # 构建并启动 Electron 桌面窗口
-npm test -w @otterpatch/core             # 适配器注册表
-npm test -w @otterpatch/agent            # Agent 循环 / 取数工具 / 校验器(word+drawio)
-npm test -w @otterpatch/skills           # 技能匹配 / 打法手册 / 渐进披露
-npm test -w @otterpatch/runtime          # 编排器 / 校验注册表 / 收尾自检
-npm test -w @otterpatch/adapter-univer   # 意图 → ChangeSet → 外科式 .xlsx 写回
-npm test -w @otterpatch/adapter-word     # 词级红线 + 格式修订写回
-npm test -w @otterpatch/adapter-drawio   # mxCell 操作 + 跨图外科式写回
-npm test -w @otterpatch/writeback-surgical
-```
-
-## 状态
-
-- [x] Monorepo 脚手架;core 抽象层 + 适配器注册表
-- [x] 外科式 OOXML 写回(已验证 + 有测试)
-- [x] Agent 回合:自然语言意图 → 受约束的 `ChangeSet`(BYOK,8 家模型)
-- [x] drawio 适配器:mxCell 增/删/改属性/移动 + 图级外科式写回
-- [x] headless runtime:按文档单写者队列 + 旧源拒绝 + 风险审批强制执行 + 写后 backend verify;MCP server + CLI(JSON 事件流,BYOK)
-- [x] 版本化能力清单统一驱动模型操作暴露、runtime 门禁、写回支持、签名提案与 `/health`
-- [x] HTTP/文档、OOXML 解压/XML 深度、ChangeSet/范围、工具/模型输出、超时与并发均有硬资源预算
-- [x] Word 红线 / PDF 表单 / PPT 文本适配器 —— excel/word/pdf/ppt/drawio 全链路 propose→commit
-- [x] 驾驶舱写回闭环(otterpatch-serve):载入文件 → SHA-256/revision 绑定的签名提案 → 逐条审阅 → 签名回执绑定接受子集 → 服务端重算摘要与 revision → 外科写回 → 下载
-- [x] Word:Office 式六选项卡功能区 + **行内修订审阅**——逐条悬浮卡、四态视图(原文/修订/清样/改后)、flatten-on-accept(接受即物理定稿,零标记残留)
-- [x] Agent 取数工具 —— Excel `read_range`/`aggregate`;Word `read_blocks`/`find_text`/`get_outline`/`get_style_usage`(全文快照,双模型通道)
-- [x] 领域打法手册 + 渐进披露(`load_skill`):GB/T 9704 公文版式、财务表规范、图表选型
-- [x] 影子校验注册表(Excel 重算 · Word 锚点可落地 · drawio 拓扑完整)+ 当轮修复 + 收尾语义自检;Anthropic 通道 prompt caching
-- [x] 页面级版式操作(分栏/页边距/纸张方向,IEEE 双栏可直接做)+ 全文级改动 chip(真前后对比)
-- [x] 分批续接(「继续下一批」+ 可选自动续批,串行重新锚定)+ 逐条接受率遥测 + 能力级 bench(`test/expert-bench.mjs`)
-- [x] 三工作区统一审阅 UX(共享 **DiffToggle**):Excel 原文/对照/改后 三态 + 改动格着色、Word 四态含整段删除修订、drawio 逐条 hunk 审阅联动画板高亮;ReviewBox 单一交互面 + 未提交历史回合可重审
-- [x] Word Agent 结构化操作——quote + 段号双通道锚定、`deletePara`、按段图片感知 + 图片删除/等比调宽;Excel 值×格式硬门槛进提示词
-- [x] Word 外科写回闭环:全部接受 → `/commit` → `WordRedlineWriteback` 只重写 `word/document.xml`(词级红线、段落符删除修订、图片操作),其余部件字节透传 → 下载 `<名>.otterpatch.docx`;live eval 体系(`npm run eval:excel|word|word:struct|word:commit`,`OA_EVAL_KEY` 门控)
+从 [`docs/`](./docs/README.md) 开始：
+[架构](./docs/zh/architecture.md) · [安全模型](./docs/zh/security.md) ·
+[Agent 循环](./docs/zh/agent.md) · [技能](./docs/zh/skills.md) ·
+[审阅体验](./docs/zh/review-ux.md) · [测试](./docs/zh/testing.md) ·
+[Word OOXML 笔记](./docs/zh/ooxml-redline-notes.md)
 
 ## 许可证
 

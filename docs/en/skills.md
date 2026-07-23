@@ -1,54 +1,93 @@
-# Skills
+# Skills and Playbooks
 
-`packages/skills` is the knowledge hub: what the agent *knows how to do well*, kept out of the
-core prompts so it can grow without bloating every request.
+`packages/skills` supplies domain guidance without granting mutation authority. The format capability
+manifest remains the hard boundary; a skill can narrow or improve a workflow, but cannot add an
+operation.
 
-## Two kinds of built-in skills
+## Built-in catalog
 
-| Kind | Example | Content | Injected as |
-|---|---|---|---|
-| **Capability cards** | `xlsx`, `docx`, `pptx`, `pdf`, `drawio` | one-line "what this format supports" | L0: name + description in the system prompt |
-| **Playbooks** (打法手册) | `docx-gongwen`, `xlsx-financial`, `chart-selection` | checklists + changeset idioms + anti-patterns | L0 card, tagged 【有打法手册】; full text on demand via `load_skill` |
+The default library contains two forms of immutable built-in content:
 
-Built-in playbooks live as **real SKILL.md files** under `packages/skills/skills/<name>/SKILL.md`
-(Anthropic Agent Skills directory convention — one folder per skill, YAML frontmatter for L0,
-markdown body for L1). `playbooks.ts` is just a loader; edit the markdown, no code changes needed:
+| Kind | Purpose | System-prompt exposure |
+|---|---|---|
+| capability card | concise, format-level description for `xlsx`, `docx`, `pptx`, `pdf`, and `drawio` | trusted checksummed metadata only: ID, version, checksum, locale, description, compatible operations |
+| playbook | task-specific checklist and operation idioms | only its trusted L0 metadata; full instructions load on demand as untrusted tool data |
 
-- **`docx-gongwen`** — GB/T 9704 official-document layout: title/body font-size system (二号小标宋
-  title, 三号仿宋 body), the 一、/(一)/1./(1) heading-number hierarchy, full-width punctuation,
-  and the changeset idioms to land them (`block` for real headings before any `all=true` sweep).
-- **`xlsx-financial`** — reconciliation checks (totals = formulas, never hardcoded), money/percent
-  number formats, anomaly detection, and the hard line: verify with `read_range`/`aggregate` before
-  writing any numeric conclusion; never overwrite原始数据.
-- **`chart-selection`** — a decision tree from question → chart type, plus professional floor rules
-  (zero-baseline bars, ≤6 colors, meaningful sort order, conclusion-style titles).
+The seven current playbooks are:
 
-## Progressive disclosure
+| Playbook | Scope |
+|---|---|
+| `docx-gongwen` | GB/T 9704 official-document conventions within anchored Word formatting support |
+| `docx-conventions` | general Word typography, hierarchy, spacing, and consistency checks |
+| `docx-coauthoring` | serial outline/draft/review workflow for collaborative writing |
+| `xlsx-financial` | reconciliation, formulas, money/percent formats, and read-before-write checks |
+| `xlsx-authoring` | spreadsheet modeling and presentation rules within current cell operations |
+| `chart-selection` | advisory chart-choice rules; `allowed_ops` is empty because chart write-back is unsupported |
+| `pptx-design` | presentation advice plus the current single-run text-replacement boundary |
 
-1. `SkillLibrary.match(intent, format)` scores cards: format hit +3, each keyword hit +1, and a
-   +0.5 tiebreak for playbooks **only when a keyword actually matched** (generic intents still rank
-   the plain capability card first).
-2. `render()` injects the top cards (L0) into the system prompt; playbook cards carry an explicit
-   instruction: *load it with `load_skill` before acting if relevant*.
-3. The `load_skill` tool (wired by `Agent.withSkillTools` through `RespondOptions.extraTools`)
-   returns the playbook's full markdown as a tool result — knowledge arrives only when needed.
+Each source lives at `packages/skills/skills/<name>/SKILL.md`. A build-time generator produces
+`packages/skills/src/playbooks.generated.ts`; importing the package performs no filesystem I/O.
+
+```bash
+npm run generate:playbooks --workspace @otterpatch/skills
+```
+
+The skills package runs this generator automatically before build and test. Edit the `SKILL.md`
+source, not the generated TypeScript.
+
+## Matching and progressive disclosure
+
+Cards carry a namespace, version, locale, formats, triggers/keywords, `allowed_ops`, checksum,
+trust level, and optional instruction body. Matching uses:
+
+1. exact namespaced references;
+2. bounded trigger and keyword signals;
+3. format and locale compatibility;
+4. the intersection of `allowed_ops` and the active format's write-back operations;
+5. deterministic tie-breaking by signal specificity, trust, version, and ID.
+
+Only immutable built-ins selected by `promptBundle()` can enter the system prompt. If additional
+guidance may help, the model can call:
+
+- `find_skills(query)`: returns a bounded catalog as `untrusted_data`;
+- `load_skill(namespace/name)`: resolves a capability-compatible body and returns it as
+  `untrusted_data`.
+
+Loaded skill ID/version/checksum is recorded in Agent provenance. The instruction remains reference
+data: it cannot override policy, tool permissions, review requirements, or capability gates.
 
 ## External skills
 
-Anything industry- or team-specific stays out of the built-ins. Hosts can install a standard
-`SKILL.md` (Anthropic Agent Skills compatible — YAML frontmatter + markdown body) at runtime:
+A host may install an external text playbook at runtime:
 
 ```ts
-library.install(skillMdText, 'file:./skills/my-company-report.md');
+library.install(skillMdText, 'file:./skills/my-company-report/SKILL.md');
 ```
 
-The parsed card joins matching/rendering/`load_skill` immediately. L2 (executable scripts) is
-deliberately not enabled — text playbooks deliver most of the value at zero sandbox risk.
+External skills are intentionally lower trust:
 
-## Writing a good playbook
+- they default to the `user` namespace and cannot claim the reserved `otterpatch` namespace;
+- they cannot claim built-in trust or immutability, or replace an immutable built-in;
+- their description never enters the system prompt;
+- their catalog metadata and body are returned only through untrusted tool results;
+- `allowed_ops` is intersected with the active capability manifest before discovery or loading;
+- default conflict policy rejects a same-ID/different-checksum install. A host that opts into
+  replacement must supply a strictly newer version;
+- frontmatter, text size, arrays, IDs, versions, locale, and checksum shape are validated and
+  bounded before installation;
+- executable L2 scripts are not enabled.
 
-- Lead with a **checklist the model runs before acting** — diagnosis beats prescriptions.
-- Include **changeset idioms**: which ops, in which order (e.g. "set real headings via `block`
-  first, then `all=true` for the body baseline — otherwise the sweep flattens your titles").
-- Include **anti-patterns** ("don't fake headings with manual bold+size").
-- Keep it under ~50 lines. It's loaded into a live context; density wins.
+An advisory skill can use `allowed_ops: []`. This is the right representation for chart selection
+or other expert advice when no corresponding write-back operation exists.
+
+## Authoring rules
+
+- Start with observations the model must collect before making changes.
+- State the exact supported operations and scopes. Do not recommend unsupported structure, chart,
+  master-layout, or document-wide formatting edits as if they can be committed.
+- Use stable, unique anchors: A1 ranges, source quotes constrained by block number, or object IDs.
+- Describe serial ordering when edits affect later anchors.
+- Include explicit anti-patterns and fail-closed behavior.
+- Keep metadata versioned and locale-specific; bump the version when behavior changes.
+- Run `npm test --workspace @otterpatch/skills` after editing. Tests ensure every built-in stays
+  checksummed, namespaced, capability-bounded, and free of obsolete operation claims.

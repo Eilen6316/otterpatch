@@ -1,70 +1,132 @@
 # 架构
 
-OtterPatch 是位于 LLM Agent 与你的 Office 文档之间的**安全提交层**。可以把它理解为：
-针对一个 `.xlsx` / `.docx` / `.drawio` 文件发起一次 Pull Request。
+OtterPatch 是 LLM Agent 与结构化文档之间的审阅和提交边界。Agent 只提议意图级操作；
+校验、审批、写回和验证均由可信代码负责。
 
-## 流水线
+## 端到端流水线
 
+```text
+ 可信宿主身份 + 用户意图                  不可信文档投影
+              |                                |
+              +---------------+----------------+
+                              v
+                       有界 Agent 循环
+              answer_user | ask_user | propose_changeset
+                              |
+                              v
+                   UUIDv7 ChangeSet + provenance
+                              |
+             结构/语义/预算/能力清单校验
+                              |
+               Adapter 提案检查 + shadow 预览
+                              |
+                              v
+          与源文件 SHA-256 绑定的签名 ProposalEnvelope
+                              |
+                       人工逐编辑审阅
+                              |
+                              v
+              签名、限时、单次使用的 ReviewReceipt
+                              |
+       源文件/revision/hash/策略/风险检查 + 文档锁
+                              |
+                              v
+                   Adapter 选择的写回后端
+                              |
+                 重新读取输出 + backend.verify(...)
+                              |
+                              v
+             package | locality | semantic | compatibility
+                              |
+                              v
+                     已验证字节返回宿主
 ```
- user intent + selection
-        │
-        ▼
-┌─────────────────┐   dialect (per-format tool schema)
-│  Agent (LLM)    │◄─ skills (capability cards + playbooks)
-│  multi-step loop│◄─ read tools (sheet: read_range/aggregate · doc: read_blocks/find_text/…)
-└───────┬─────────┘
-        │ propose_changeset (the ONLY mutation exit)
-        ▼
-┌─────────────────┐
-│ ChangeSet       │  format-agnostic: anchors (quote / A1 / cell-id) + edit ops
-└───────┬─────────┘
-        │ declared check: lint / simulation / output verification
-        │   fail → structured report fed back → model repairs (propose→observe→repair, ≤2 rounds)
-        │   pass + large changeset → one final semantic self-check round
-        ▼
-┌─────────────────┐
-│ Reviewable diff │  workspace: inline tracked changes / grid replay / board highlight
-│                 │  rail: git-style unified diff, per-item accept/reject
-└───────┬─────────┘
-        │ accepted subset
-        ▼
-┌─────────────────┐
-│ Surgical commit │  OOXML / XML patch — untouched parts byte-identical
-│                 │  + fidelity report (touched parts, score)
-└─────────────────┘
-```
 
-## 包结构一览
+Runtime 永远不会把工作区中的乐观预览当作已提交文件。Commit 会从 proposal 和 receipt
+绑定的精确源字节重新开始。
+
+## 职责划分
 
 | 包 | 职责 |
 |---|---|
-| `packages/core` | 与格式无关的类型：`Anchor`、`ChangeSet`、`EditOp`、`AbstractStyle`、适配器注册表、回写契约 |
-| `packages/agent` | 意图 → 受约束的 `ChangeSet`。与提供商无关的 `ModelClient`（Claude 原生 + OpenAI 兼容 ×8）、多步循环与读取工具 |
-| `packages/skills` | 技能中枢：SKILL.md 解析、匹配、渐进式披露，内置能力卡片 + 领域剧本（playbook） |
-| `packages/runtime` | 与格式无关的无头编排器。它只通过 `AdapterRegistry` 解析一个 `HostAdapter` 来完成提案校验、预览和回写，再向 MCP、CLI、桌面端发送 JSON 事件 |
-| `packages/adapter-*` | 各格式的完整控制面：能力清单、确定性校验、可选影子预览、预期修改部件和有序回写候选。`univer` 与 `drawio` 提供无头影子；Word/PDF/PPTX 会如实声明无渲染预览 |
-| `packages/writeback-surgical` | OOXML 外科手术式回写引擎（已验证：在一个真实的 531 KB docx 上，31 个部件中 30 个字节级一致） |
-| `apps/desktop` | 座舱 UI（Vite + React + Electron）：工作区（Univer 表格、富文本 Word、drawio 画板）、审阅栏、BYOK 模型面板 |
-| `apps/mcp-server` | MCP 服务器（stdio）+ 无头 CLI + 面向座舱的 `otterpatch-serve` 本地 HTTP 桥 |
+| `packages/core` | `Anchor`、`ChangeSet`、语义校验、UUIDv7、资源预算、能力/风险模型、Adapter 与写回契约 |
+| `packages/agent` | 有界 Provider 循环、由能力生成的格式 dialect、只读工具、不可信上下文封装、Provider 控制、来源证明采集 |
+| `packages/skills` | 不可变内置能力卡、构建期生成的 playbook 清单、能力感知匹配、外部技能文本隔离 |
+| `packages/runtime` | Adapter 路由、提案检查、diff、proposal/review 签名、风险执行、按文档加锁、后端执行、强制验证 |
+| `packages/adapter-*` | 单一格式控制面：manifest、validator、proposal verifier、preview、预期部件和有序写回候选 |
+| `packages/writeback-surgical` | 带预算的 OOXML ZIP/XML 处理、目标部件补丁、字节局部性比较 |
+| `apps/mcp-server` | MCP stdio、显式确认 CLI、带鉴权的 loopback HTTP 桥 |
+| `apps/desktop` | Excel/Word/drawio 工作区、逐项审阅、浏览器开发客户端、sandboxed Electron 主进程/renderer 边界 |
 
-## 数据流细节
+## 信任边界
 
-- **上下文是一份投影，而不是文件本身。** 每个工作区为模型组装一份只读上下文：Excel 发送
-  工作表概览 + 全表快照（供读取工具使用，不进提示词）；Word 发送逐段落样式摘要 + 样式系统
-  摘要，外加全文档块快照（`ProposeRequest.doc`）供读取工具使用。待处理的修订会通过*干净投影*
-  被排除（模型始终看到"视为已接受"的文本——不存在上下文污染）。
-- **锚点是逻辑性的，而非位置性的。** Word 编辑锚定在 `quote` 上（校验其真实存在且唯一），
-  Excel 锚定在 A1 引用上，drawio 锚定在 cell id 上。文档校验器 / 网格校验器 / 拓扑校验器会
-  拒绝无法落位的锚点，模型在当轮内自行修复。
-- **桌面端乐观预览提案，但不隐式批准任何改动。** 提案呈现为可审阅的标记（修订标记 / 带有捕获前值状态的
-  网格值），每项初始状态都是未批准。拒绝时回放捕获的前值状态；接受时才物理落定，提交只接收明确接受的子集。
-- **源文件身份由密码学摘要标识，并由服务端复核。** 文件导入后对解码字节计算 SHA-256，再从摘要投影出 52 位数字
-  `baseRev`。本地服务签发 proposal 前检查这对值，并在 review 与 commit 时根据实际上传字节重算。完整摘要、
-  ChangeSet 摘要、接受子集和 reviewer nonce 都在签名链中；renderer 无法再通过回填 `baseRev` 让过期检查自动通过。
-- **服务端提交是独立的**：ChangeSet 中被接受的子集由外科手术式回写应用到上传的原始文件上——
-  应用内预览永远不会碰你的文件。
-- **桌面端凭据只留在主进程。** Preload 只暴露有界的提案、取消和审阅提交 IPC，不暴露本地
-  服务令牌或通用 fetch；每个 IPC payload 都会先做 schema 与大小校验，再由主进程添加鉴权头。
-- **格式路由只有一个所有者。** Runtime 不再维护 backend 或 verifier 格式表；内置及宿主扩展
-  Adapter 都由 `AdapterRegistry` 选择，`xlsx`、`docx`、`pptx` 等别名解析到同一份 manifest
-  和 Adapter 实现。
+### 请求与模型
+
+宿主提供文档、用户和会话身份；文件型请求还提供源 SHA-256。这些值在模型调用前准备。
+文档上下文以 `{ untrusted_data: true, kind: "document_context", content: ... }` 序列化到
+user message，绝不拼入 system prompt。只读工具结果和外部技能正文使用同样的不可信数据边界。
+
+Agent 产生的 ChangeSet 会记录 Provider、模型、Provider 响应 ID、提示策略版本、源 hash、
+父 proposal、修复次数、技能版本/checksum 和 actor 身份。模型不能填写或替换这些字段。
+Proposal 签名还会将 provenance 与可信宿主身份及源 hash 交叉校验。
+
+### Proposal 与审阅
+
+`ProposalEnvelope` 签名规范化 ChangeSet hash、document ID、格式、base revision、能力版本、
+审阅策略版本、源 hash 和过期时间。`ReviewReceipt` 签名 accepted edit ID、proposal/hash/source
+绑定、reviewer session、过期时间和 nonce。
+
+默认 commit 必须同时提供两者。Receipt 在单个 runtime 进程内只能使用一次；成功 commit 后，
+精确源文件也会被记录，防止旧源再次提交。缺失、过期、篡改、不匹配或重放都会失败关闭。
+
+### Commit
+
+Runtime 从已审阅 ChangeSet 重建接受子集，并在 write-back 阶段再次通过选中 Adapter 校验。
+随后执行上下文风险策略，按 `[documentId, format]` 串行 commit，拒绝陈旧 revision，并选择
+第一个声明能处理完整子集的后端。只有在后端开始执行前才允许 fallback；执行开始后的失败是
+终止性错误，避免部分副作用后重复回放。
+
+Commit 后，runtime 调用 `backend.verify(before, after, acceptedChangeSet)`。验证器必须把每个
+接受 edit 恰好归入 `verified`、`unverifiable` 或 `failed`。Runtime 会拒绝旧式/不完整报告、
+无效包、后端声称成功时的语义失败和意外漂移；最终回读报告会覆盖 commit 阶段的乐观报告。
+
+## Fidelity 报告
+
+旧的标量 score 不是通用质量分数，只保留为“目标外部件不变比例”的兼容别名。
+
+| 维度 | 含义 |
+|---|---|
+| `packageValid` | 输出能通过后端的包或解析器重新打开 |
+| `locality` | 预期部件、意外改动部件，以及目标外部件的字节不变比例 |
+| `semantic` | 互斥且完整的 verified、unverifiable、failed edit ID 列表 |
+| `compatibility` | 明确的后端限制与应用兼容性警告 |
+
+OOXML 和 drawio 可以给出有意义的局部性；PDF 会明确声明完整重序列化使字节局部性不可保证。
+在格式专用输出回读实现之前，Excel/PPTX 外科 OOXML 与 Word redline 写回都会保守地把已应用
+edit 标为 `unverifiable`。Excel 的审阅前 grid simulation 是有价值的提案证据，但不是对写后文件
+的回读。
+
+## Adapter 控制面
+
+`AdapterRegistry` 负责格式别名与优先级。一个 `HostAdapter` 提供：
+
+- 版本化能力清单；
+- 格式专用语义校验；
+- 当前最强的提案验证器；
+- shadow 预览或明确的 unavailable 原因；
+- 有序写回候选。
+
+同一 manifest 驱动模型 schema 暴露、proposal/review 门禁、write-back 校验、`/health` 和
+conformance test。兼容注册方法只会装饰已选择的 Adapter，不会在 runtime 建立第二份格式表。
+
+## 宿主职责
+
+Runtime 是进程内核。它返回已验证字节，但不负责原子替换用户文件，也不持久化长期审计账本。
+嵌入宿主必须：
+
+- 写入新文件，或采用原子替换策略；
+- 按文档价值保留备份；
+- 在需要跨进程重启或多节点防重放时持久化审计记录；
+- 源文件发生任何变化后重新生成 proposal。OtterPatch 会拒绝陈旧锚点，不自动 rebase。
+
+威胁模型见 [security.md](./security.md)，回归覆盖见 [testing.md](./testing.md)。

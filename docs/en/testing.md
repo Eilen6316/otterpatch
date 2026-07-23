@@ -1,80 +1,137 @@
 # Testing
 
-Four layers: package unit tests (fast, always run), headless e2e against the built cockpit
-(mocked model), live evals (real model driving the real cockpit, key-gated), and a capability
-bench (real model, scored). All test scripts live in `test/` and are committed (no more root
-`_*.mjs` scratch scripts); live evals take their API key from the `OA_EVAL_KEY` env var, the
-bench from `OTTERPATCH_BENCH_KEY`.
+The authoritative test matrix is [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
+Avoid documenting assertion counts: they change frequently and provide less signal than the behavior
+contract.
 
-## Package unit tests (`npm test -w @otterpatch/<pkg>`)
+## Local CI baseline
 
-| Package | Covers |
-|---|---|
-| `agent` | dialect construction, provider factory, message normalization, repair loop, json salvage, **doc tools** (read_blocks/find_text/outline/style-usage), **word verifier** (quote landability), **drawio verifier** (dangling edges / ghost ids) |
-| `skills` | SKILL.md parsing, matching & ranking (incl. playbook tiebreak), render/L0, `instructionsFor`, playbook content |
-| `runtime` | event stream, verifier registry wiring, **final self-check** protocol (large-changeset review round) |
-| `adapter-*`, `writeback-surgical` | compile + surgical write-back fidelity; `adapter-word` gained 7 tests: deletePara (quote / para number / self-closing empty para / empty para with pPr), image resize/remove, `w:tbl` block-order mirroring, paragraph format on an empty paragraph |
-
-Runner: `node --import tsx --test` (see each package.json). Note: package.json files must stay
-**BOM-free** — tsx's JSON reader rejects a UTF-8 BOM.
-
-## Headless e2e (`node test/<name>.mjs`)
-
-`test/harness.mjs` statically serves `apps/desktop/dist` and drives headless Chromium
-(Playwright); `/propose-stream` is intercepted with fixed SSE — no model, no key. **Build first**
-(`npm run build -w @otterpatch/desktop`).
-
-| Suite | Asserts |
-|---|---|
-| `word-agent-mock` (23) | context includes per-paragraph formatting + selection; loose-match landing; inline marks; 4-state toggle; accept-all physically clears all marks |
-| `word-review-e2e` (10) | hover-card accept flattens one change; no text vanishing in any view state; second-turn context excludes deleted text; reload mid-review keeps approvals working |
-| `word-docfmt-e2e` (10) | doc-level chips for `all=true` + page-level (two-column) changes; true before/after toggling; chip accept/reject; batch-continue button |
-| `word-autobatch-e2e` (5) | ⚡auto-continue sends "下一批" after acceptance without a click; stops when the plan stops declaring batches |
-| `excel-agent-mock` (14) | git-style diff; real grid values via the `__univerGet` hook: reject restores 120, view toggle doesn't resurrect rejected edits, accept-all re-lands them |
-| `richdoc-toolbar` (21) | ribbon commands actually mutate the document; icon de-duplication; instant tooltips |
-| `ui-smoke` (7) | app boots, grid renders, selection chip, drawio drop, zero console errors |
-
-Conventions: assert **effects, not presence** (a card that opens must also *work* when clicked —
-presence-only assertions once masked a dead accept button); read real state (computed styles, grid
-values via test hooks) rather than class names when possible.
-
-## Live evals (real model + real cockpit; needs a local serve + `OA_EVAL_KEY`)
-
-Drive the real model against a running `otterpatch-serve` (`http://localhost:4319`) and assert
-end-to-end:
-
-| npm script | Asserts |
-|---|---|
-| `eval:excel` | consulting doesn't touch the grid / totals row lands as a formula / chart overlay appears |
-| `eval:excel:sanity` | value × number-format sanity (reads proposal ops directly, e.g. percent cells must take decimals) |
-| `eval:word` | general Word capability smoke |
-| `eval:word:struct` | empty-paragraph cleanup / deletePara / image awareness / resize / remove — 13 assertions |
-| `eval:word:commit` | the hero loop: import a docx → propose → accept all → surgical write-back download → unzip and assert `w:ins`/`w:del`/paragraph-mark deletion — 10 assertions |
-
-Without `OA_EVAL_KEY` they error out (exit 2) — no accidental dry runs on a fake key.
-
-## Capability bench (`test/expert-bench.mjs`, key-gated)
-
-Runs the real model through 16 tasks (Word polish/structure/gongwen/ambiguous, Excel
-formula/anomaly/chart/ambiguous, multi-turn continue/revert scenarios, plus this week's
-`w-cleanup-empty` / `w-img-resize` / `w-img-remove` / `x-pct-mock`) and scores two layers:
-
-1. **Objective invariants** — response kind (changeset vs clarify), required tool calls
-   (`read_blocks`, `aggregate`, `load_skill`…), required op shapes (`=SUM`, `chart`), **forbidden
-   op shapes** (`opsForbid`, e.g. an image-removal task must not emit `deleteRange`), and
-   structured custom checks (`check`, e.g. "values written into a gross-margin cell must be ≤2").
-2. **LLM judge** — 1–5 rubric score per task.
-
-Results append to `test/bench-results.jsonl` for trend tracking. Without `OTTERPATCH_BENCH_KEY`
-it prints SKIP and exits 0 (CI-safe).
+Use Node.js 22. A reproducible local baseline is:
 
 ```bash
-OTTERPATCH_BENCH_KEY=sk-ant-... node test/expert-bench.mjs
-BENCH_ONLY=w-gongwen OTTERPATCH_BENCH_KEY=... node test/expert-bench.mjs   # single task
+npm ci
+npm run typecheck
+npm test
+npm run test:real-writeback
+npm run build
+npm run test:serve-security
+npm run test:ui
 ```
 
-## Acceptance telemetry (the production signal)
+`npm test` runs every workspace with a declared test script. `npm run build` builds every workspace
+and generates the static playbook manifest before compiling the skills package.
 
-The desktop counts every per-item accept/reject by format × change type
-(`localStorage['oa.telemetry']`, console: `__otterTelemetry()`). Falling acceptance in a category
-is a regression signal no offline test can give you — feed it back into playbooks and prompts.
+## Workspace tests
+
+| Area | Current contract |
+|---|---|
+| `core` | UUIDv7, strict ChangeSet semantics/provenance, resource/range limits, risk scope, capability manifests, registry and revision hashing |
+| `agent` | trusted/untrusted prompt boundary, provider response identity, dialect/capability alignment, typed read tools, independent repair budgets, retries/circuit/cancellation, reasoning suppression, Word/drawio proposal verification |
+| `skills` | generated catalog, namespace/trust/version/checksum rules, external-skill isolation, locale/matching, capability intersection, obsolete-operation regression checks |
+| `runtime` | adapter conformance, signed proposal/review binding, source/revision checks, single-use receipts, risk enforcement, document locking, fallback rules, listener isolation, structured fidelity validation |
+| format adapters | exact write-back behavior, dropped-edit honesty, anchor ambiguity, formula recalculation, XML tokenization, drawio topology, PDF field read-back, PPTX run boundaries |
+| desktop | review-state algebra, snapshot binding, browser token plumbing, IPC schema/size bounds, clean Word projection, Excel/drawio replay, commit receipt flow |
+| MCP/HTTP | document decoding limits, client abort propagation, token/origin/rate/concurrency security helpers |
+
+The runner is `node --import tsx --test`; package-specific commands use workspace names, for
+example:
+
+```bash
+npm test --workspace @otterpatch/runtime
+npm test --workspace @otterpatch/desktop
+```
+
+## Real write-back and service security
+
+`npm run test:real-writeback` creates and patches real-format fixtures for XLSX, DOCX text, DOCX
+tables, PPTX, uncompressed drawio, and PDF. It verifies the requested output and important locality
+invariants.
+
+`npm run test:serve-security` starts isolated service instances and checks generated/configured
+tokens, exact-origin CORS, anonymous/authorized behavior, review-token enforcement, proposal/source
+binding, revision spoofing, body limits, and rate limiting. It requires no provider key.
+
+Security-sensitive unit regressions additionally cover adversarial prompt text, malicious or
+oversized ChangeSets, ZIP/path/XML corpora, unsupported formula/cycle behavior, hostile skill
+metadata, receipt replay, invalid Fidelity reports, and untrusted Electron IPC payloads.
+
+## Browser behavior contract
+
+After `npm run build`, CI installs Playwright Chromium and runs these scripts against
+`apps/desktop/dist` with mocked local-service responses:
+
+```text
+ui-smoke
+drawio-review-e2e
+richdoc-toolbar
+richdoc-projection-e2e
+richdoc-editing-e2e
+richdoc-revisions-e2e
+word-agent-mock
+word-review-e2e
+word-table-e2e
+word-docfmt-e2e
+word-autobatch-e2e
+word-docx-import-e2e
+excel-agent-mock
+```
+
+They exercise effects rather than component presence: values and formulas are replayed, accepted
+Word revisions flatten, rejected changes restore before-state, table/block order survives import,
+review state persists, and no console/page errors occur. Run one directly with:
+
+```bash
+node test/word-review-e2e.mjs
+```
+
+`npm run test:ui` is the fast `ui-smoke` subset, not the complete browser matrix.
+
+## Packaged desktop smoke
+
+CI has a separate Windows and macOS job that:
+
+1. installs the Electron runtime;
+2. builds the packaged local service;
+3. creates an unpacked desktop application;
+4. launches the production app and verifies that it loaded the expected local UI.
+
+Relevant local commands:
+
+```bash
+npm run build --workspace @otterpatch/mcp-server
+npm run app:pack:dir --workspace @otterpatch/desktop
+npm run test:packaged --workspace @otterpatch/desktop
+```
+
+## Real-model checks
+
+The CI `real-model-smoke` job runs on `main` only when the repository secret
+`OtterPatch_API_KEY` exists:
+
+```bash
+OtterPatch_API_KEY=... OtterPatch_PROVIDER=claude npm run smoke
+```
+
+The capability bench is headless and appends scored results to `test/bench-results.jsonl`:
+
+```bash
+OTTERPATCH_BENCH_KEY=... node test/expert-bench.mjs
+BENCH_ONLY=w-gongwen OTTERPATCH_BENCH_KEY=... node test/expert-bench.mjs
+```
+
+It combines objective invariants with an LLM judge. Missing `OTTERPATCH_BENCH_KEY` prints `SKIP`
+and exits successfully.
+
+The `eval:*`, `excel-agent.mjs`, and `expert-eval.mjs` scripts are manual development utilities,
+not CI gates. Several UI live-eval scripts predate the current Electron/browser local-token split
+and still serve a production Vite bundle outside Electron; migrate them to an authenticated browser
+development or Electron bridge before treating their result as authoritative. Their model keys
+(`OA_EVAL_KEY` or `OTTERPATCH_TEST_KEY`) must never be committed.
+
+## Test hygiene
+
+- Keep deterministic fixtures and test scripts under `test/` or their owning package.
+- Do not use real provider keys, service tokens, review tokens, or private documents in fixtures.
+- Prefer `npm ci` in CI and when validating the lockfile.
+- Assert fail-closed behavior and returned structure, not only a happy-path UI element.
+- A test that intentionally skips must say why and use a distinct key gate.

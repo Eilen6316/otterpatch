@@ -7,5 +7,5 @@ Documentation for users, integrators and contributors — pick your language:
 | **English** | [docs/en](./en/README.md) |
 | **中文** | [docs/zh](./zh/README.md) |
 
-Each language folder contains: architecture, the agent loop, skills & playbooks, the review UX,
-testing, the capability bench log, and OOXML redline engineering notes.
+Each language folder contains: architecture, the security model, the agent loop, skills and
+playbooks, review UX, testing, the capability bench history, and Word OOXML engineering notes.

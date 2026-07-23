@@ -13,6 +13,8 @@ implementations; the text is original to this project.
 - Character format revisions `<w:rPr>+<w:rPrChange>`, paragraph format revisions
   `<w:pPr>+<w:pPrChange>`
 - Revision runs must copy the original `<w:rPr>`, or bold/size is lost after accepting
+- Generated `<w:t>` / `<w:delText>` nodes carry `xml:space="preserve"`; leading/trailing spaces
+  and escaped XML characters have regression coverage
 - Page-level sectPr patches (cols/pgMar/pgSz), inserted in OOXML element order
 - **Whole-paragraph deletion** (deleteRange → block-deletion redline): every run wrapped in
   `<w:del>`, `w:t` renamed to `w:delText`, plus an empty `<w:del/>` in the paragraph's
@@ -24,13 +26,13 @@ implementations; the text is original to this project.
   `w:p` inside tables don't — so the workspace's "第N段" lands at the same spot in document.xml;
   paragraph format revisions (pPrChange) also accept a paragraph-number anchor (formatting an
   empty paragraph works)
+- **Structured table insertion**: bounded rectangular data becomes native `w:tbl` before the final
+  `sectPr`; header rows and cell text retain revision/escaping semantics
 
 ## Backlog (uncovered, PRs welcome)
 - **Nested veto semantics**: rejecting someone else's insertion = nesting your `<w:del>` inside
   their `<w:ins>`; restoring their deletion = keep their `<w:del>` and append your `<w:ins>`
   rewriting the same text. Needed for multi-author collaboration.
-- **`xml:space="preserve"`**: required when emitting `<w:t>` with leading/trailing spaces, or the
-  spaces are silently dropped. The generation path doesn't systematically enforce it yet.
 - **`<w:pPr>` child-order schema**: pStyle → numPr → spacing → ind → jc → rPr (last); when
   pPrChange injection creates a fresh pPr, it must respect this order.
 - **Comments**: the `commentRangeStart/End` anchors are siblings of runs (direct children of
@@ -40,7 +42,13 @@ implementations; the text is original to this project.
   sectPr patches already use DXA and image resizing already uses EMU; **inserting** new images
   still needs the four-step registration (media/ + rels + Content_Types + w:drawing).
 
-## Verification idea
-- A written-back docx should pass: unzip → accept all revisions (LibreOffice headless automates
-  this) → compare equal to the "directly edited" text + no residual empty paragraphs. A stronger
-  correctness criterion than "it opens", worth putting in CI.
+## Current verification boundary
+
+Runtime reopens the result, verifies the OOXML package, checks that only intended package parts
+changed, and requires every edit to be classified. Word currently classifies successfully written
+edits as `unverifiable` because it does not yet accept all revisions and compare the resulting
+document semantics. The report says so explicitly instead of treating locality as semantic proof.
+
+A stronger future criterion remains: unzip → accept all revisions (for example with LibreOffice
+headless) → compare against the directly edited text and assert no residual empty paragraphs. That
+would turn currently unverifiable edits into verified ones.

@@ -1,77 +1,143 @@
 # Architecture
 
-OtterPatch is a **safe-commit layer** between an LLM agent and your Office documents. Think of it
-as opening a pull request against an `.xlsx` / `.docx` / `.drawio` file.
+OtterPatch is a review and commit boundary between an LLM agent and a structured document. The
+agent proposes intent-level operations; trusted code owns validation, approval, write-back, and
+verification.
 
-## Pipeline
+## End-to-end pipeline
 
+```text
+ trusted host identity + user intent          untrusted document projection
+                 |                                      |
+                 +------------------+-------------------+
+                                    v
+                         bounded Agent loop
+                 answer_user | ask_user | propose_changeset
+                                    |
+                                    v
+                       UUIDv7 ChangeSet + provenance
+                                    |
+             schema/semantic/budget/capability validation
+                                    |
+                 adapter proposal check + shadow preview
+                                    |
+                                    v
+             signed ProposalEnvelope bound to source SHA-256
+                                    |
+                         per-edit human review
+                                    |
+                                    v
+            signed, expiring, single-use ReviewReceipt
+                                    |
+      source/revision/hash/policy/risk checks + document lock
+                                    |
+                                    v
+                     adapter-selected write-back backend
+                                    |
+                   reopen output + backend.verify(...)
+                                    |
+                                    v
+         package | locality | semantic | compatibility report
+                                    |
+                                    v
+             verified bytes returned to the embedding host
 ```
- user intent + selection
-        │
-        ▼
-┌─────────────────┐   dialect (per-format tool schema)
-│  Agent (LLM)    │◄─ skills (capability cards + playbooks)
-│  multi-step loop│◄─ read tools (sheet: read_range/aggregate · doc: read_blocks/find_text/…)
-└───────┬─────────┘
-        │ propose_changeset (the ONLY mutation exit)
-        ▼
-┌─────────────────┐
-│ ChangeSet       │  format-agnostic: anchors (quote / A1 / cell-id) + edit ops
-└───────┬─────────┘
-        │ declared check: lint / simulation / output verification
-        │   fail → structured report fed back → model repairs (propose→observe→repair, ≤2 rounds)
-        │   pass + large changeset → one final semantic self-check round
-        ▼
-┌─────────────────┐
-│ Reviewable diff │  workspace: inline tracked changes / grid replay / board highlight
-│                 │  rail: git-style unified diff, per-item accept/reject
-└───────┬─────────┘
-        │ accepted subset
-        ▼
-┌─────────────────┐
-│ Surgical commit │  OOXML / XML patch — untouched parts byte-identical
-│                 │  + fidelity report (touched parts, score)
-└─────────────────┘
-```
 
-## Package map
+The runtime never treats an in-workspace preview as the committed file. Commit starts again from
+the exact source bytes bound to the proposal and receipt.
 
-| Package | Role |
+## Ownership
+
+| Package | Responsibility |
 |---|---|
-| `packages/core` | Format-agnostic types: `Anchor`, `ChangeSet`, `EditOp`, `AbstractStyle`, adapter registry, writeback contracts |
-| `packages/agent` | Intent → constrained `ChangeSet`. Provider-agnostic `ModelClient` (Claude native + OpenAI-compatible ×8), multi-step loop, and read tools |
-| `packages/skills` | Skill hub: SKILL.md parsing, matching, progressive disclosure, built-in capability cards + domain playbooks |
-| `packages/runtime` | Format-agnostic headless orchestrator. It resolves one `HostAdapter` through `AdapterRegistry` for proposal verification, preview, and writeback, then emits the JSON event stream used by MCP, CLI, and desktop |
-| `packages/adapter-*` | Per-format control planes: capability manifest, deterministic validator, optional shadow preview, touched-part description, and ordered writeback candidates. `univer` and `drawio` provide headless shadows; Word/PDF/PPTX disclose unavailable rendering explicitly |
-| `packages/writeback-surgical` | The OOXML surgical write-back engine (validated: 30/31 parts byte-identical on a real 531 KB docx) |
-| `apps/desktop` | The cockpit UI (Vite + React + Electron): workspaces (Univer sheet, rich-text Word, drawio board), review rail, BYOK model panel |
-| `apps/mcp-server` | MCP server (stdio) + headless CLI + `otterpatch-serve` local HTTP bridge for the cockpit |
+| `packages/core` | `Anchor`, `ChangeSet`, semantic validation, UUIDv7, resource limits, capability/risk models, adapter and write-back contracts |
+| `packages/agent` | bounded provider loop, format dialects generated from capabilities, read-only tools, untrusted-context envelope, provider controls, provenance capture |
+| `packages/skills` | immutable built-in capability cards, generated playbook catalog, capability-aware matching, isolated external skill text |
+| `packages/runtime` | adapter routing, proposal checks, diff construction, proposal/review signatures, risk enforcement, per-document locking, backend execution, mandatory verification |
+| `packages/adapter-*` | one format control plane: manifest, validator, proposal verifier, preview, touched-part expectations, ordered write-back candidates |
+| `packages/writeback-surgical` | budgeted OOXML ZIP/XML handling, intended-part patching, byte-locality comparison |
+| `apps/mcp-server` | MCP stdio, explicit-confirmation CLI, authenticated loopback HTTP bridge |
+| `apps/desktop` | Excel/Word/drawio workspaces, per-edit review, browser development client, sandboxed Electron main/renderer boundary |
 
-## Data flow details
+## Trust boundaries
 
-- **Context is a projection, not the file.** Each workspace assembles a read-only context for the
-  model: Excel sends a sheet overview + full-grid snapshot (for read tools, not the prompt); Word
-  sends a per-paragraph style summary + style-system digest, plus a full-document block snapshot
-  (`ProposeRequest.doc`) for the read tools. Pending tracked changes are excluded via the *clean
-  projection* (the model always sees the "as-accepted" text — no context poisoning).
-- **Anchors are logical, not positional.** Word edits anchor on `quote` (verified real & unique),
-  Excel on A1 refs, drawio on cell ids. The doc verifier / grid verifier / topology verifier reject
-  anchors that can't land, and the model repairs them in-turn.
-- **The desktop previews proposals optimistically, but approves nothing implicitly.** Reviewable
-  marks (tracked changes / grid values with captured before-state) make in-place review possible,
-  while each item starts in an unapproved state. Rejection replays the captured before-state;
-  acceptance physically finalizes, and commit receives only the explicitly accepted subset.
-- **Source identity is cryptographic and server-verified.** File import computes SHA-256 over the
-  decoded bytes and projects a 52-bit numeric `baseRev` from that digest. The local service checks
-  that pair before signing the proposal, then recomputes both from uploaded bytes at review and
-  commit. The full digest, ChangeSet hash, accepted subset, and reviewer nonce remain signed in the
-  proposal/receipt chain; the renderer cannot make a stale check pass by echoing `baseRev`.
-- **Server-side commit is independent**: the accepted subset of the ChangeSet is applied to the
-  uploaded original file by the surgical write-back — the in-app preview never touches your file.
-- **Desktop credentials stay in the main process.** The preload exposes bounded proposal,
-  cancellation, and reviewed-commit IPC methods only. It never exposes local-service tokens or a
-  generic fetch primitive; every IPC payload is schema- and size-checked before the main process
-  adds authentication headers.
-- **Format routing has one owner.** Runtime does not maintain backend or verifier maps. Built-in and
-  host-provided adapters are selected by `AdapterRegistry`; aliases such as `xlsx`, `docx`, and
-  `pptx` resolve to the same manifest and adapter implementation.
+### Request and model
+
+The host supplies document/user/session identity and, for file-backed work, the source SHA-256.
+These values are prepared before the model call. Document context is serialized as
+`{ untrusted_data: true, kind: "document_context", content: ... }` in a user message; it is never
+concatenated into the system prompt. Read-tool output and external skill bodies use the same
+untrusted-data boundary.
+
+An agent-produced ChangeSet records the provider, model, provider response ID, prompt-policy
+version, source hash, parent proposal, repair count, skill versions/checksums, and actor identity.
+The model cannot supply or replace those fields. Proposal signing cross-checks provenance against
+the trusted host identity and source hash.
+
+### Proposal and review
+
+`ProposalEnvelope` signs the canonical ChangeSet hash, document ID, format, base revision,
+capability version, review-policy version, source hash, and expiry. `ReviewReceipt` signs the
+accepted edit IDs, proposal/hash/source bindings, reviewer session, expiry, and a nonce.
+
+Commit requires both objects by default. The receipt is single-use within a runtime process, and
+the exact source is also remembered after a successful commit so a stale source cannot be committed
+again. A missing, expired, tampered, mismatched, or replayed receipt fails closed.
+
+### Commit
+
+The accepted subset is rebuilt from the reviewed ChangeSet and validated against the selected
+adapter at the write-back stage. Runtime applies contextual risk policy, serializes commits by
+`[documentId, format]`, rejects stale revisions, and chooses the first backend that declares it can
+handle the whole subset. Fallback is allowed only before a backend begins execution; execution
+failure is terminal to avoid replay after partial side effects.
+
+After commit, runtime calls `backend.verify(before, after, acceptedChangeSet)`. The verifier must
+cover every accepted edit exactly once as `verified`, `unverifiable`, or `failed`. Runtime rejects
+legacy/incomplete reports, invalid packages, semantic failure from an allegedly successful backend,
+and unexpected drift. The final read-back report replaces any optimistic commit-time report.
+
+## Fidelity report
+
+The old scalar score is not a general quality metric. It remains only as an alias for locality's
+unchanged-outside-target ratio.
+
+| Dimension | Meaning |
+|---|---|
+| `packageValid` | the output can be reopened by the backend's package/parser checks |
+| `locality` | intended parts, unexpected changed parts, and byte-identical ratio outside intended parts |
+| `semantic` | disjoint, complete lists of verified, unverifiable, and failed edit IDs |
+| `compatibility` | explicit backend limitations and application-compatibility warnings |
+
+OOXML and drawio can report meaningful locality. PDF reports that full serialization prevents a
+byte-locality guarantee. Excel/PPTX surgical OOXML and Word redline write-back conservatively mark
+applied edits `unverifiable` until format-specific output read-back exists. Excel's pre-review grid
+simulation is useful proposal evidence, but it is not a read-back of the written file.
+
+## Adapter control plane
+
+`AdapterRegistry` owns format aliases and priority. A `HostAdapter` supplies:
+
+- the versioned capability manifest;
+- format-specific semantic validation;
+- the strongest available proposal verifier;
+- a shadow preview or an explicit unavailable reason;
+- ordered write-back candidates.
+
+The same manifest controls model schema exposure, proposal/review gates, write-back validation,
+`/health`, and conformance tests. Compatibility registration methods decorate the selected adapter;
+they do not create a second format table inside runtime.
+
+## Host responsibilities
+
+Runtime is a process-local kernel. It returns verified bytes but does not atomically replace the
+user's file or persist a durable audit ledger. An embedding host must:
+
+- write to a new file or use an atomic replace strategy;
+- retain backups appropriate to the document's value;
+- persist audit records if process restarts or multi-node replay protection matter;
+- regenerate a proposal after any source change. OtterPatch rejects stale anchors rather than
+  automatically rebasing them.
+
+See [security.md](./security.md) for the threat model and [testing.md](./testing.md) for regression
+coverage.

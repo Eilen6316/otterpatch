@@ -1,5 +1,9 @@
 # Capability Bench（能力基准）— 校准记录
 
+> 本页是 2026-07-02 六轮校准的历史快照。当前 bench 已扩展为 16 项任务；权威实现与结果分别是
+> [`test/expert-bench.mjs`](../../test/expert-bench.mjs) 和
+> [`test/bench-results.jsonl`](../../test/bench-results.jsonl)。
+
 `test/expert-bench.mjs` 用真实模型跑专家任务集（8 个单轮 + 4 个多轮对话场景），两层评分：
 客观不变量（回应类型 / 必调工具 / changeset 形状，含锚点）+ LLM-judge（1-5）。
 逐轮结果追加在 `test/bench-results.jsonl`。运行方式见文件头注释（无 key 自动 SKIP，CI 安全）。

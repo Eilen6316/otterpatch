@@ -28,10 +28,10 @@ Around them:
 - **Per-change hover card** — type, old → new, ✓ accept / ✕ reject, right where you're reading.
   Keyboard: Tab to a change, Enter/Space opens the card.
 - **Gutter change bars** on any block containing a change; rail ↔ inline hover linking both ways.
-- **Doc-level chips** — `all=true` (whole-document format) and page-level changes (columns /
-  margins / orientation) have no inline anchor, so they appear as chips next to the toggle with
-  their own ✓/✕; the 原文 view truly reverts them (fonts, column count, page state) for a real
-  before/after comparison.
+- **Document-level chips** — page-level changes (columns / margins / orientation) have no inline
+  text anchor, so they appear as chips next to the toggle with their own ✓/✕. The original view
+  restores the captured page state for a real before/after comparison. Unanchored document-wide
+  character or paragraph formatting is not an Agent capability.
 
 ### Flatten-on-accept (the architectural core)
 
@@ -92,6 +92,21 @@ as caution, and each hunk displays its effective risk level.
 **Re-reviewing past turns**: on uncommitted older turns the inline ✓/✕ stays live (silent
 disposition, doesn't move the review cursor); in Excel a row locks (🔒) if a later turn touched
 the same cell, prompting you to undo the later turn first.
+
+## Commit boundary
+
+The workspace preview is not the file that reaches write-back. On import, the desktop computes a
+SHA-256 and derived revision for the exact source bytes. The proposal is signed against that source.
+When the user commits an explicitly accepted subset, the trusted client first calls `/review` with
+the source bytes, proposal, ChangeSet, and accepted edit IDs. The local review authority returns a
+signed, expiring receipt. `/commit` then starts from the original source bytes and requires the
+matching proposal and receipt.
+
+The receipt binds the accepted subset and is single-use. Changed source bytes, stale revisions,
+changed ChangeSets, an undecided review list, an empty accepted set, or receipt replay all fail
+closed. The output is downloadable only after backend read-back verification succeeds. Browser
+development supplies separate local-service and review tokens; Electron keeps both tokens in the
+main process behind narrow IPC. See [security.md](./security.md).
 
 ## Telemetry
 
