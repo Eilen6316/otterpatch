@@ -3,6 +3,14 @@
 OtterPatch 是 LLM Agent 与结构化文档之间的审阅和提交边界。Agent 只提议意图级操作；
 校验、审批、写回和验证均由可信代码负责。
 
+## 产品生命周期
+
+- Excel 和 Word 是 active、默认注册的产品格式。
+- drawio 默认注册，但只作为次要兼容集成。
+- PDF 已从仓库和依赖图中删除。
+- PPTX 的 Adapter、dialect、manifest 与单元测试以 `opt-in` / `frozen` 状态保留。宿主必须
+  导入 `pptxAdapterRegistration` 并调用 `runtime.registerAdapter(...)`；stock 宿主不会注册它。
+
 ## 端到端流水线
 
 ```text
@@ -101,23 +109,25 @@ Commit 后，runtime 调用 `backend.verify(before, after, acceptedChangeSet)`�
 | `semantic` | 互斥且完整的 verified、unverifiable、failed edit ID 列表 |
 | `compatibility` | 明确的后端限制与应用兼容性警告 |
 
-OOXML 和 drawio 可以给出有意义的局部性；PDF 会明确声明完整重序列化使字节局部性不可保证。
-在格式专用输出回读实现之前，Excel/PPTX 外科 OOXML 与 Word redline 写回都会保守地把已应用
-edit 标为 `unverifiable`。Excel 的审阅前 grid simulation 是有价值的提案证据，但不是对写后文件
-的回读。
+OOXML 和 drawio 可以给出有意义的局部性。在格式专用输出回读实现之前，Excel 与 Word 会
+保守地把已应用 edit 标为 `unverifiable`。Excel 的审阅前 grid simulation 是有价值的提案证据，
+但不是对写后文件的回读。冻结的 opt-in PPTX Adapter 保留同样的保守语义状态，但不在默认
+产品路径中。
 
 ## Adapter 控制面
 
 `AdapterRegistry` 负责格式别名与优先级。一个 `HostAdapter` 提供：
 
 - 版本化能力清单；
+- 默认/opt-in availability 与 active/frozen lifecycle；
 - 格式专用语义校验；
 - 当前最强的提案验证器；
 - shadow 预览或明确的 unavailable 原因；
 - 有序写回候选。
 
-同一 manifest 驱动模型 schema 暴露、proposal/review 门禁、write-back 校验、`/health` 和
-conformance test。兼容注册方法只会装饰已选择的 Adapter，不会在 runtime 建立第二份格式表。
+同一 `capabilities-v2` manifest 驱动模型 schema 暴露、proposal/review 门禁、write-back 校验、
+`/health` 和 conformance test。Stock registry 只包含 availability 为 default 的 manifest。
+兼容注册方法只会装饰已选择的 Adapter，不会在 runtime 建立第二份格式表。
 
 ## 宿主职责
 

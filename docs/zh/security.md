@@ -45,6 +45,8 @@ OtterPatch 保护源文档字节、审阅决定、Provider 凭据和写入修改
 
 ### Runtime 与写回
 
+- `capabilities-v2` 将每个已知格式标为 default/opt-in 与 active/frozen。Stock Adapter registry、
+  宿主 schema、`/health`、桌面格式选择器和默认技能库只暴露 default 格式。
 - 能力和语义校验在审阅前以及 write-back 前各执行一次。
 - 范围感知风险策略由 runtime 强制执行，而不只是 UI 展示。
 - 同一 `[documentId, format]` 的 commit 串行执行。
@@ -78,8 +80,8 @@ OtterPatch 保护源文档字节、审阅决定、Provider 凭据和写入修改
   authority 与持久化 replay/audit store。
 - Runtime 只返回字节；宿主负责原子文件替换、备份、访问控制和长期审计保存。
 - OtterPatch 会拒绝陈旧 proposal，不会自动把 edit rebase 到已变化的文件。
-- Excel、Word、PPTX 当前能做包和局部性验证，但写回后会保守地把已应用 edit 标为语义
-  不可验证；PDF 验证也明确不完整。
+- Excel 和 Word 当前能做包和局部性验证，但写回后会保守地把已应用 edit 标为语义不可验证。
+  冻结的 opt-in PPTX Adapter 也有同样限制，但不在 stock 产品入口中；PDF 支持已完全删除。
 - Stock MCP stdio server 没有签发 review receipt 的工具。默认已审阅 commit 需要共享 runtime
   review authority 的进程内嵌入；当前内置完整审阅路径是 HTTP/Electron。
   `OTTERPATCH_ALLOW_UNREVIEWED_COMMIT=1` 会削弱该边界。

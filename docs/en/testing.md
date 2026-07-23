@@ -29,7 +29,7 @@ and generates the static playbook manifest before compiling the skills package.
 | `agent` | trusted/untrusted prompt boundary, provider response identity, dialect/capability alignment, typed read tools, independent repair budgets, retries/circuit/cancellation, reasoning suppression, Word/drawio proposal verification |
 | `skills` | generated catalog, namespace/trust/version/checksum rules, external-skill isolation, locale/matching, capability intersection, obsolete-operation regression checks |
 | `runtime` | adapter conformance, signed proposal/review binding, source/revision checks, single-use receipts, risk enforcement, document locking, fallback rules, listener isolation, structured fidelity validation |
-| format adapters | exact write-back behavior, dropped-edit honesty, anchor ambiguity, formula recalculation, XML tokenization, drawio topology, PDF field read-back, PPTX run boundaries |
+| format adapters | exact Excel/Word/drawio write-back, dropped-edit honesty, anchor ambiguity, formula recalculation, XML tokenization, and drawio topology; the retained frozen PPTX path is separately tested for run boundaries and explicit opt-in registration |
 | desktop | review-state algebra, snapshot binding, browser token plumbing, IPC schema/size bounds, clean Word projection, Excel/drawio replay, commit receipt flow |
 | MCP/HTTP | document decoding limits, client abort propagation, token/origin/rate/concurrency security helpers |
 
@@ -43,9 +43,10 @@ npm test --workspace @otterpatch/desktop
 
 ## Real write-back and service security
 
-`npm run test:real-writeback` creates and patches real-format fixtures for XLSX, DOCX text, DOCX
-tables, PPTX, uncompressed drawio, and PDF. It verifies the requested output and important locality
-invariants.
+`npm run test:real-writeback` creates and patches default-format fixtures for XLSX, DOCX text, DOCX
+tables, and uncompressed drawio. It verifies the requested output and important locality invariants.
+PPTX write-back remains covered by `@otterpatch/adapter-pptx` unit tests but is intentionally absent
+from this stock-runtime integration test. PDF has no tests because support was removed.
 
 `npm run test:serve-security` starts isolated service instances and checks generated/configured
 tokens, exact-origin CORS, anonymous/authorized behavior, review-token enforcement, proposal/source
@@ -76,7 +77,8 @@ word-docx-import-e2e
 excel-agent-mock
 ```
 
-They exercise effects rather than component presence: values and formulas are replayed, accepted
+They exercise effects rather than component presence: the format picker excludes frozen/removed
+formats, values and formulas are replayed, accepted
 Word revisions flatten, rejected changes restore before-state, table/block order survives import,
 review state persists, and no console/page errors occur. Run one directly with:
 

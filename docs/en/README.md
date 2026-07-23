@@ -4,6 +4,10 @@ These documents describe the current `main` implementation for contributors and 
 Capability claims come from the versioned manifest; security claims identify both enforced controls
 and host responsibilities.
 
+The current product mainline is Excel and Word. drawio is retained as a secondary compatibility
+integration. PDF has been removed. PPTX is frozen and opt-in, and is not exposed by stock runtime,
+desktop, MCP, HTTP, or CLI surfaces.
+
 | Document | Contents |
 |---|---|
 | [architecture.md](./architecture.md) | trust-aware propose, review, commit, and verification pipeline; package ownership; host responsibilities |
@@ -20,7 +24,7 @@ and host responsibilities.
 1. **One mutation exit:** model-driven document changes are structured ChangeSets.
 2. **Untrusted data stays data:** document and external-skill content never gains system authority.
 3. **Capabilities fail closed:** the same manifest constrains proposal, preview, verification, and
-   write-back.
+   write-back; its availability/lifecycle fields also constrain stock format exposure.
 4. **Identity is bound:** agent provenance, source SHA-256, derived revision, ChangeSet hash,
    policy, and format remain linked through proposal and receipt.
 5. **Approval is explicit:** every committed edit ID comes from a signed, expiring review receipt

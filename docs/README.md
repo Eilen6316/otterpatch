@@ -9,3 +9,6 @@ Documentation for users, integrators and contributors — pick your language:
 
 Each language folder contains: architecture, the security model, the agent loop, skills and
 playbooks, review UX, testing, the capability bench history, and Word OOXML engineering notes.
+
+Current product scope: Excel and Word are the mainline; drawio is a secondary compatibility
+integration; PDF has been removed; PPTX is frozen and available only to explicit adapter hosts.

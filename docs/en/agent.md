@@ -74,9 +74,10 @@ block boundaries and image metadata. Tool result size and source range are bound
 
 ## Capability-driven proposal construction
 
-Each format dialect is built around the same versioned manifest used by runtime. Only operations
-with current proposal and write-back support appear in the model schema. The dialect builder then
-creates anchors and operations, attaches trusted provenance, and immediately runs `assertChangeSet`.
+Each format dialect is built around the same `capabilities-v2` manifest used by runtime. Only
+operations with current proposal and write-back support appear in the model schema, and stock hosts
+instantiate only default/active adapters. The dialect builder then creates anchors and operations,
+attaches trusted provenance, and immediately runs `assertChangeSet`.
 
 Agent provenance includes provider/model identity, the actual provider response ID, source hash,
 prompt-policy version, parent proposal, repair attempt, loaded skill versions/checksums, session,
@@ -92,8 +93,10 @@ The selected `HostAdapter` supplies the strongest deterministic proposal verifie
 | Excel | expands supported ranges into an isolated grid shadow, applies values/formulas/styles/clear, and recalculates the supported formula subset; unknown functions, cycles, incomplete observations, conflicts, and out-of-snapshot targets fail closed |
 | Word | requires a real unique quote or a valid structured paragraph anchor; when both are present the paragraph constrains the quote |
 | drawio | replays board edits and rejects duplicate IDs, missing parents, parent cycles, self references, and dangling edges |
-| PowerPoint | resolves target text against exact slide, paragraph, and run boundaries; missing, duplicate, or cross-run targets fail |
-| PDF | capability/payload validation only; no model-facing semantic proposal verifier is advertised |
+
+The Agent package retains the frozen PPTX dialect and exact slide/paragraph/run verifier for hosts
+that explicitly register `pptxAdapterRegistration`. It is not reachable through the stock runtime,
+MCP, HTTP, CLI, or desktop. PDF has no dialect because support was removed.
 
 A deterministic failure returns a structured code/report to the model within the same turn. Runtime
 allows at most two proposal repairs in its built-in path.

@@ -28,7 +28,7 @@ npm run test:ui
 | `agent` | 可信/不可信 prompt 边界、Provider 响应身份、dialect/能力一致、类型化只读工具、独立修复预算、重试/熔断/取消、reasoning 抑制、Word/drawio 提案验证 |
 | `skills` | 生成目录、namespace/trust/version/checksum 规则、外部技能隔离、locale/匹配、能力交集、陈旧操作声明回归 |
 | `runtime` | Adapter conformance、签名 proposal/review 绑定、源/revision 检查、单次 receipt、风险执行、文档锁、fallback 规则、listener 隔离、结构化 Fidelity 校验 |
-| 各格式 Adapter | 精确写回、dropped-edit 诚实性、锚点歧义、公式重算、XML tokenizer、drawio 拓扑、PDF 字段回读、PPTX run 边界 |
+| 各格式 Adapter | Excel/Word/drawio 精确写回、dropped-edit 诚实性、锚点歧义、公式重算、XML tokenizer 与 drawio 拓扑；冻结保留的 PPTX 路径单独测试 run 边界和显式 opt-in 注册 |
 | desktop | 审阅状态代数、snapshot 绑定、浏览器令牌接线、IPC schema/大小边界、干净 Word 投影、Excel/drawio 回放、commit receipt 流程 |
 | MCP/HTTP | 文档解码限制、客户端断连传播、token/origin/rate/concurrency 安全 helper |
 
@@ -41,8 +41,10 @@ npm test --workspace @otterpatch/desktop
 
 ## 真实写回与服务安全
 
-`npm run test:real-writeback` 会创建并修改 XLSX、DOCX 文本、DOCX 表格、PPTX、未压缩 drawio
-和 PDF 真实格式 fixture，验证请求结果与关键局部性不变量。
+`npm run test:real-writeback` 会创建并修改默认格式的 XLSX、DOCX 文本、DOCX 表格和未压缩
+drawio fixture，验证请求结果与关键局部性不变量。PPTX 写回仍由
+`@otterpatch/adapter-pptx` 单元测试覆盖，但有意不进入 stock runtime 集成测试。PDF 支持已删除，
+因此不再有相关测试。
 
 `npm run test:serve-security` 启动隔离服务实例，检查自动/固定 token、精确 Origin CORS、匿名/
 授权行为、review token、proposal/source 绑定、revision 欺骗、body 上限和 rate limit。无需 Provider Key。
@@ -71,7 +73,8 @@ word-docx-import-e2e
 excel-agent-mock
 ```
 
-这些测试断言实际效果，而不是组件存在性：值/公式能回放、接受的 Word 修订会压平、拒绝会恢复
+这些测试断言实际效果，而不是组件存在性：格式选择器不会显示冻结/已删除格式，值/公式能回放、
+接受的 Word 修订会压平、拒绝会恢复
 before-state、table/block 顺序在导入后保持、审阅状态可持久化，并且没有 console/page error。
 直接运行单项：
 

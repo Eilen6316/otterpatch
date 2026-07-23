@@ -51,6 +51,9 @@ the embedding host's review authority.
 
 ### Runtime and write-back
 
+- `capabilities-v2` marks each known format as default/opt-in and active/frozen. The stock adapter
+  registry, host schemas, `/health`, desktop picker, and default skill library expose only default
+  formats.
 - Capability and semantic validation run before review and again before write-back.
 - Scope-aware risk policy is enforced by runtime, not just displayed by the UI.
 - Commits for one `[documentId, format]` are serialized.
@@ -89,9 +92,9 @@ the embedding host's review authority.
 - Runtime returns bytes. The host owns atomic file replacement, backups, access control, and durable
   audit retention.
 - OtterPatch rejects stale proposals; it does not automatically rebase edits onto a changed file.
-- Excel, Word, and PPTX currently provide package/locality verification but conservatively report
-  applied edits as semantically unverifiable after write-back. PDF verification is intentionally
-  incomplete.
+- Excel and Word currently provide package/locality verification but conservatively report applied
+  edits as semantically unverifiable after write-back. The frozen opt-in PPTX adapter has the same
+  limitation but is absent from stock product surfaces. PDF support has been removed entirely.
 - The stock MCP stdio server has no review-receipt minting tool. The default reviewed commit needs
   an in-process embedding that shares the runtime's review authority; the built-in end-to-end
   reviewed path is HTTP/Electron. `OTTERPATCH_ALLOW_UNREVIEWED_COMMIT=1` weakens that boundary.

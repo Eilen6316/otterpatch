@@ -4,6 +4,14 @@ OtterPatch is a review and commit boundary between an LLM agent and a structured
 agent proposes intent-level operations; trusted code owns validation, approval, write-back, and
 verification.
 
+## Product lifecycle
+
+- Excel and Word are active, default-registered product formats.
+- drawio is default-registered only as a secondary compatibility integration.
+- PDF has been removed from the repository and dependency graph.
+- PPTX retains its adapter, dialect, manifest, and unit tests as `opt-in` / `frozen`. A host must
+  import `pptxAdapterRegistration` and call `runtime.registerAdapter(...)`; stock hosts never do.
+
 ## End-to-end pipeline
 
 ```text
@@ -109,24 +117,26 @@ unchanged-outside-target ratio.
 | `semantic` | disjoint, complete lists of verified, unverifiable, and failed edit IDs |
 | `compatibility` | explicit backend limitations and application-compatibility warnings |
 
-OOXML and drawio can report meaningful locality. PDF reports that full serialization prevents a
-byte-locality guarantee. Excel/PPTX surgical OOXML and Word redline write-back conservatively mark
-applied edits `unverifiable` until format-specific output read-back exists. Excel's pre-review grid
-simulation is useful proposal evidence, but it is not a read-back of the written file.
+OOXML and drawio can report meaningful locality. Excel and Word conservatively mark applied edits
+`unverifiable` until format-specific output read-back exists. Excel's pre-review grid simulation is
+useful proposal evidence, but it is not a read-back of the written file. The frozen opt-in PPTX
+adapter retains the same conservative semantic status but is outside the default product path.
 
 ## Adapter control plane
 
 `AdapterRegistry` owns format aliases and priority. A `HostAdapter` supplies:
 
 - the versioned capability manifest;
+- its default/opt-in availability and active/frozen lifecycle;
 - format-specific semantic validation;
 - the strongest available proposal verifier;
 - a shadow preview or an explicit unavailable reason;
 - ordered write-back candidates.
 
-The same manifest controls model schema exposure, proposal/review gates, write-back validation,
-`/health`, and conformance tests. Compatibility registration methods decorate the selected adapter;
-they do not create a second format table inside runtime.
+The same `capabilities-v2` manifest controls model schema exposure, proposal/review gates,
+write-back validation, `/health`, and conformance tests. The stock registry contains only manifests
+with default availability. Compatibility registration methods decorate the selected adapter; they
+do not create a second format table inside runtime.
 
 ## Host responsibilities
 

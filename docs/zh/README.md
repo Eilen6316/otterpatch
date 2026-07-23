@@ -3,6 +3,9 @@
 这些文档描述当前 `main` 实现，面向贡献者与集成者。能力声明以版本化 manifest 为准；
 安全声明同时列出已执行控制与宿主职责。
 
+当前产品主线是 Excel 和 Word；drawio 作为次要兼容集成保留；PDF 已删除；PPTX 已冻结为
+opt-in，stock runtime、桌面端、MCP、HTTP 和 CLI 均不暴露它。
+
 | 文档 | 内容 |
 |---|---|
 | [architecture.md](./architecture.md) | 带信任边界的 propose、review、commit、verification 流水线；包职责；宿主职责 |
@@ -18,7 +21,8 @@
 
 1. **单一变更出口：** 模型驱动的文档修改必须成为结构化 ChangeSet。
 2. **不可信数据始终是数据：** 文档和外部技能内容永远不能获得 system 权限。
-3. **能力失败关闭：** 同一 manifest 约束 propose、preview、verify 和 write-back。
+3. **能力失败关闭：** 同一 manifest 约束 propose、preview、verify 和 write-back，其
+   availability/lifecycle 字段同时约束 stock 格式暴露。
 4. **身份保持绑定：** Agent provenance、源 SHA-256、派生 revision、ChangeSet hash、策略与格式
    通过 proposal/receipt 全链路绑定。
 5. **审批必须显式：** 默认情况下，每个提交 edit ID 都来自签名且会过期的 review receipt。

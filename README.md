@@ -11,6 +11,11 @@
 > but format support is intentionally narrow and the API may still change. Keep a backup of any
 > important document and check the capability table before relying on a workflow.
 
+**Product scope:** Excel and Word are the active product mainline. drawio remains a secondary
+compatibility integration and is not a feature-expansion target. PDF support has been removed.
+The retained PPTX adapter is frozen and explicit opt-in only; stock runtime, desktop, MCP, HTTP,
+and CLI surfaces do not expose it.
+
 ## What OtterPatch does
 
 An agent never receives a general-purpose file mutation tool. It may answer, ask for clarification,
@@ -24,22 +29,25 @@ or propose one structured `ChangeSet`. OtterPatch then:
 6. serializes writes per document, applies the selected backend, reopens the output, and requires a
    structured verification report before returning bytes to the host.
 
-For OOXML and uncompressed drawio, surgical write-back changes only intended package parts or
-diagrams. On a 531 KB `.docx` fixture, 30 of 31 package parts remained byte-identical. PDF is a
-documented exception: `pdf-lib` performs a full serialization, so byte locality is not guaranteed.
+For the active OOXML writers and uncompressed drawio, surgical write-back changes only intended
+package parts or diagrams. On a 531 KB `.docx` fixture, 30 of 31 package parts remained
+byte-identical.
 
 ## Supported scope
 
-The versioned capability manifest in [`packages/core/src/capabilities.ts`](./packages/core/src/capabilities.ts)
-is the source of truth for proposal, preview, verification, and write-back gates.
+The `capabilities-v2` manifest in [`packages/core/src/capabilities.ts`](./packages/core/src/capabilities.ts)
+is the source of truth for availability, lifecycle, proposal, preview, verification, and
+write-back gates.
 
-| Format | Current write-back operations | Proposal preview/check | Important boundary |
-|---|---|---|---|
-| Excel (`xlsx`) | value, formula, style, number format, clear range | headless grid shadow and deterministic simulation | supported formula subset only; unknown functions, cycles, missing observations, and oversized ranges fail closed; output edit-level read-back is `unverifiable` |
-| Word (`docx`) | anchored text replacement/deletion, scoped character and paragraph style, page columns/margins/orientation, image remove/resize, table insertion | unique quote/paragraph anchor checks; rich preview is rendered by the desktop host | writes native revisions in `word/document.xml`; generic edit-level output read-back is reported as `unverifiable` |
-| drawio | label/property updates, move, add, delete | headless board replay and topology verification | only uncompressed diagrams; identity/topology fields are constrained |
-| PDF | AcroForm text-field fill | target-field read-back plus page/metadata/non-target-field checks | experimental; signed PDFs rejected; byte locality and full PDF/A/appearance verification are not guaranteed |
-| PowerPoint (`pptx`) | text replacement | exact slide/paragraph/run boundary check | target text must be unique and contained in one text run; edit-level output read-back is currently `unverifiable` |
+| Format | Availability | Current write-back operations | Proposal preview/check | Important boundary |
+|---|---|---|---|---|
+| Excel (`xlsx`) | mainline, default | value, formula, style, number format, clear range | headless grid shadow and deterministic simulation | supported formula subset only; unknown functions, cycles, missing observations, and oversized ranges fail closed; output edit-level read-back is `unverifiable` |
+| Word (`docx`) | mainline, default | anchored text replacement/deletion, scoped character and paragraph style, page columns/margins/orientation, image remove/resize, table insertion | unique quote/paragraph anchor checks; rich preview is rendered by the desktop host | writes native revisions in `word/document.xml`; generic edit-level output read-back is reported as `unverifiable` |
+| drawio | secondary compatibility, default | label/property updates, move, add, delete | headless board replay and topology verification | only uncompressed diagrams; identity/topology fields are constrained; no planned feature expansion |
+| PowerPoint (`pptx`) | frozen, opt-in | unique single-run text replacement | exact slide/paragraph/run boundary check | retained for explicit host registration only; absent from every stock product surface |
+
+PDF is unsupported and no longer exists as an adapter, dependency, Agent dialect, skill, schema, or
+write-back test. It is not an experimental product option.
 
 Unsupported operations are hidden from the model and rejected again at runtime. A host cannot make
 them available by constructing a plausible-looking ChangeSet.
@@ -101,7 +109,8 @@ the sandboxed renderer receives only bounded propose, cancel, and reviewed-commi
 ## Integrate
 
 `apps/mcp-server` exposes the same runtime through MCP stdio, a headless CLI, and the local HTTP
-bridge.
+bridge. These stock surfaces accept only Excel, Word, and drawio formats (including `xlsx`/`docx`
+aliases).
 
 ```text
 otterpatch_skills   list immutable built-in skill metadata
@@ -165,8 +174,7 @@ packages/skills/              immutable built-ins, generated playbooks, external
 packages/adapter-univer/      Excel shadow, verifier, and worksheet compiler
 packages/adapter-word/        Word anchors, native redlines, style/page/table/image write-back
 packages/adapter-drawio/      mxCell model, topology verifier, diagram write-back
-packages/adapter-pdf/         experimental AcroForm text-field writer
-packages/adapter-pptx/        constrained single-run slide-text writer
+packages/adapter-pptx/        frozen opt-in single-run slide-text writer (not stock-registered)
 packages/writeback-surgical/  budgeted OOXML read/repack and locality verification
 packages/runtime/             adapter-owned propose/diff/review/commit orchestration
 apps/mcp-server/              MCP, CLI, and authenticated loopback HTTP service

@@ -8,14 +8,15 @@ matrix is documented in [`docs/en/testing.md`](../docs/en/testing.md) and
 ## Deterministic commands
 
 ```bash
-npm run test:real-writeback     # xlsx/docx/docx-table/pptx/drawio/pdf
+npm run test:real-writeback     # default runtime: xlsx/docx/docx-table/drawio
 npm run test:serve-security     # local auth, review authority, binding, limits
 npm run build                   # required before Playwright scripts
 npm run test:ui                 # quick UI smoke
 node test/word-review-e2e.mjs   # run one browser suite directly
 ```
 
-CI runs 13 browser scripts listed in `.github/workflows/ci.yml`; `test:ui` is only the fast subset.
+CI runs 13 browser scripts listed in `.github/workflows/ci.yml`; `test:ui` is only the fast subset
+and also asserts that the stock format picker exposes Excel, Word, and drawio only.
 `harness.mjs` statically serves `apps/desktop/dist` and starts Playwright Chromium. Most deterministic
 browser suites mock the local-service response and require no model key.
 

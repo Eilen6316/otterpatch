@@ -69,9 +69,9 @@ user message 中：
 
 ## 能力驱动的提案构造
 
-每种格式 dialect 都围绕 runtime 使用的同一份版本化 manifest 构建。只有当前同时支持 propose
-和 write-back 的操作才进入模型 schema。Dialect builder 随后创建锚点/操作、附加可信 provenance，
-并立即执行 `assertChangeSet`。
+每种格式 dialect 都围绕 runtime 使用的同一份 `capabilities-v2` manifest 构建。只有当前同时
+支持 propose 和 write-back 的操作才进入模型 schema，stock 宿主也只实例化 default/active
+Adapter。Dialect builder 随后创建锚点/操作、附加可信 provenance，并立即执行 `assertChangeSet`。
 
 Agent provenance 包括 Provider/模型身份、真实 Provider 响应 ID、源 hash、提示策略版本、父
 proposal、修复次数、已加载技能版本/checksum、session、user 和 document identity。ChangeSet ID
@@ -86,8 +86,10 @@ proposal、修复次数、已加载技能版本/checksum、session、user 和 do
 | Excel | 将受支持范围展开到隔离 grid shadow，应用值/公式/样式/清空，再重算已支持公式子集；未知函数、循环、观测不完整、冲突和快照越界均失败关闭 |
 | Word | 要求真实唯一 quote，或结构化快照中有效的段号锚点；两者同时存在时，段号约束 quote |
 | drawio | 重放画板编辑，拒绝重复 ID、缺失 parent、parent 循环、自引用和悬空边 |
-| PowerPoint | 按精确 slide、paragraph、run 边界解析文本；缺失、重复或跨 run 目标均失败 |
-| PDF | 只有能力/payload 校验；不宣称存在面向模型的语义提案验证器 |
+
+Agent 包仍为显式注册 `pptxAdapterRegistration` 的宿主保留冻结的 PPTX dialect 与精确
+slide/paragraph/run 验证器；stock runtime、MCP、HTTP、CLI 和桌面端均无法到达它。PDF 支持
+已删除，因此不再有 dialect。
 
 确定性失败会在同一回合以结构化 code/report 返回模型。Runtime 内置路径最多允许两次提案修复。
 

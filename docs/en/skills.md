@@ -10,10 +10,10 @@ The default library contains two forms of immutable built-in content:
 
 | Kind | Purpose | System-prompt exposure |
 |---|---|---|
-| capability card | concise, format-level description for `xlsx`, `docx`, `pptx`, `pdf`, and `drawio` | trusted checksummed metadata only: ID, version, checksum, locale, description, compatible operations |
+| capability card | concise, format-level description for default `xlsx`, `docx`, and `drawio` support | trusted checksummed metadata only: ID, version, checksum, locale, description, compatible operations |
 | playbook | task-specific checklist and operation idioms | only its trusted L0 metadata; full instructions load on demand as untrusted tool data |
 
-The seven current playbooks are:
+The six default playbooks are:
 
 | Playbook | Scope |
 |---|---|
@@ -23,7 +23,10 @@ The seven current playbooks are:
 | `xlsx-financial` | reconciliation, formulas, money/percent formats, and read-before-write checks |
 | `xlsx-authoring` | spreadsheet modeling and presentation rules within current cell operations |
 | `chart-selection` | advisory chart-choice rules; `allowed_ops` is empty because chart write-back is unsupported |
-| `pptx-design` | presentation advice plus the current single-run text-replacement boundary |
+
+The generator still preserves the seventh source, `pptx-design`, plus a PPTX capability card. They
+are exported only through `PPTX_OPT_IN_SKILLS` for explicit frozen-adapter hosts and are absent from
+`defaultLibrary()`, MCP skill listing, and stock Agent prompts. PDF has no retained skill metadata.
 
 Each source lives at `packages/skills/skills/<name>/SKILL.md`. A build-time generator produces
 `packages/skills/src/playbooks.generated.ts`; importing the package performs no filesystem I/O.
@@ -90,4 +93,5 @@ or other expert advice when no corresponding write-back operation exists.
 - Include explicit anti-patterns and fail-closed behavior.
 - Keep metadata versioned and locale-specific; bump the version when behavior changes.
 - Run `npm test --workspace @otterpatch/skills` after editing. Tests ensure every built-in stays
-  checksummed, namespaced, capability-bounded, and free of obsolete operation claims.
+  checksummed, namespaced, capability-bounded, and free of obsolete operation claims; they also
+  verify that frozen PPTX metadata never leaks into the default library.

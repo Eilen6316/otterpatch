@@ -9,10 +9,10 @@
 
 | 类型 | 用途 | System prompt 暴露内容 |
 |---|---|---|
-| 能力卡 | `xlsx`、`docx`、`pptx`、`pdf`、`drawio` 的简要格式能力说明 | 仅可信且有 checksum 的元数据：ID、version、checksum、locale、description、兼容操作 |
+| 能力卡 | 默认 `xlsx`、`docx`、`drawio` 支持的简要格式能力说明 | 仅可信且有 checksum 的元数据：ID、version、checksum、locale、description、兼容操作 |
 | Playbook | 任务专用检查清单和操作惯用法 | 只暴露可信 L0 元数据；完整正文按需以不可信工具数据加载 |
 
-当前 7 份 playbook：
+默认加载 6 份 playbook：
 
 | Playbook | 范围 |
 |---|---|
@@ -22,7 +22,10 @@
 | `xlsx-financial` | 勾稽关系、公式、金额/百分比格式和先读后写检查 |
 | `xlsx-authoring` | 当前单元格操作范围内的表格建模与呈现规则 |
 | `chart-selection` | 图表选择建议；因图表写回不支持，`allowed_ops` 为空 |
-| `pptx-design` | 演示设计建议，以及当前单 run 文本替换边界 |
+
+生成器仍保留第 7 份源 `pptx-design` 和 PPTX 能力卡，但它们只通过 `PPTX_OPT_IN_SKILLS`
+导出给显式启用冻结 Adapter 的宿主，不进入 `defaultLibrary()`、MCP 技能列表或 stock Agent
+prompt。PDF 不再保留任何技能元数据。
 
 源文件位于 `packages/skills/skills/<name>/SKILL.md`。构建期生成器产出
 `packages/skills/src/playbooks.generated.ts`；运行时 import 不执行文件系统 I/O。
@@ -84,4 +87,4 @@ library.install(skillMdText, 'file:./skills/my-company-report/SKILL.md');
 - 写出反模式与失败关闭行为。
 - 元数据保持 versioned 和 locale-specific；行为变化时提升 version。
 - 修改后运行 `npm test --workspace @otterpatch/skills`。测试会确保所有内置技能都有 checksum、
-  namespace、能力边界，并不包含陈旧操作声明。
+  namespace、能力边界，并不包含陈旧操作声明；同时验证冻结的 PPTX 元数据不会泄漏进默认库。

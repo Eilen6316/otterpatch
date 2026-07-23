@@ -8,6 +8,10 @@
 > **开发预览版（`0.0.1`）。** 下文描述的安全边界已经由代码强制执行，但格式能力仍然
 > 有意保持收敛，API 也可能变化。处理重要文档时请保留备份，并先查看能力表。
 
+**产品范围：** Excel 和 Word 是当前产品主线；drawio 只作为次要兼容集成保留，不再扩展。
+PDF 支持已经删除。PPTX 适配器仅冻结保留并要求显式 opt-in；stock runtime、桌面端、MCP、
+HTTP 和 CLI 均不暴露 PPTX。
+
 ## OtterPatch 做什么
 
 Agent 不会获得一个通用的文件修改工具。它只能回答、请求澄清，或提议一份结构化的
@@ -20,22 +24,24 @@ Agent 不会获得一个通用的文件修改工具。它只能回答、请求�
 5. 只提交签名、限时、单次使用的 review receipt 中列出的 edit ID；
 6. 按文档串行写入，执行选定后端，重新读取输出，并要求结构化验证报告后才把字节交还宿主。
 
-对于 OOXML 和未压缩 drawio，外科式写回只修改预期部件或 diagram。在一个 531 KB 的
-`.docx` 样本上，31 个包部件中有 30 个保持逐字节一致。PDF 是明确的例外：`pdf-lib`
-会完整重序列化文件，因此不保证字节局部性。
+对于当前启用的 OOXML 写回与未压缩 drawio，外科式写回只修改预期部件或 diagram。在一个
+531 KB 的 `.docx` 样本上，31 个包部件中有 30 个保持逐字节一致。
 
 ## 当前支持范围
 
-[`packages/core/src/capabilities.ts`](./packages/core/src/capabilities.ts) 中的版本化能力清单，
-是 propose、preview、verify 和 write-back 门禁的唯一事实来源。
+[`packages/core/src/capabilities.ts`](./packages/core/src/capabilities.ts) 中的
+`capabilities-v2` 清单，是 availability、lifecycle、propose、preview、verify 和 write-back
+门禁的唯一事实来源。
 
-| 格式 | 当前写回操作 | 提案预览/检查 | 关键边界 |
-|---|---|---|---|
-| Excel（`xlsx`） | 值、公式、样式、数字格式、清空范围 | 无头网格 shadow + 确定性模拟 | 只支持已实现的公式子集；未知函数、循环、缺失观测和超大范围均失败关闭；写后逐 edit 回读为 `unverifiable` |
-| Word（`docx`） | 锚定文本替换/删除、局部字符与段落样式、页面分栏/边距/方向、图片删除/缩放、插表 | 唯一引文/段号锚点检查；富预览由桌面宿主渲染 | 在 `word/document.xml` 中写原生修订；通用逐编辑输出回读会如实标为 `unverifiable` |
-| drawio | 标签/属性更新、移动、新增、删除 | 无头画板重放 + 拓扑验证 | 仅支持未压缩 diagram；身份与拓扑字段受约束 |
-| PDF | AcroForm 文本字段填写 | 目标字段回读 + 页数/元数据/非目标字段检查 | 实验性；拒绝签名 PDF；不保证字节局部性，也不完整验证 PDF/A 和 appearance stream |
-| PowerPoint（`pptx`） | 文本替换 | 精确到 slide/paragraph/run 的边界检查 | 目标文本必须唯一且完整位于单个文本 run；逐编辑输出回读目前标为 `unverifiable` |
+| 格式 | 可用性 | 当前写回操作 | 提案预览/检查 | 关键边界 |
+|---|---|---|---|---|
+| Excel（`xlsx`） | 主线、默认启用 | 值、公式、样式、数字格式、清空范围 | 无头网格 shadow + 确定性模拟 | 只支持已实现的公式子集；未知函数、循环、缺失观测和超大范围均失败关闭；写后逐 edit 回读为 `unverifiable` |
+| Word（`docx`） | 主线、默认启用 | 锚定文本替换/删除、局部字符与段落样式、页面分栏/边距/方向、图片删除/缩放、插表 | 唯一引文/段号锚点检查；富预览由桌面宿主渲染 | 在 `word/document.xml` 中写原生修订；通用逐编辑输出回读会如实标为 `unverifiable` |
+| drawio | 次要兼容、默认启用 | 标签/属性更新、移动、新增、删除 | 无头画板重放 + 拓扑验证 | 仅支持未压缩 diagram；身份与拓扑字段受约束；不计划扩展功能 |
+| PowerPoint（`pptx`） | 冻结、显式 opt-in | 唯一单 run 文本替换 | 精确到 slide/paragraph/run 的边界检查 | 只为显式注册的宿主保留；所有 stock 产品入口均不可用 |
+
+PDF 已不受支持，Adapter、依赖、Agent dialect、技能、schema 和写回测试均已删除；它不再是
+“实验性产品选项”。
 
 不支持的操作不会暴露给模型，并且会在 runtime 再次拒绝。宿主不能靠手工构造一个
 看似合法的 ChangeSet 绕过能力边界。
@@ -95,7 +101,8 @@ Electron 会自行启动本机服务。服务令牌和审阅令牌只存在主�
 
 ## 集成方式
 
-`apps/mcp-server` 通过 MCP stdio、无头 CLI 和本机 HTTP 桥复用同一个 runtime。
+`apps/mcp-server` 通过 MCP stdio、无头 CLI 和本机 HTTP 桥复用同一个 runtime。这些 stock
+接口只接受 Excel、Word、drawio 及 `xlsx`/`docx` 别名。
 
 ```text
 otterpatch_skills   列出不可变的内置技能元数据
@@ -157,8 +164,7 @@ packages/skills/              不可变内置技能、生成式 playbook 清单�
 packages/adapter-univer/      Excel shadow、验证器与 worksheet 编译器
 packages/adapter-word/        Word 锚点、原生修订、样式/页面/表格/图片写回
 packages/adapter-drawio/      mxCell 模型、拓扑验证器、diagram 写回
-packages/adapter-pdf/         实验性 AcroForm 文本字段写回
-packages/adapter-pptx/        受约束的单 run 幻灯片文本写回
+packages/adapter-pptx/        冻结的 opt-in 单 run 幻灯片文本写回（stock 不注册）
 packages/writeback-surgical/  带资源预算的 OOXML 读写与局部性验证
 packages/runtime/             由 Adapter 驱动的 propose/diff/review/commit 编排
 apps/mcp-server/              MCP、CLI、带鉴权的 loopback HTTP 服务
