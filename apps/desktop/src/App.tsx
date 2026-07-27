@@ -26,7 +26,7 @@ import {
   wordEditOpts,
 } from './proposal-materializers.js';
 import { applyDrawioMutations } from './drawio-proposal-adapter.js';
-import { applyBoardPatchView, revertBoardPatch, setBoardEditState } from './drawio-review-adapter.js';
+import { applyBoardPatchView, revertBoardPatch } from './drawio-review-adapter.js';
 import type {
   AgentDiff,
   AgentDiffItem,
@@ -45,7 +45,6 @@ import { fileSnapshotDocumentId, proposalMatchesFileSnapshot } from './file-snap
 import { useCommitWriteback } from './use-commit-writeback.js';
 import { useReviewState } from './use-review-state.js';
 import { useReviewActions } from './use-review-actions.js';
-import { reviewItemKind } from './review-policy.js';
 import { ReviewBox } from './ReviewBox.js';
 import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
@@ -58,9 +57,7 @@ import { Markdown } from './Markdown.js';
 import { chartToPngDataUrl } from './chart.js';
 import { applyExcelStructure, type ChartPlacement } from './excel-structure-adapter.js';
 import {
-  applyGridOp,
   findLatestExcelDiffTurn,
-  gridOpBackground,
   playGridOps,
   renderExcelDiffView,
   revertGridOp,
@@ -1018,66 +1015,12 @@ export function App() {
     else if (turn.format === 'drawio') { const id = turn.board?.byEdit[item.editId]; if (id) boardRef.current?.highlight(id); }
     else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === item.editId); if (w) wordRef.current?.highlight(w.domId); } // 定位当前条
   };
-  /** 接受率飞轮:按 格式×改动类型 统计逐条处置,localStorage 持久化;接受率最低的类别就是 skills/prompt 下一轮的靶子。
-   *  控制台 window.__otterTelemetry() 可随时查看汇总。 */
-  const telemetry = (format: Fmt, verb: 'accept' | 'reject', kind: string): void => {
-    try {
-      const t = JSON.parse(localStorage.getItem('oa.telemetry') ?? '{}') as Record<string, Record<string, { accept: number; reject: number }>>;
-      const f = (t[format] ??= {});
-      const k = (f[kind] ??= { accept: 0, reject: 0 });
-      k[verb]++;
-      localStorage.setItem('oa.telemetry', JSON.stringify(t));
-    } catch { /* 配额/解析问题不影响主流程 */ }
+  const applyWordEdit = (edit: WordEdit): void => {
+    wordRef.current?.applyEdit(edit.domId, edit.quote, wordEditOpts(edit));
   };
-  const applyWordEdit = (w: WordEdit): void => {
-    wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w));
-  };
-  const acceptItem = (turn: DiffTurn, idx: number, silent = false): void => {
-    if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
-    const it = turn.diff.items[idx]; if (!it) return;
-    const k = akey(turn.diff.changeSetId, it.editId);
-    if (!accepted.has(k)) {
-      if (rejected.has(k)) { // Only rejected edits were removed from the optimistic preview and need replay.
-        if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) applyGridOp(univerRef.current, op); }
-        else if (turn.format === 'drawio' && turn.board) setBoardEditState(turn.board, it.editId, 'next', boardRef.current);
-        else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) applyWordEdit(w); }
-      }
-      toggleAccept(k, true);
-    }
-    if (turn.format === 'excel' && excelDiff === 'mark') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) univerRef.current?.setBackground(op.a1, gridOpBackground(op, true)); } // 已处置的格退出着色 → 网格上直观看到审阅进度
-    if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w) wordRef.current?.markResolved(w.domId, 'accepted'); } // 物理定稿:删 del、ins 落地
-    telemetry(turn.format, 'accept', reviewItemKind(turn, it));
-    if (!silent) setReviewIdx(idx + 1);
-  };
-  /** 行内卡片 ✓/✕ → 复用 rail 的接受/拒绝(按 domId 找回条目);老回合的处置不动当前回合的审阅游标。 */
-  const resolveByCid = (domId: string, verb: 'accept' | 'reject'): void => {
-    let lastDiff = -1;
-    for (let i = thread.length - 1; i >= 0; i--) { const tt = thread[i]; if (tt && tt.role === 'assistant' && tt.kind === 'diff') { lastDiff = i; break; } }
-    for (let i = thread.length - 1; i >= 0; i--) {
-      const tt = thread[i];
-      if (!tt || tt.role !== 'assistant' || tt.kind !== 'diff' || !tt.word) continue;
-      const w = tt.word.find((x) => x.domId === domId); if (!w) continue;
-      const idx = tt.diff.items.findIndex((it) => it.editId === w.editId); if (idx < 0) return;
-      const silent = i !== lastDiff;
-      if (verb === 'accept') acceptItem(tt, idx, silent); else rejectItem(tt, idx, silent);
-      return;
-    }
-  };
-  const rejectItem = (turn: DiffTurn, idx: number, silent = false): void => {
-    if (turn.format !== fmt) { notify('请先切回 ' + turn.format + ' 工作区再处理该提案'); return; }
-    const it = turn.diff.items[idx]; if (!it) return;
-    const k = akey(turn.diff.changeSetId, it.editId);
-    if (!rejected.has(k)) {
-      if (turn.format === 'excel') { const op = turn.ops.find((o) => o.editId === it.editId); if (op) { revertGridOp(univerRef.current, op); if (excelDiff === 'mark') univerRef.current?.setBackground(op.a1, gridOpBackground(op, false)); } }
-      else if (turn.format === 'drawio' && turn.board) setBoardEditState(turn.board, it.editId, 'prior', boardRef.current);
-      else if (turn.format === 'word') { const w = turn.word?.find((x) => x.editId === it.editId); if (w && !wordRef.current?.revert(w.domId) && accepted.has(k)) notify(t('该改动已定稿,未找到可还原的位置')); }
-    }
-    toggleAccept(k, false);
-    telemetry(turn.format, 'reject', reviewItemKind(turn, it));
-    if (!silent) setReviewIdx(idx + 1);
-  };
-  const { acceptAll, commitAccepted } = useReviewActions({
+  const { acceptItem, rejectItem, resolveByCid, acceptAll, commitAccepted } = useReviewActions({
     format: fmt,
+    thread,
     accepted,
     rejected,
     autoBatch,
@@ -1088,6 +1031,7 @@ export function App() {
     univerRef,
     notify,
     t,
+    toggleAccept,
     acceptMany,
     setReviewIdx,
     setExcelDiff,
@@ -1096,7 +1040,6 @@ export function App() {
     markCommitted,
     applyWordEdit,
     boardRef,
-    telemetry,
     confirmAcceptAll: (message) => window.confirm(message),
     send,
   });

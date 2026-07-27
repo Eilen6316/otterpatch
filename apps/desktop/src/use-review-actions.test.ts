@@ -39,6 +39,7 @@ test('acceptAll reapplies a previously rejected Drawio mutation', async () => {
 
   const { acceptAll } = useReviewActions({
     format: 'drawio',
+    thread: [],
     accepted: new Set(),
     rejected: new Set(['cs-1::move-edit']),
     autoBatch: false,
@@ -50,6 +51,7 @@ test('acceptAll reapplies a previously rejected Drawio mutation', async () => {
     boardRef: { current: board },
     notify: () => {},
     t: (key) => key,
+    toggleAccept: () => {},
     acceptMany: (keys) => { acceptedKeys.push(keys); },
     setReviewIdx: () => {},
     setExcelDiff: () => {},
@@ -57,7 +59,6 @@ test('acceptAll reapplies a previously rejected Drawio mutation', async () => {
     doCommit: async () => { assert.fail('commit should not run without an imported file'); },
     markCommitted: (index, count) => { committed.push({ index, count }); },
     applyWordEdit: () => {},
-    telemetry: () => {},
     confirmAcceptAll: () => true,
     send: () => {},
   });
@@ -80,6 +81,7 @@ test('acceptAll does not replay an unreviewed preview and stops when confirmatio
   let accepted = 0;
   const options = {
     format: 'drawio' as const,
+    thread: [] as const,
     accepted: new Set<string>(),
     rejected: new Set<string>(),
     autoBatch: false,
@@ -91,6 +93,7 @@ test('acceptAll does not replay an unreviewed preview and stops when confirmatio
     boardRef: { current: { removeObjects: () => {}, restoreObject: () => { restored++; } } },
     notify: () => {},
     t: (key: string) => key,
+    toggleAccept: () => {},
     acceptMany: () => { accepted++; },
     setReviewIdx: () => {},
     setExcelDiff: () => {},
@@ -98,7 +101,6 @@ test('acceptAll does not replay an unreviewed preview and stops when confirmatio
     doCommit: async () => true,
     markCommitted: () => {},
     applyWordEdit: () => {},
-    telemetry: () => {},
     send: () => {},
   };
 
@@ -125,6 +127,7 @@ test('commitAccepted preserves rejected edits and commits only the accepted subs
   const marks: number[] = [];
   const { commitAccepted } = useReviewActions({
     format: 'excel',
+    thread: [],
     accepted: new Set(['cs-3::e1']),
     rejected: new Set(['cs-3::e2']),
     autoBatch: false,
@@ -136,6 +139,7 @@ test('commitAccepted preserves rejected edits and commits only the accepted subs
     boardRef: { current: null },
     notify: () => {},
     t: (key) => key,
+    toggleAccept: () => {},
     acceptMany: () => { assert.fail('partial commit must not accept rejected edits'); },
     setReviewIdx: () => {},
     setExcelDiff: () => {},
@@ -143,7 +147,6 @@ test('commitAccepted preserves rejected edits and commits only the accepted subs
     doCommit: async (ids) => { commits.push(ids); return true; },
     markCommitted: (_index, count) => { marks.push(count); },
     applyWordEdit: () => {},
-    telemetry: () => {},
     confirmAcceptAll: () => { assert.fail('partial commit does not use accept-all confirmation'); },
     send: () => {},
   });
@@ -169,6 +172,7 @@ test('commitAccepted refuses to commit while any proposal item is undecided', as
   let committed = false;
   const { commitAccepted } = useReviewActions({
     format: 'excel',
+    thread: [],
     accepted: new Set(['cs-4::e1']),
     rejected: new Set(),
     autoBatch: false,
@@ -180,6 +184,7 @@ test('commitAccepted refuses to commit while any proposal item is undecided', as
     boardRef: { current: null },
     notify: (message) => { notices.push(message); },
     t: (key) => key,
+    toggleAccept: () => {},
     acceptMany: () => {},
     setReviewIdx: () => {},
     setExcelDiff: () => {},
@@ -187,7 +192,6 @@ test('commitAccepted refuses to commit while any proposal item is undecided', as
     doCommit: async () => { committed = true; return true; },
     markCommitted: () => {},
     applyWordEdit: () => {},
-    telemetry: () => {},
     confirmAcceptAll: () => true,
     send: () => {},
   });
@@ -195,4 +199,64 @@ test('commitAccepted refuses to commit while any proposal item is undecided', as
   await commitAccepted(turn, 0);
   assert.equal(committed, false);
   assert.deepEqual(notices, ['请先审阅全部改动']);
+});
+
+test('per-item actions resolve Word inline edits without moving an old turn cursor', () => {
+  const oldTurn: DiffTurn = {
+    role: 'assistant',
+    kind: 'diff',
+    format: 'word',
+    diff: { changeSetId: 'old', hostId: 'word', intent: 'old edit', items: [{ editId: 'old-edit', ref: 'old', badge: 'modify', label: 'old' }] },
+    ops: [],
+    word: [{ editId: 'old-edit', domId: 'old::old-edit', quote: 'old', replacement: 'older' }],
+  };
+  const currentTurn: DiffTurn = {
+    role: 'assistant',
+    kind: 'diff',
+    format: 'word',
+    diff: { changeSetId: 'current', hostId: 'word', intent: 'current edit', items: [{ editId: 'current-edit', ref: 'current', badge: 'modify', label: 'current' }] },
+    ops: [],
+    word: [{ editId: 'current-edit', domId: 'current::current-edit', quote: 'current', replacement: 'new' }],
+  };
+  const resolved: string[] = [];
+  const reverted: string[] = [];
+  const toggles: Array<[string, boolean]> = [];
+  const reviewIndexes: number[] = [];
+  const richDoc = {
+    markResolved: (domId: string) => { resolved.push(domId); },
+    revert: (domId: string) => { reverted.push(domId); return true; },
+  } as never;
+  const { resolveByCid } = useReviewActions({
+    format: 'word',
+    thread: [oldTurn, currentTurn],
+    accepted: new Set(),
+    rejected: new Set(),
+    autoBatch: false,
+    autoBatchRun: { current: 0 },
+    excelDiff: 'final',
+    fileBase64: '',
+    wordRef: { current: richDoc },
+    univerRef: { current: null },
+    boardRef: { current: null },
+    notify: () => {},
+    t: (key) => key,
+    toggleAccept: (id, on) => { toggles.push([id, on]); },
+    acceptMany: () => {},
+    setReviewIdx: (index) => { reviewIndexes.push(index); },
+    setExcelDiff: () => {},
+    ensureCommitFile: () => true,
+    doCommit: async () => true,
+    markCommitted: () => {},
+    applyWordEdit: () => {},
+    confirmAcceptAll: () => true,
+    send: () => {},
+  });
+
+  resolveByCid('old::old-edit', 'accept');
+  assert.deepEqual(resolved, ['old::old-edit']);
+  assert.deepEqual(reviewIndexes, [], 'old turns are silent');
+  resolveByCid('current::current-edit', 'reject');
+  assert.deepEqual(reverted, ['current::current-edit']);
+  assert.deepEqual(reviewIndexes, [1]);
+  assert.deepEqual(toggles, [['old::old-edit', true], ['current::current-edit', false]]);
 });
