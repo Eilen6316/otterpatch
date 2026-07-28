@@ -15,7 +15,7 @@
     "@otterpatch/adapter-word": "0.0.1",
     "@otterpatch/skills": "0.0.1",
     "@anthropic-ai/sdk": "0.106.0",
-    "openai": "6.45.0"
+    "openai": "7.0.0"
   },
   "devDependencies": {
     "tsx": "^4.19.0"
