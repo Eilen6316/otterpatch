@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Turn } from './app-thread-types.js';
-import { buildWordProposalContext, latestProposalId } from './use-proposal-stream.js';
+import { buildDrawioProposalContext, buildWordProposalContext, latestProposalId } from './use-proposal-stream.js';
 
 test('latestProposalId selects the newest usable proposal binding', () => {
   const thread: Turn[] = [
@@ -42,4 +42,14 @@ test('Word proposal context distinguishes document, text selection, and image se
   });
   assert.match(selectedImage, /点选了一张图片/);
   assert.match(selectedImage, /para=7/);
+});
+
+test('Drawio proposal context uses the real board selection and identifies an empty board', () => {
+  assert.equal(buildDrawioProposalContext(null), '[流程图] 当前画板为空。');
+  assert.equal(buildDrawioProposalContext({
+    context: '[流程图] 2 个节点',
+    count: 2,
+    chip: '2 个对象',
+    board: { nodes: [], edges: [] },
+  }), '[流程图] 2 个节点');
 });

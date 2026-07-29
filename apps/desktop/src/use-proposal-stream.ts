@@ -70,14 +70,12 @@ export interface UseProposalStreamOptions {
   univerRef: RefObject<SheetHandle | null>;
   wordRef: RefObject<RichDocHandle | null>;
   boardRef: RefObject<BoardHandle | null>;
-  selectionContext: () => string;
   normalizeLocalEndpoint: (raw: string) => string | null;
   t: (key: string) => string;
   setIntent: Dispatch<SetStateAction<string>>;
   setConfigOpen: Dispatch<SetStateAction<boolean>>;
   setSendError: Dispatch<SetStateAction<string | null>>;
   setBusy: Dispatch<SetStateAction<boolean>>;
-  setSent: Dispatch<SetStateAction<boolean>>;
   setThread: Dispatch<SetStateAction<Turn[]>>;
   setRecent: Dispatch<SetStateAction<RecentIntent[]>>;
   setRealChangeSet: Dispatch<SetStateAction<unknown>>;
@@ -113,6 +111,10 @@ export function buildWordProposalContext(context: string | null | undefined, sel
   return `${context ?? '(空文档)'}\n${instructions}\n[当前选区·用户此刻圈选了这段(${selectionDescription})]:"${selection.text}"\n若指令含"这段/这句/这里/选中的/选中/它",优先针对它;quote 用这段真实原文定位。`;
 }
 
+export function buildDrawioProposalContext(selection: BoardSel | null): string {
+  return selection?.context ?? '[流程图] 当前画板为空。';
+}
+
 export function useProposalStream({
   format,
   intent,
@@ -133,14 +135,12 @@ export function useProposalStream({
   univerRef,
   wordRef,
   boardRef,
-  selectionContext,
   normalizeLocalEndpoint,
   t,
   setIntent,
   setConfigOpen,
   setSendError,
   setBusy,
-  setSent,
   setThread,
   setRecent,
   setRealChangeSet,
@@ -184,11 +184,9 @@ export function useProposalStream({
     const documentSnapshot = format === 'word' ? (wordRef.current?.getDocSnapshot() ?? null) : null;
     const context = isExcel
       ? (sheetSnapshot?.text ?? '(表格为空)')
-      : format === 'drawio' && boardSelection
-        ? boardSelection.context
-        : format === 'word'
-          ? buildWordProposalContext(wordRef.current?.getContext(), wordSelection)
-          : selectionContext();
+      : format === 'drawio'
+        ? buildDrawioProposalContext(boardSelection)
+        : buildWordProposalContext(wordRef.current?.getContext(), wordSelection);
     const proposalFile = fileSnapshot?.format === format ? fileSnapshot : null;
     const proposalDocumentId = proposalFile ? fileSnapshotDocumentId(proposalFile) : `desktop:${format}`;
     const parentProposalId = latestProposalId(thread);
@@ -249,7 +247,6 @@ export function useProposalStream({
         },
         () => {
           setRecent((current) => [{ t: requestedIntent, time: t('刚刚') }, ...current.filter((item) => item.t !== requestedIntent)].slice(0, 6));
-          setSent(true);
           setThread((current) => appendStreamingAnswerTurn(current));
         },
         (event) => {
@@ -371,7 +368,7 @@ export function useProposalStream({
                   diff,
                   ops: operations,
                 }));
-                if (operations.length) void playGridOps(univerRef.current, operations, { onStart: () => setSent(true) });
+                if (operations.length) void playGridOps(univerRef.current, operations);
               }
             } else if (event.kind === 'clarify' && event.questions?.length) {
               setThread((current) => replaceLastWithClarify(current, event.questions!));
