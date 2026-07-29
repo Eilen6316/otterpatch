@@ -12,73 +12,36 @@ import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
 import type { RichDocHandle, WordSel } from './RichDoc.js';
 import { akey } from './review-shared.js';
-import { LocalServiceHttpError, streamPropose } from './agent-client.js';
 import {
   browserLocalCredential,
   browserLocalCredentialsAvailable,
   setBrowserLocalCredential,
 } from './electron-bridge.js';
-import {
-  countAddedBoardObjects,
-  materializeAddedBoardObjects,
-  materializeGridOps,
-  materializeWordEdits,
-  wordEditOpts,
-} from './proposal-materializers.js';
-import { applyDrawioMutations } from './drawio-proposal-adapter.js';
+import { wordEditOpts } from './proposal-materializers.js';
 import { applyBoardPatchView, revertBoardPatch } from './drawio-review-adapter.js';
-import type {
-  AgentDiff,
-  AgentDiffItem,
-  BoardPatch,
-  WordEdit,
-} from './proposal-materializers.js';
-import type {
-  AssistantTurn,
-  ClarifyQuestion,
-  DiffTurn,
-  Turn,
-  WorkspaceFormat as Fmt,
-} from './app-thread-types.js';
+import type { AgentDiffItem, WordEdit } from './proposal-materializers.js';
+import type { DiffTurn, Turn, WorkspaceFormat as Fmt } from './app-thread-types.js';
 import { useFileImport } from './use-file-import.js';
-import { fileSnapshotDocumentId, proposalMatchesFileSnapshot } from './file-snapshot.js';
 import { useCommitWriteback } from './use-commit-writeback.js';
 import { useReviewState } from './use-review-state.js';
 import { useReviewActions } from './use-review-actions.js';
+import { useProposalStream } from './use-proposal-stream.js';
 import { ReviewBox } from './ReviewBox.js';
 import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
 import { Composer } from './Composer.js';
 import { TopBar } from './TopBar.js';
-import { DrawioBoard, DrawioToolbar, DrawioPalette, extractDrawioOps, makeRawBoardConv } from './DrawioBoard.js';
-import type { BNode, BEdge, BoardSel, BoardHandle } from './DrawioBoard.js';
+import { DrawioBoard, DrawioToolbar, DrawioPalette } from './DrawioBoard.js';
+import type { BoardSel, BoardHandle } from './DrawioBoard.js';
 import { AgentStatusLine, ClarifyCard } from './ThreadCards.js';
 import { Markdown } from './Markdown.js';
-import { chartToPngDataUrl } from './chart.js';
-import { applyExcelStructure, type ChartPlacement } from './excel-structure-adapter.js';
 import {
   findLatestExcelDiffTurn,
-  playGridOps,
   renderExcelDiffView,
   revertGridOp,
   type ExcelDiffView,
 } from './excel-review-adapter.js';
-import { buildHistory as buildAppHistory, sanitizeThread as sanitizeAppThread } from './app-history.js';
-import {
-  appendAnswerDelta,
-  appendStreamingAnswerTurn,
-  appendUserTurn,
-  finalizeLastAnswer,
-  interruptLastStreamingAnswer,
-  replaceLastWithClarify,
-  setStreamStatus,
-  updateLastAssistantTurn,
-} from './app-proposal-flow.js';
-import {
-  captureGridOpBeforeState,
-  orderWordEditsForApply,
-  replaceLastWithWorkspaceDiff,
-} from './app-workspace-proposals.js';
+import { sanitizeThread as sanitizeAppThread } from './app-history.js';
 
 // Shared review ids and batch guards live in ./review-shared.ts (god-file decomposition).
 // AgentStatusLine / ClarifyCard moved to ./ThreadCards.tsx (decomposition phase 5).
@@ -104,16 +67,6 @@ function persistedLocalId(key: string): string {
   } catch {
     return freshLocalId();
   }
-}
-
-function latestProposalId(thread: readonly Turn[]): string | undefined {
-  for (let index = thread.length - 1; index >= 0; index--) {
-    const turn = thread[index];
-    if (!turn || turn.role !== 'assistant' || turn.kind !== 'diff' || !turn.proposal || typeof turn.proposal !== 'object') continue;
-    const proposalId = (turn.proposal as { proposalId?: unknown }).proposalId;
-    if (typeof proposalId === 'string' && proposalId.trim()) return proposalId;
-  }
-  return undefined;
 }
 
 /** 渐进披露驾驶舱。风格参照 Next AI Drawio:纯白、分区块、线性图标、无 emoji。五语 i18n(t 包裹显示文案)。 */
@@ -514,21 +467,9 @@ export function App() {
     notify,
     t,
   });
-  const applySeqRef = useRef(0);
-  const chartRects = useRef<ChartPlacement[]>([]); // 已插入图表的锚点(会话级):新图撞上就下移,别叠在一起
-  // drawio「边生成边画」流式状态
-  const draftBufRef = useRef('');
-  const drawnOpsRef = useRef(0);
-  const streamConvRef = useRef<ReturnType<typeof makeRawBoardConv> | null>(null);
-  const staleStreamRef = useRef(false); // 提案被回炉(截断/verify 失败)后置位:新 draft 到达时先清上一轮的流式残画
-  const streamObjsRef = useRef<Array<{ editId: string; node?: BNode; edge?: BEdge }>>([]);
-  const streamByEditRef = useRef<Record<string, string>>({});
   const [reviewIdx, setReviewIdx] = useState(0);
   const threadEndRef = useRef<HTMLDivElement>(null);
-  const sendingRef = useRef(false); // 同步重入锁:异步 busy state 拦不住同一帧内的连发
-  const streamAbortRef = useRef<AbortController | null>(null);
   const [sendErr, setSendErr] = useState<string | null>(null);
-  const [answer, setAnswer] = useState<string | null>(null);
   const lsJson = <T,>(k: string, fb: T): T => { try { const v = JSON.parse(localStorage.getItem(k) ?? 'null'); return v == null ? fb : (v as T); } catch { return fb; } };
   const [localUserId] = useState(() => persistedLocalId('oa.auditUserId'));
   const [conversationSessionId, setConversationSessionId] = useState(() => persistedLocalId('oa.auditSessionId'));
@@ -536,7 +477,6 @@ export function App() {
   const [thread, setThread] = useState<Turn[]>(() => sanitizeAppThread(lsJson<Turn[]>('oa.thread', []))
     .filter((turn) => turn.role !== 'assistant' || turn.kind !== 'diff' || isWorkspaceFormat(turn.format)));
   const [recent, setRecent] = useState<{ t: string; time: string }[]>([]);
-  const [realDiff, setRealDiff] = useState<AgentDiff | null>(null);
   const [realCs, setRealCs] = useState<unknown>(null);
   const [accepted, setAccepted] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('oa.accepted') ?? '[]') as string[]); } catch { return new Set(); } }); // 随 thread 持久化:刷新后审批处置不丢
   const [rejected, setRejected] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('oa.rejected') ?? '[]') as string[]); } catch { return new Set(); } });
@@ -602,8 +542,6 @@ export function App() {
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [thread, busy]);
-  useEffect(() => () => streamAbortRef.current?.abort(), []);
-
   const r1 = Math.min(sel.ar, sel.br);
   const r2 = Math.max(sel.ar, sel.br);
   const c1 = Math.min(sel.ac, sel.bc);
@@ -729,214 +667,46 @@ export function App() {
     }
     return lines.join('\n');
   };
-  /** 配了 otterpatch-serve 端点 + API Key → 走真实 runtime(propose→diff);否则用内置演示。 */
-  const send = async (intentOverride?: string): Promise<void> => {
-    if (sendingRef.current) return; // 同步拦截同一帧内的连发,避免把 thread 写成背靠背同角色
-    const theIntent = (intentOverride ?? intent).trim();
-    if (!theIntent) return; // 空指令不发(否则产生空 user 消息污染历史)
-    if (theIntent !== '下一批') autoBatchRun.current = 0; // 手动指令 = 新任务,自动续批计数清零
-    if (intentOverride && intentOverride !== intent) setIntent(intentOverride);
-    // Excel:永远主动拉整张表(概览+数据+焦点),与是否圈选无关 —— 没圈选也能看全局、也有 read_range/aggregate 工具
-    const sheetSnap = isExcel ? (univerRef.current?.getSheet() ?? uniSel) : null;
-    // Word:同理主动拉全文快照(逐段全文+样式),供 read_blocks/find_text/get_outline/get_style_usage 按需取 —— 上下文里的截断不再是感知天花板
-    const docSnap = fmt === 'word' ? (wordRef.current?.getDocSnapshot() ?? null) : null;
-    const selDesc = wordSel ? `${wordSel.block}${wordSel.para ? ' · 第' + wordSel.para + '段' : ''}${wordSel.font ? ' · ' + wordSel.font : ''}${wordSel.size ? ' ' + wordSel.size + 'pt' : ''}${wordSel.bold ? ' 加粗' : ''}${wordSel.italic ? ' 斜体' : ''}${wordSel.align && wordSel.align !== '左对齐' ? ' ' + wordSel.align : ''}` : '';
-    const ctx = isExcel ? (sheetSnap?.text ?? '(表格为空)') : fmt === 'drawio' && boardSel ? boardSel.context : fmt === 'word'
-      ? `${wordRef.current?.getContext() ?? '(空文档)'}\n(改写正文:给 quote=文档中真实存在的原文片段 + replacement;改格式:显式给 scope，字符范围用 selection、整段用 paragraph、页面设置用 document;空段落/整段结构操作用 para=段号;对照表/矩阵必须用 table 二维数组生成真实表格,禁止竖线或制表符伪造。)`
-        + (wordSel ? (wordSel.block === '图片'
-          ? `\n[当前选区·用户此刻点选了一张图片(${selDesc})]:${wordSel.text}\n若指令含"这张图/这个图片/它",目标就是这张图所在的第${wordSel.para ?? '?'}段;整段操作用 para=${wordSel.para ?? '?'} 锚定。`
-          : `\n[当前选区·用户此刻圈选了这段(${selDesc})]:"${wordSel.text}"\n若指令含"这段/这句/这里/选中的/选中/它",优先针对它;quote 用这段真实原文定位。`) : '\n[未圈选文字]:请基于整篇文档理解。')
-      : selectionContext();
-    const proposalFile = fileSnapshot?.format === fmt ? fileSnapshot : null;
-    const proposalDocumentId = proposalFile ? fileSnapshotDocumentId(proposalFile) : `desktop:${fmt}`;
-    const parentProposalId = latestProposalId(thread);
-    const proposalBoard = fmt === 'drawio' && boardSel?.board
-      ? { ...boardSel.board, ...(proposalFile?.drawioSourceEncoding ? { sourceEncoding: proposalFile.drawioSourceEncoding } : {}) }
-      : undefined;
-    setSendErr(null);
-    const ep = normalizeLocalEndpoint(server);
-    if (server.trim() && !ep) {
-      setCfgOpen(true);
-      setSendErr('Agent 服务地址必须是本机地址: http://localhost、http://127.0.0.1 或 http://[::1]');
-      return;
-    }
-    if (ep && apiKey && browserCredentialsEnabled && !serveToken) {
-      setCfgOpen(true);
-      setSendErr(t('未填写本机服务令牌。请在模型设置中粘贴服务启动时显示的 POST token。'));
-      return;
-    }
-    if (ep && apiKey) {
-      const requestController = new AbortController();
-      streamAbortRef.current = requestController;
-      sendingRef.current = true;
-      setBusy(true);
-      setSendErr(null);
-      setThread((th) => appendUserTurn(th, theIntent)); // 用户气泡立刻进流
-      setIntent('');
-      try {
-        const upd = (fn: (t: AssistantTurn) => Turn): void => setThread((th) => updateLastAssistantTurn(th, fn));
-        // Reset the draw-while-streaming state before the stream opens.
-        draftBufRef.current = '';
-        drawnOpsRef.current = 0;
-        streamConvRef.current = null;
-        streamObjsRef.current = [];
-        streamByEditRef.current = {};
-        staleStreamRef.current = false;
-        type StreamEvt = { type: string; status?: unknown; delta?: string; kind?: string; text?: string; diff?: AgentDiff; changeSet?: unknown; proposal?: unknown; questions?: ClarifyQuestion[]; message?: string; error?: { kind?: string } };
-        await streamPropose<StreamEvt>(
-          ep,
-          { format: fmt, intent: theIntent, context: ctx, baseRev: proposalFile?.revision ?? 0, provider, model, apiKey, documentId: proposalDocumentId, sessionId: conversationSessionId, userId: localUserId, ...(proposalFile ? { sourceFileSha256: proposalFile.sha256 } : {}), ...(parentProposalId ? { parentProposalId } : {}), ...(isExcel && sheetSnap?.sheet ? { sheet: sheetSnap.sheet } : {}), ...(proposalBoard ? { board: proposalBoard } : {}), ...(docSnap ? { doc: docSnap } : {}), ...(thread.length ? { history: buildAppHistory(thread) } : {}) },
-          () => {
-            if (theIntent.trim()) setRecent((rr) => [{ t: theIntent.trim(), time: t('刚刚') }, ...rr.filter((x) => x.t !== theIntent.trim())].slice(0, 6));
-            setSent(true);
-            // Optimistic streaming bubble; progress is a bounded status object, never provider reasoning.
-            setThread((th) => appendStreamingAnswerTurn(th));
-          },
-          (e) => {
-            if (e.type === 'status') {
-              setThread((th) => setStreamStatus(th, e.status));
-              if (fmt === 'drawio' && streamObjsRef.current.length) staleStreamRef.current = true;
-            }
-            else if (e.type === 'answer') setThread((th) => appendAnswerDelta(th, e.delta));
-            else if (e.type === 'draft' && fmt === 'drawio') {
-              if (staleStreamRef.current) {
-                // 上一轮提案被回炉(截断/verify 失败),它流式画的是废案:清掉,否则残节点与重提的整图叠加
-                boardRef.current?.removeObjects(Object.values(streamByEditRef.current));
-                streamObjsRef.current = []; streamByEditRef.current = {}; draftBufRef.current = ''; drawnOpsRef.current = 0; streamConvRef.current = null; staleStreamRef.current = false;
-              }
-              // 边生成边画:每到一段 propose 入参,抽出已闭合的 op 即时画到左侧画板
-              draftBufRef.current += e.delta ?? '';
-              const conv = streamConvRef.current ?? (streamConvRef.current = makeRawBoardConv(++applySeqRef.current, (id) => !!boardRef.current?.getObject(id)));
-              const ops = extractDrawioOps(draftBufRef.current);
-              for (let k = drawnOpsRef.current; k < ops.length; k++) {
-                const r = conv(ops[k]!, k);
-                if (!r) continue;
-                boardRef.current?.addObjects(r.node ? [r.node] : [], r.edge ? [r.edge] : []);
-                streamObjsRef.current.push({ editId: r.editId, ...(r.node ? { node: r.node } : {}), ...(r.edge ? { edge: r.edge } : {}) });
-                streamByEditRef.current[r.editId] = r.boardId;
-              }
-              drawnOpsRef.current = ops.length;
-            }
-            else if (e.type === 'error') {
-              const providerMessage: Record<string, string> = {
-                authentication: t('API Key 未通过 Provider 验证'),
-                permission: t('当前 API Key 无权使用该模型'),
-                invalid_request: t('Provider 拒绝了模型请求'),
-                rate_limit: t('Provider 限流,请稍后重试'),
-                timeout: t('Provider 请求超时'),
-                unavailable: t('Provider 暂时不可用'),
-                network: t('无法连接 Provider'),
-                circuit_open: t('Provider 暂时熔断,请稍后重试'),
-                unknown: t('Provider 请求失败'),
-              };
-              throw new Error(providerMessage[e.error?.kind ?? ''] ?? e.message ?? 'stream error');
-            }
-            else if (e.type === 'done') {
-              if (e.kind === 'changeset' && e.diff) {
-                const diff = e.diff;
-                const cs = e.changeSet ?? null;
-                const proposal = e.proposal ?? null;
-                if (proposalFile && !proposalMatchesFileSnapshot(proposal, proposalFile)) {
-                  throw new Error('The local service returned a proposal that is not bound to the imported file. Regenerate after updating the service.');
-                }
-                setRealCs(cs);
-                setRealDiff(diff);
-                setReviewIdx(0);
-                if (fmt === 'drawio') {
-                  // drawio:先把【改/删/移动现有节点】落到画板;新增节点则复用流式已画的、或一次性补画
-                  setBoardDiff('final'); // 新提案到达,视图回到"改后"基准
-                  const mut = applyDrawioMutations(cs, boardRef.current, {
-                    excludedObjectIds: new Set(Object.values(streamByEditRef.current)),
-                  });
-                  let board: BoardPatch;
-                  // 完整性守卫:长提案的流式解析可能截断(实测 18 处只吐出 8 个)——流式画的少于提案对象数,
-                  // 就清掉残画、按最终 changeSet 全量重画,别把"画了一半"当成品交付
-                  const addCount = countAddedBoardObjects(cs);
-                  if (streamObjsRef.current.length >= addCount && streamObjsRef.current.length > 0) {
-                    board = { byEdit: { ...streamByEditRef.current, ...mut.byEdit }, objs: streamObjsRef.current, muts: mut.muts };
-                  } else {
-                    if (streamObjsRef.current.length) boardRef.current?.removeObjects(Object.values(streamByEditRef.current));
-                    const b = materializeAddedBoardObjects(cs, {
-                      sequence: ++applySeqRef.current,
-                      getObject: (id) => boardRef.current?.getObject(id) ?? null,
-                    });
-                    board = { byEdit: { ...b.byEdit, ...mut.byEdit }, objs: b.objs, muts: mut.muts };
-                    if (b.nodes.length || b.edges.length) void playBoard(b.nodes, b.edges); // 兜底:逐个补图
-                  }
-                  setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, proposal, diff, board }));
-                } else if (fmt === 'word') {
-                  const wordEdits = materializeWordEdits(diff, cs);
-                  // 乐观落入文档(与 Excel 播放一致);编辑器按 domId 包裹,拒绝可精确还原
-                  wordRef.current?.closeUndoWindow(); // 新提案=上一轮撤销窗口关闭,旧 data-undo 剥净后再落新标记
-                  // 落地顺序:先非删段(段号锚不受影响),删段按段号【降序】——升序会让先删的段把后续段号顶前,删错段(实测会误删含图段)
-                  for (const w of orderWordEditsForApply(wordEdits)) wordRef.current?.applyEdit(w.domId, w.quote, wordEditOpts(w));
-                  setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, proposal, diff, word: wordEdits }));
-                  setReviewIdx(0);
-                  if (wordEdits[0]) wordRef.current?.highlight(wordEdits[0].domId); // 审阅期定位第一条
-                } else {
-                  applyExcelStructure(cs, {
-                    sheet: univerRef.current,
-                    chartPlacements: chartRects.current,
-                    renderChart: chartToPngDataUrl,
-                  }); // 结构性操作先落,改变网格布局
-                  // 采集整格改前状态(值/公式/填充/字色/加粗/数字格式/对齐),供 git-diff 展示 + "撤销/拒绝"精确还原
-                  const ops = captureGridOpBeforeState(materializeGridOps(diff), univerRef.current);
-                  setExcelDiff('final'); // 新提案到达,速览条回到"改后"基准
-                  setThread((th) => replaceLastWithWorkspaceDiff(th, { format: fmt, fileSnapshot: proposalFile ?? undefined, changeSet: cs, proposal, diff, ops }));
-                  if (ops.length) void playGridOps(univerRef.current, ops, { onStart: () => setSent(true) }); // 边画边改
-                }
-              } else if (e.kind === 'clarify' && e.questions?.length) {
-                const qs = e.questions;
-                // 把流式占位气泡替换成"引导选择"卡片。
-                setThread((th) => replaceLastWithClarify(th, qs));
-              } else {
-                setThread((th) => finalizeLastAnswer(th, e.text));
-              }
-            }
-          },
-          requestController.signal,
-        );
-      } catch (e) {
-        const m = e instanceof Error ? e.message : String(e);
-        const cancelled = requestController.signal.aborted;
-        const localAuthFailed = e instanceof LocalServiceHttpError && e.status === 401;
-        const displayMessage = localAuthFailed ? t('本机服务令牌无效。请更新模型设置中的 POST token。') : m;
-        const refused = /failed to fetch|refused|ECONNREFUSED|networkerror|load failed/i.test(m);
-        if (localAuthFailed) setCfgOpen(true);
-        if (fmt === 'drawio' && streamObjsRef.current.length) {
-          boardRef.current?.removeObjects(Object.values(streamByEditRef.current));
-          streamObjsRef.current = [];
-          streamByEditRef.current = {};
-        }
-        // 出错不回滚对话:此前把 user 气泡也删掉,用户看到"对话断开/消失"——改为把占位气泡定格成错误说明,
-        // 对话完整保留(user/assistant 交替不破坏),指令放回输入框方便重试
-        setThread((th) => interruptLastStreamingAnswer(th, cancelled ? t('本轮请求已取消。') : `⚠ 本轮请求中断(${refused ? '连不上本机 Agent 服务' : displayMessage}),对话已保留,可直接重发。`));
-        setIntent(theIntent); // 把指令放回输入框,方便重试
-        setSendErr(cancelled
-          ? null
-          : refused
-            ? `连不上本机 Agent 服务(${ep})。改了代码后请在项目根目录跑 npm run serve 重启它(会先重新构建再启动,确保用上最新能力)。`
-            : localAuthFailed
-              ? displayMessage
-              : 'Agent · ' + m);
-      } finally {
-        if (streamAbortRef.current === requestController) streamAbortRef.current = null;
-        setBusy(false);
-        sendingRef.current = false;
-      }
-      return;
-    }
-    // 未配置 serve+Key:不再用 mock,提示连接真实 Agent
-    setCfgOpen(true);
-    setSendErr('未填写 API Key。请在下方「模型」里粘贴你所选厂商的 API Key(本机服务地址已默认填好),即可用真实大模型驱动表格。');
-  };
+  const { send, cancel } = useProposalStream({
+    format: fmt,
+    intent,
+    provider,
+    model,
+    apiKey,
+    server,
+    serveToken,
+    browserCredentialsEnabled,
+    conversationSessionId,
+    localUserId,
+    thread,
+    fileSnapshot,
+    sheetSelection: uniSel,
+    wordSelection: wordSel,
+    boardSelection: boardSel,
+    autoBatchRun,
+    univerRef,
+    wordRef,
+    boardRef,
+    selectionContext,
+    normalizeLocalEndpoint,
+    t,
+    setIntent,
+    setConfigOpen: setCfgOpen,
+    setSendError: setSendErr,
+    setBusy,
+    setSent,
+    setThread,
+    setRecent,
+    setRealChangeSet: setRealCs,
+    setReviewIndex: setReviewIdx,
+    setBoardDiff,
+    setExcelDiff,
+  });
   /** 退出「本次改动」回到建议视图,可发起新指令。 */
   const resetDiff = (): void => {
     setSent(false);
-    setRealDiff(null);
     setRealCs(null);
     clearAccepted();
-    setAnswer(null);
   };
   /** 开启新对话:清空多轮历史 + 当前视图。 */
   const newConversation = (): void => {
@@ -977,12 +747,6 @@ export function App() {
     void send(text);
   };
 
-  const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-  /** drawio 兜底:provider 不流式吐入参时,在 done 后把对象逐个补到画板(保留"边画"观感)。 */
-  const playBoard = async (nodes: BNode[], edges: BEdge[]): Promise<void> => {
-    for (const n of nodes) { boardRef.current?.addObjects([n], []); await delay(75); }
-    for (const ed of edges) { boardRef.current?.addObjects([], [ed]); await delay(45); }
-  };
   /** drawio 改动视图:原文=隐掉本轮提案(新增移除、改动还原改前快照);改后=按当前处置呈现。 */
   const applyBoardDiffView = (view: 'orig' | 'final'): void => {
     let turn: DiffTurn | undefined;
@@ -1319,7 +1083,7 @@ export function App() {
               placeholder={t(PLACEHOLDERS[fmt])}
               busy={busy}
               onSend={() => { void send(); }}
-              onCancel={() => streamAbortRef.current?.abort()}
+              onCancel={cancel}
               fileRef={fileRef}
               fileName={fileName}
               onFile={onFile}
