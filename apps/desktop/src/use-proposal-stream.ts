@@ -16,7 +16,8 @@ import { captureGridOpBeforeState, orderWordEditsForApply, replaceLastWithWorksp
 import { chartToPngDataUrl } from './chart.js';
 import { applyDrawioMutations } from './drawio-proposal-adapter.js';
 import { extractDrawioOps, makeRawBoardConv } from './DrawioBoard.js';
-import type { BEdge, BNode, BoardHandle, BoardSel } from './DrawioBoard.js';
+import type { BoardHandle, BoardSel } from './DrawioBoard.js';
+import type { BEdge, BNode } from './drawio-geometry.js';
 import { applyExcelStructure, type ChartPlacement } from './excel-structure-adapter.js';
 import { playGridOps, type ExcelDiffView } from './excel-review-adapter.js';
 import { fileSnapshotDocumentId, proposalMatchesFileSnapshot, type FileSnapshot } from './file-snapshot.js';

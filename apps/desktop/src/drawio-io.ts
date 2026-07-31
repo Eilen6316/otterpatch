@@ -1,5 +1,6 @@
 import { inflateSync, strFromU8 } from 'fflate';
-import { parseDrawioStyle, innerForStyle, cleanLabel, type BNode, type BEdge } from './DrawioBoard.js';
+import { parseDrawioStyle, innerForStyle, cleanLabel } from './DrawioBoard.js';
+import type { BEdge, BNode } from './drawio-geometry.js';
 import { styleToKind } from './shape-engine.js';
 
 const unesc = (s: string): string => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d))).replace(/&amp;/g, '&');

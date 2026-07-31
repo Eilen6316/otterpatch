@@ -1,5 +1,5 @@
-import { parseDrawioStyle, snap } from './DrawioBoard.js';
-import type { BEdge } from './DrawioBoard.js';
+import { parseDrawioStyle } from './DrawioBoard.js';
+import { snap, type BEdge } from './drawio-geometry.js';
 import type { BoardObject, BoardPatch } from './proposal-materializers.js';
 
 export interface DrawioMutationBoard {

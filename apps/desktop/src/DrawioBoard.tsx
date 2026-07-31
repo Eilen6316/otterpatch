@@ -1,7 +1,6 @@
 /**
- * DrawioBoard — the entire drawio workspace: toolbar, shape palette, board component
- * (geometry, orthogonal routing, selection, edge editing) plus the style/stream helpers
- * the agent bridge uses. Extracted verbatim from App.tsx (decomposition phase 4).
+ * Drawio workspace: toolbar, shape palette, board state, selection, and edge editing.
+ * Pure geometry and routing live in drawio-geometry.ts.
  */
 /* eslint-disable */
 // NOTE: imports appended below are the minimal set the moved block references.
@@ -12,6 +11,25 @@ import { useT } from './i18n.js';
 import { shapeSvg, styleToKind, SHAPE_DEFS } from './shape-engine.js';
 import { FUNC_ICONS, IconPlus, IconSearch, IconUndo } from './icons.js';
 import { DRAWIO_SHAPES } from './drawio-shapes.js';
+import {
+  avoidRoute,
+  bandRect,
+  controlPoints,
+  edgePts,
+  GRID,
+  intersects,
+  ortho,
+  perim,
+  resizeNode,
+  roundedPath,
+  smoothPath,
+  snap,
+  straightRoute,
+} from './drawio-geometry.js';
+import type { ArrowKind, BEdge, BNode, XY } from './drawio-geometry.js';
+
+export { snap } from './drawio-geometry.js';
+export type { BEdge, BNode } from './drawio-geometry.js';
 
 /** Toolbar callback: open a dropdown anchored to the clicked control (mirrors App's ribbon). */
 export type OnOpen = (it: string, el: HTMLElement) => void;
@@ -97,91 +115,6 @@ export function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
   );
 }
 
-interface XY { x: number; y: number }
-export interface BNode { id: string; x: number; y: number; w: number; h: number; inner: string; label: string; kind?: string; rot?: number; fill?: string; stroke?: string; fontColor?: string; fontSize?: number; bold?: boolean; text?: boolean; vTop?: boolean; wrap?: boolean; style?: string; shape?: string }
-type ArrowKind = 'classic' | 'open' | 'diamond' | 'circle' | 'none';
-type EdgeStyle = 'ortho' | 'straight' | 'curve';
-/** 曲线线型:Catmull-Rom 过点样条(drawio curved=1 语义);无航点时给一个轻微弓弧让曲线可辨。 */
-function smoothPath(pts: XY[]): string {
-  if (pts.length < 2) return '';
-  if (pts.length === 2) {
-    const [a, b] = [pts[0]!, pts[1]!];
-    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-    const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-    const k = Math.min(24, L * 0.15); // 轻弓,长度钳制
-    const nx = -(b.y - a.y) / L, ny = (b.x - a.x) / L;
-    return `M ${a.x} ${a.y} Q ${mx + nx * k} ${my + ny * k} ${b.x} ${b.y}`;
-  }
-  let d = `M ${pts[0]!.x} ${pts[0]!.y}`;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[Math.max(0, i - 1)]!, p1 = pts[i]!, p2 = pts[i + 1]!, p3 = pts[Math.min(pts.length - 1, i + 2)]!;
-    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
-    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
-    d += ` C ${c1x} ${c1y} ${c2x} ${c2y} ${p2.x} ${p2.y}`;
-  }
-  return d;
-}
-export interface BEdge { id: string; from: string; to: string; arrow?: ArrowKind; style?: EdgeStyle; points?: XY[]; color?: string; width?: number; dash?: boolean; label?: string }
-/** 两节点周界直连(直线线型)。 */
-function straightRoute(a: BNode, b: BNode): XY[] {
-  const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
-  const bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
-  return [perim(a, bc.x, bc.y), perim(b, ac.x, ac.y)];
-}
-/** 经过显式航点的正交折线:source周界 → 各航点 → target周界,相邻点间插直角拐点。 */
-function routeWaypoints(a: BNode, b: BNode, pts: XY[]): XY[] {
-  const first = pts[0]!;
-  const last = pts[pts.length - 1]!;
-  const all = [perim(a, first.x, first.y), ...pts, perim(b, last.x, last.y)];
-  const out: XY[] = [all[0]!];
-  for (let i = 1; i < all.length; i++) {
-    const c = out[out.length - 1]!;
-    const q = all[i]!;
-    if (Math.abs(c.x - q.x) > 0.5 && Math.abs(c.y - q.y) > 0.5) out.push({ x: q.x, y: c.y });
-    out.push(q);
-  }
-  return out;
-}
-/** 选中边时用于摆放航点/虚拟折点手柄的控制点序列:[源周界, ...航点, 目标周界]。 */
-function controlPoints(a: BNode, b: BNode, pts: XY[]): XY[] {
-  if (pts.length) {
-    const first = pts[0]!;
-    const last = pts[pts.length - 1]!;
-    return [perim(a, first.x, first.y), ...pts, perim(b, last.x, last.y)];
-  }
-  const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
-  const bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
-  return [perim(a, bc.x, bc.y), perim(b, ac.x, ac.y)];
-}
-function edgePts(a: BNode, b: BNode, style?: EdgeStyle, points?: XY[]): XY[] {
-  if (points && points.length) return routeWaypoints(a, b, points);
-  return style === 'straight' ? straightRoute(a, b) : ortho(a, b);
-}
-/** 中心连线是否穿过第三方节点矩形(采样粗判,覆盖同排横穿/同列竖穿的主场景)。 */
-function segCrossesRect(a: BNode, b: BNode, n: BNode): boolean {
-  const ax = a.x + a.w / 2, ay = a.y + a.h / 2, bx = b.x + b.w / 2, by = b.y + b.h / 2;
-  for (let t = 0.08; t < 0.95; t += 0.04) {
-    const x = ax + (bx - ax) * t, y = ay + (by - ay) * t;
-    if (x > n.x && x < n.x + n.w && y > n.y && y < n.y + n.h) return true;
-  }
-  return false;
-}
-/** 避障路由:直连会横穿其它节点时绕行(节点画在连线之上,穿过=视觉断线,长线看起来像相邻节点串联)。 */
-function avoidRoute(a: BNode, b: BNode, ed: { id: string; style?: EdgeStyle; points?: XY[] }, nodes: BNode[]): XY[] {
-  if (!ed.points?.length) {
-    // 容器(大框)与扁横条(分区标签)不算障碍:线从它们身上过是正常的;真正遮断视觉的是普通组件节点
-    const blockers = nodes.filter((n) => n.id !== a.id && n.id !== b.id && n.w >= 40 && n.h >= 40 && n.w * n.h <= 60000 && segCrossesRect(a, b, n));
-    if (blockers.length) {
-      const lane = 26 + (Math.abs([...ed.id].reduce((s, c) => s + c.charCodeAt(0), 0)) % 3) * 14; // 多条绕行线错开车道
-      const horiz = Math.abs((b.x + b.w / 2) - (a.x + a.w / 2)) >= Math.abs((b.y + b.h / 2) - (a.y + a.h / 2));
-      const wp: XY = horiz
-        ? { x: (a.x + a.w / 2 + b.x + b.w / 2) / 2, y: Math.min(a.y, b.y, ...blockers.map((n) => n.y)) - lane }
-        : { x: Math.max(a.x + a.w, b.x + b.w, ...blockers.map((n) => n.x + n.w)) + lane, y: (a.y + a.h / 2 + b.y + b.h / 2) / 2 };
-      return routeWaypoints(a, b, [wp]);
-    }
-  }
-  return edgePts(a, b, ed.style, ed.points);
-}
 const ARROWS: ArrowKind[] = ['classic', 'open', 'diamond', 'circle', 'none'];
 function arrowGlyph(ak: ArrowKind): ReactNode {
   const x2 = ak === 'none' ? 18 : 11;
@@ -199,64 +132,8 @@ function arrowGlyph(ak: ArrowKind): ReactNode {
   );
 }
 
-const GRID = 10;
-export const snap = (v: number): number => Math.round(v / GRID) * GRID;
 /** drawio value 里的 HTML 痕迹(<br>/标签)转纯文本——标签是纯文本渲染,别把 "<br>" 字面画出来。 */
 export const cleanLabel = (v: unknown): string => String(v ?? '').replace(/<br\s*\/?\s*>/gi, ' · ').replace(/<[^>]+>/g, '').trim();
-const ndir = (p: XY, q: XY): XY => {
-  const dx = q.x - p.x, dy = q.y - p.y;
-  const l = Math.hypot(dx, dy) || 1;
-  return { x: dx / l, y: dy / l };
-};
-/** 射线从节点中心到目标点,与节点矩形边界的交点(周界连接,箭头贴边)。 */
-function perim(n: BNode, tx: number, ty: number): XY {
-  const cx = n.x + n.w / 2, cy = n.y + n.h / 2;
-  const dx = tx - cx, dy = ty - cy;
-  if (!dx && !dy) return { x: cx, y: cy };
-  const sx = Math.abs(dx) > 0.001 ? n.w / 2 / Math.abs(dx) : Infinity;
-  const sy = Math.abs(dy) > 0.001 ? n.h / 2 / Math.abs(dy) : Infinity;
-  const s = Math.min(sx, sy);
-  return { x: cx + dx * s, y: cy + dy * s };
-}
-/** drawio 风格正交路由:沿主轴从源侧中点出、到目标侧中点入,中段折返。 */
-function ortho(a: BNode, b: BNode): XY[] {
-  const acx = a.x + a.w / 2, acy = a.y + a.h / 2, bcx = b.x + b.w / 2, bcy = b.y + b.h / 2;
-  const dx = bcx - acx, dy = bcy - acy;
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    const right = dx >= 0;
-    // 竖直方向有重叠 → 两端取重叠区中点做共同 y,得到一条干净的水平直线
-    const oy0 = Math.max(a.y, b.y);
-    const oy1 = Math.min(a.y + a.h, b.y + b.h);
-    const yy = oy1 > oy0 + 2 ? (oy0 + oy1) / 2 : Math.abs(acy - bcy) <= 8 ? (acy + bcy) / 2 : null; // 近对齐(≤8px)吸成一条直线,别走小台阶
-    const p1 = { x: right ? a.x + a.w : a.x, y: yy ?? acy };
-    const p2 = { x: right ? b.x : b.x + b.w, y: yy ?? bcy };
-    if (Math.abs(p1.y - p2.y) < 0.5) return [{ x: p1.x, y: p1.y }, { x: p2.x, y: p1.y }];
-    const mx = (p1.x + p2.x) / 2;
-    return [p1, { x: mx, y: p1.y }, { x: mx, y: p2.y }, p2];
-  }
-  const down = dy >= 0;
-  const ox0 = Math.max(a.x, b.x);
-  const ox1 = Math.min(a.x + a.w, b.x + b.w);
-  const xx = ox1 > ox0 + 2 ? (ox0 + ox1) / 2 : Math.abs(acx - bcx) <= 8 ? (acx + bcx) / 2 : null;
-  const p1 = { x: xx ?? acx, y: down ? a.y + a.h : a.y };
-  const p2 = { x: xx ?? bcx, y: down ? b.y : b.y + b.h };
-  if (Math.abs(p1.x - p2.x) < 0.5) return [{ x: p1.x, y: p1.y }, { x: p1.x, y: p2.y }];
-  const my = (p1.y + p2.y) / 2;
-  return [p1, { x: p1.x, y: my }, { x: p2.x, y: my }, p2];
-}
-function roundedPath(pts: XY[], r = 8): string {
-  if (pts.length < 2) return '';
-  let d = `M ${pts[0]!.x} ${pts[0]!.y}`;
-  for (let i = 1; i < pts.length - 1; i++) {
-    const p = pts[i]!, prev = pts[i - 1]!, next = pts[i + 1]!;
-    const rr = Math.min(r, Math.hypot(prev.x - p.x, prev.y - p.y) / 2, Math.hypot(next.x - p.x, next.y - p.y) / 2);
-    const a = { x: p.x + ndir(p, prev).x * rr, y: p.y + ndir(p, prev).y * rr };
-    const c = { x: p.x + ndir(p, next).x * rr, y: p.y + ndir(p, next).y * rr };
-    d += ` L ${a.x} ${a.y} Q ${p.x} ${p.y} ${c.x} ${c.y}`;
-  }
-  const last = pts[pts.length - 1]!;
-  return d + ` L ${last.x} ${last.y}`;
-}
 export interface BoardSel {
   count: number;
   chip: string;
@@ -382,41 +259,6 @@ export function makeRawBoardConv(seq: number, taken?: (id: string) => boolean): 
     if (op.cellId) made.set(op.cellId, node);
     return { editId: 'e' + index, boardId: id, node };
   };
-}
-const bandRect = (b: { x0: number; y0: number; x1: number; y1: number }): { x: number; y: number; w: number; h: number } => ({
-  x: Math.min(b.x0, b.x1),
-  y: Math.min(b.y0, b.y1),
-  w: Math.abs(b.x1 - b.x0),
-  h: Math.abs(b.y1 - b.y0),
-});
-const intersects = (r: { x: number; y: number; w: number; h: number }, n: BNode): boolean =>
-  !(n.x > r.x + r.w || n.x + n.w < r.x || n.y > r.y + r.h || n.y + n.h < r.y);
-
-function resizeNode(r: { box: BNode; k: string; sx: number; sy: number }, x: number, y: number, shift: boolean): BNode {
-  const b = r.box;
-  const dx = x - r.sx, dy = y - r.sy;
-  let w = b.w + (r.k.includes('e') ? dx : r.k.includes('w') ? -dx : 0);
-  let h = b.h + (r.k.includes('s') ? dy : r.k.includes('n') ? -dy : 0);
-  w = Math.max(40, w);
-  h = Math.max(30, h);
-  if (shift) {
-    const aspect = b.w / b.h || 1;
-    if (r.k.length === 2) {
-      // 角手柄:取位移更大的轴为主,另一轴按比例
-      if (Math.abs(w - b.w) >= Math.abs(h - b.h)) h = w / aspect;
-      else w = h * aspect;
-    } else if (r.k === 'n' || r.k === 's') {
-      w = h * aspect;
-    } else {
-      h = w / aspect;
-    }
-    w = Math.max(40, w);
-    h = Math.max(30, h);
-  }
-  let nx = b.x, ny = b.y;
-  if (r.k.includes('w')) nx = b.x + b.w - w; // 锚定右/对边
-  if (r.k.includes('n')) ny = b.y + b.h - h;
-  return { ...b, x: snap(nx), y: snap(ny), w: snap(w), h: snap(h) };
 }
 const HANDLES: { k: string; fx: number; fy: number }[] = [
   { k: 'nw', fx: 0, fy: 0 }, { k: 'n', fx: 0.5, fy: 0 }, { k: 'ne', fx: 1, fy: 0 },

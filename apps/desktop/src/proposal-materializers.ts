@@ -1,6 +1,6 @@
 import type { AbstractStyle } from '@otterpatch/core';
-import { cleanLabel, innerForStyle, parseDrawioStyle, snap } from './DrawioBoard.js';
-import type { BEdge, BNode } from './DrawioBoard.js';
+import { cleanLabel, innerForStyle, parseDrawioStyle } from './DrawioBoard.js';
+import { snap, type BEdge, type BNode } from './drawio-geometry.js';
 import type { DocFmt, DocTable } from './richdoc-editing.js';
 import { styleToKind } from './shape-engine.js';
 import { isGridStructureKind } from './grid-operation-kinds.js';
