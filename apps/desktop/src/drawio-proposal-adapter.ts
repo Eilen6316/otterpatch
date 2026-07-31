@@ -1,4 +1,4 @@
-import { parseDrawioStyle } from './DrawioBoard.js';
+import { parseDrawioStyle } from './drawio-model.js';
 import { snap, type BEdge } from './drawio-geometry.js';
 import type { BoardObject, BoardPatch } from './proposal-materializers.js';
 

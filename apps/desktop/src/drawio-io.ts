@@ -1,5 +1,5 @@
 import { inflateSync, strFromU8 } from 'fflate';
-import { parseDrawioStyle, innerForStyle, cleanLabel } from './DrawioBoard.js';
+import { cleanLabel, innerForStyle, parseDrawioStyle } from './drawio-model.js';
 import type { BEdge, BNode } from './drawio-geometry.js';
 import { styleToKind } from './shape-engine.js';
 

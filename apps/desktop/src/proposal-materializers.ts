@@ -1,5 +1,5 @@
 import type { AbstractStyle } from '@otterpatch/core';
-import { cleanLabel, innerForStyle, parseDrawioStyle } from './DrawioBoard.js';
+import { cleanLabel, innerForStyle, parseDrawioStyle } from './drawio-model.js';
 import { snap, type BEdge, type BNode } from './drawio-geometry.js';
 import type { DocFmt, DocTable } from './richdoc-editing.js';
 import { styleToKind } from './shape-engine.js';

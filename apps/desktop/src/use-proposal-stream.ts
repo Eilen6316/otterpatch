@@ -15,7 +15,7 @@ import type { ClarifyQuestion, Turn, WorkspaceFormat } from './app-thread-types.
 import { captureGridOpBeforeState, orderWordEditsForApply, replaceLastWithWorkspaceDiff } from './app-workspace-proposals.js';
 import { chartToPngDataUrl } from './chart.js';
 import { applyDrawioMutations } from './drawio-proposal-adapter.js';
-import { extractDrawioOps, makeRawBoardConv } from './DrawioBoard.js';
+import { extractDrawioOps, makeRawBoardConv } from './drawio-model.js';
 import type { BoardHandle, BoardSel } from './DrawioBoard.js';
 import type { BEdge, BNode } from './drawio-geometry.js';
 import { applyExcelStructure, type ChartPlacement } from './excel-structure-adapter.js';

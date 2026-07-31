@@ -27,9 +27,12 @@ import {
   straightRoute,
 } from './drawio-geometry.js';
 import type { ArrowKind, BEdge, BNode, XY } from './drawio-geometry.js';
+import { cleanLabel, parseDrawioStyle } from './drawio-model.js';
 
 export { snap } from './drawio-geometry.js';
 export type { BEdge, BNode } from './drawio-geometry.js';
+export { cleanLabel, extractDrawioOps, innerForStyle, makeRawBoardConv, parseDrawioStyle } from './drawio-model.js';
+export type { RawDrawioOp } from './drawio-model.js';
 
 /** Toolbar callback: open a dropdown anchored to the clicked control (mirrors App's ribbon). */
 export type OnOpen = (it: string, el: HTMLElement) => void;
@@ -132,8 +135,6 @@ function arrowGlyph(ak: ArrowKind): ReactNode {
   );
 }
 
-/** drawio value 里的 HTML 痕迹(<br>/标签)转纯文本——标签是纯文本渲染,别把 "<br>" 字面画出来。 */
-export const cleanLabel = (v: unknown): string => String(v ?? '').replace(/<br\s*\/?\s*>/gi, ' · ').replace(/<[^>]+>/g, '').trim();
 export interface BoardSel {
   count: number;
   chip: string;
@@ -160,105 +161,6 @@ export interface BoardHandle {
   loadPages(pages: Array<{ name: string; nodes: BNode[]; edges: BEdge[] }>): void;
   /** 按快照恢复/重放对象(存在则整体替换,被删则补回)。 */
   restoreObject(obj: { node?: BNode; edge?: BEdge }): void;
-}
-/** drawio style 串 → 画板节点的线稿 inner SVG(覆盖常见形状,默认矩形)。 */
-export function innerForStyle(style?: string): string {
-  const s = (style ?? '').toLowerCase();
-  if (s.includes('ellipse')) return '<ellipse cx="20" cy="15" rx="16" ry="11"/>';
-  if (s.includes('rhombus')) return '<polygon points="20,3 37,15 20,27 3,15"/>';
-  if (s.includes('hexagon')) return '<polygon points="11,5 29,5 37,15 29,25 11,25 3,15"/>';
-  if (s.includes('cylinder')) return '<ellipse cx="20" cy="7" rx="13" ry="3.5"/><line x1="7" y1="7" x2="7" y2="23"/><line x1="33" y1="7" x2="33" y2="23"/><path d="M7 23 A13 3.5 0 0 0 33 23"/>';
-  if (s.includes('parallelogram')) return '<polygon points="9,5 37,5 31,25 3,25"/>';
-  if (s.includes('trapezoid')) return '<polygon points="10,5 30,5 37,25 3,25"/>';
-  if (s.includes('cloud')) return '<path d="M11 23 Q4 23 5 17 Q5 12 11 12 Q13 5 20 7 Q27 4 29 11 Q36 11 35 17 Q36 23 29 23 Z"/>';
-  if (s.includes('document')) return '<path d="M5 5 H35 V21 C31 26 27 17 23 21 C19 25 15 17 11 21 C9 23 7 23 5 21 Z"/>';
-  if (s.includes('note') || s.includes('card')) return '<path d="M5 5 H29 L37 13 V25 H5 Z"/><path d="M29 5 V13 H37" fill="none"/>';
-  if (s.includes('callout')) return '<path d="M5 5 H37 V19 H17 L10 26 V19 H5 Z"/>';
-  if (s.includes('triangle')) return '<polygon points="20,4 37,26 3,26"/>';
-  if (s.includes('actor')) return '<circle cx="20" cy="7" r="4" fill="none"/><path d="M20 11 V19 M12 14 H28 M20 19 L13 27 M20 19 L27 27" fill="none"/>';
-  if (s.includes('star')) return '<polygon points="20,3 24,12 34,12 26,18 29,27 20,21 11,27 14,18 6,12 16,12"/>';
-  if (s.includes('rounded=1') || s.includes('rounded')) return '<rect x="4" y="5" width="32" height="20" rx="4" ry="4"/>';
-  return '<rect x="4" y="5" width="32" height="20"/>';
-}
-/** 解析 drawio style 串 → 画板节点的填充/描边/字体(借鉴 Next AI Drawio 的彩色渲染)。 */
-export function parseDrawioStyle(style?: string): { fill?: string; stroke?: string; fontColor?: string; fontSize?: number; bold?: boolean; text?: boolean; vTop?: boolean } {
-  const s = style ?? '';
-  const get = (k: string): string | undefined => new RegExp(k + '=([^;]+)').exec(s)?.[1]?.trim();
-  const fill = get('fillColor'); const stroke = get('strokeColor'); const fontColor = get('fontColor');
-  const fs = get('fontSize'); const fontStyle = get('fontStyle');
-  const isText = /(?:^|;)\s*text(?:;|$)/.test(s) || s.includes('text;html');
-  // 容器/泳道/贴顶标签:标题渲染在顶部,别居中压住子节点(drawio 语义:container/swimlane 的 label 在顶栏)
-  const vTop = /verticalAlign=top/.test(s) || /container=1/.test(s) || /(?:^|;)\s*(?:swimlane|group)(?:;|$|\b)/.test(s);
-  const wrap = /whitespace=wrap/i.test(s); // 长文本节点:标签换行而非截断
-  return {
-    ...(wrap ? { wrap: true } : {}),
-    ...(fill && fill !== 'none' ? { fill } : {}),
-    ...(stroke && stroke !== 'none' ? { stroke } : {}),
-    ...(fontColor ? { fontColor } : {}),
-    ...(fs && Number.isFinite(parseFloat(fs)) ? { fontSize: Math.round(parseFloat(fs)) } : {}),
-    ...(fontStyle && (parseInt(fontStyle, 10) & 1) ? { bold: true } : {}),
-    ...(isText ? { text: true } : {}),
-    ...(vTop ? { vTop: true } : {}),
-  };
-}
-export interface RawDrawioOp { op?: string; cellId?: string; value?: string; style?: string; edge?: boolean; source?: string; target?: string; parent?: string; x?: number; y?: number; width?: number; height?: number }
-/** 从【流式中的】propose 入参里抽出已闭合的 op 对象(容忍尾部未完成的 JSON),供"边生成边画"。 */
-export function extractDrawioOps(buf: string): RawDrawioOp[] {
-  const m = /"ops"\s*:\s*\[/.exec(buf);
-  if (!m) return [];
-  let i = m.index + m[0].length;
-  const out: RawDrawioOp[] = [];
-  while (i < buf.length) {
-    while (i < buf.length && /[\s,]/.test(buf[i]!)) i++;
-    if (i >= buf.length || buf[i] !== '{') break;
-    let depth = 0, inStr = false, esc = false, j = i, closed = false;
-    for (; j < buf.length; j++) {
-      const c = buf[j]!;
-      if (esc) { esc = false; continue; }
-      if (c === '\\') { esc = true; continue; }
-      if (c === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (c === '{') depth++;
-      else if (c === '}') { depth--; if (depth === 0) { j++; closed = true; break; } }
-    }
-    if (!closed) break;
-    try { out.push(JSON.parse(buf.slice(i, j)) as RawDrawioOp); } catch { break; }
-    i = j;
-  }
-  return out;
-}
-/** 流式画板转换器:把【原始 proposal op】逐个转成画板节点/连线(editId 'e'+index 与 buildChangeSet 对齐)。 */
-export function makeRawBoardConv(seq: number, taken?: (id: string) => boolean): (op: RawDrawioOp, index: number) => { editId: string; boardId: string; node?: BNode; edge?: BEdge } | null {
-  const idMap = new Map<string, string>();
-  // 保留 Agent 给的 cellId(多轮连贯的关键:下一批还能用 n1 引用上一批画的节点);仅与画板已有对象撞名才改名
-  const bid = (orig?: string): string => {
-    const k = orig ?? ('?' + idMap.size);
-    let v = idMap.get(k);
-    if (!v) { v = orig && !taken?.(orig) ? orig : `${orig ?? 'g'}_${seq}_${idMap.size + 1}`; idMap.set(k, v); }
-    return v;
-  };
-  // 引用(edge 两端/parent):本批建过用映射名;否则当作画板已有对象,原名直连
-  const refId = (orig?: string): string => (orig ? idMap.get(orig) ?? orig : bid(orig));
-  const made = new Map<string, BNode>(); // 原始 cellId → 节点(parent 相对坐标换算)
-  let stackY = 60;
-  return (op, index) => {
-    if (op.op !== 'add') return null;
-    if (op.edge || (op.source && op.target)) {
-      const id = bid(op.cellId ?? 'e_' + index);
-      return { editId: 'e' + index, boardId: id, edge: { id, from: refId(op.source), to: refId(op.target), arrow: /endArrow=none/.test(op.style ?? '') ? 'none' : 'classic', style: 'ortho', ...(/dashed=1/.test(op.style ?? '') ? { dash: true } : {}), ...(/strokeColor=([^;]+)/.exec(op.style ?? '')?.[1] ? { color: /strokeColor=([^;]+)/.exec(op.style ?? '')![1]! } : {}) } };
-    }
-    const id = bid(op.cellId ?? 'n_' + index);
-    const w = op.width ?? 160; const h = op.height ?? 48;
-    let x = op.x ?? 60; let y = op.y ?? stackY;
-    // parent 相对坐标 → 绝对(drawio 语义;仅本批内的容器,流式场景容器总在子节点前到达)
-    if (op.parent && op.parent !== '1') { const par = made.get(op.parent); if (par) { x += par.x; y += par.y; } }
-    stackY = Math.max(stackY, y) + h + 40;
-    const st = parseDrawioStyle(op.style);
-    const sk = styleToKind(op.style);
-    const node: BNode = { id, x: snap(x), y: snap(y), w, h, inner: innerForStyle(op.style), label: cleanLabel(op.value), kind: st.text ? 'text' : 'agent', ...(op.style ? { style: op.style } : {}), ...(sk ? { shape: sk } : {}), ...st };
-    if (op.cellId) made.set(op.cellId, node);
-    return { editId: 'e' + index, boardId: id, node };
-  };
 }
 const HANDLES: { k: string; fx: number; fy: number }[] = [
   { k: 'nw', fx: 0, fy: 0 }, { k: 'n', fx: 0.5, fy: 0 }, { k: 'ne', fx: 1, fy: 0 },
