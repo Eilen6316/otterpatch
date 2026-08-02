@@ -9,8 +9,6 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import type { DragEvent, ReactNode } from 'react';
 import { useT } from './i18n.js';
 import { shapeSvg, styleToKind, SHAPE_DEFS } from './shape-engine.js';
-import { FUNC_ICONS, IconPlus, IconSearch, IconUndo } from './icons.js';
-import { DRAWIO_SHAPES } from './drawio-shapes.js';
 import {
   avoidRoute,
   bandRect,
@@ -33,90 +31,8 @@ export { snap } from './drawio-geometry.js';
 export type { BEdge, BNode } from './drawio-geometry.js';
 export { cleanLabel, extractDrawioOps, innerForStyle, makeRawBoardConv, parseDrawioStyle } from './drawio-model.js';
 export type { RawDrawioOp } from './drawio-model.js';
-
-/** Toolbar callback: open a dropdown anchored to the clicked control (mirrors App's ribbon). */
-export type OnOpen = (it: string, el: HTMLElement) => void;
-
-/** drawio 顶部工具栏(仿 next-ai-drawio):单行图标,取代 Office 选项卡式功能区。 */
-const DTOOLS = ['选择', '添加节点', '连线', '文本', '自由绘制', '填充色', '线条', '圆角', '阴影', '形状'];
-export function DrawioToolbar({ onAct }: { onAct: OnOpen }) {
-  const t = useT();
-  return (
-    <div className="dtoolbar">
-      <button className="dtool" title={t('撤销')} onClick={(e) => onAct('撤销', e.currentTarget)}><IconUndo size={16} /></button>
-      <span className="dsep" />
-      {DTOOLS.map((it) => {
-        const Ico = FUNC_ICONS[it];
-        const accent = it === '填充色' ? ' ic-amber' : '';
-        return (
-          <button key={it} className={'dtool' + accent} title={t(it)} onClick={(e) => onAct(it, e.currentTarget)}>
-            {Ico ? <Ico size={16} /> : it.slice(0, 1)}
-          </button>
-        );
-      })}
-      <span className="grow" />
-      <span className="dzoom"><IconSearch size={13} /> 100%</span>
-    </div>
-  );
-}
-
-/** drawio 左侧形状面板(高度还原 jgraph/drawio:可折叠 通用/杂项/高级 + 搜索 + 便笺本 + 更多图形)。 */
-const PAL_CATS: { key: 'general' | 'flow' | 'arrows' | 'icons'; label: string }[] = [
-  { key: 'general', label: '通用' },
-  { key: 'flow', label: '流程图' },
-  { key: 'arrows', label: '箭头' },
-  { key: 'icons', label: '图标' },
-];
-
-export function DrawioPalette({ onPick }: { onPick: (s: string) => void }) {
-  const t = useT();
-  const [q, setQ] = useState('');
-  const [open, setOpen] = useState<Record<string, boolean>>({ general: true, flow: true, arrows: false, icons: false });
-  const query = q.trim();
-  return (
-    <aside className="palette">
-      <div className="pal-search">
-        <IconSearch size={13} />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('搜索形状')} />
-      </div>
-      <div className="pal-cat">
-        <div className="pal-cat-h">{t('便笺本')}</div>
-        <div className="pal-scratch">{t('把元素拖至此处')}</div>
-      </div>
-      {PAL_CATS.map((cat) => {
-        // 形状库改由参数化引擎驱动(80 种,drawio 同源几何):缩略图与画布同一生成器,所见即所得
-        const shapes = SHAPE_DEFS.filter((s) => s.cat === cat.key && (!query || s.name.includes(query) || s.kind.toLowerCase().includes(query.toLowerCase())));
-        const isOpen = query ? shapes.length > 0 : open[cat.key] !== false;
-        if (query && shapes.length === 0) return null;
-        return (
-          <div className="pal-cat" key={cat.key}>
-            <button className="pal-cat-h click" onClick={() => setOpen((o) => ({ ...o, [cat.key]: !(o[cat.key] !== false) }))}>
-              <span className={'tri' + (isOpen ? ' open' : '')}>▸</span> {t(cat.label)}
-              <span className="pal-n">{shapes.length}</span>
-            </button>
-            {isOpen && (
-              <div className="pal-grid">
-                {shapes.map((s) => (
-                  <button
-                    key={s.kind}
-                    className="pal-shape"
-                    title={s.name}
-                    draggable
-                    onDragStart={(e) => e.dataTransfer.setData('otterpatch/shape', JSON.stringify({ name: s.name, shape: s.kind }))}
-                    onClick={() => onPick(s.name)}
-                  >
-                    <svg viewBox="0 0 40 30" fill="none" stroke="currentColor" strokeWidth={1.2} dangerouslySetInnerHTML={{ __html: shapeSvg(s.kind, 40, 30) }} />
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      <button className="pal-more"><IconPlus size={13} /> {t('更多图形')}</button>
-    </aside>
-  );
-}
+export { DrawioPalette, DrawioToolbar } from './DrawioChrome.js';
+export type { OnOpen } from './DrawioChrome.js';
 
 const ARROWS: ArrowKind[] = ['classic', 'open', 'diamond', 'circle', 'none'];
 function arrowGlyph(ak: ArrowKind): ReactNode {

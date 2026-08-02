@@ -23,8 +23,9 @@ import { DiffToggle } from './DiffToggle.js';
 import { AgentHome } from './AgentHome.js';
 import { Composer } from './Composer.js';
 import { TopBar } from './TopBar.js';
-import { DrawioBoard, DrawioToolbar, DrawioPalette } from './DrawioBoard.js';
+import { DrawioBoard } from './DrawioBoard.js';
 import type { BoardSel, BoardHandle } from './DrawioBoard.js';
+import { DrawioPalette, DrawioToolbar } from './DrawioChrome.js';
 import { AgentStatusLine, ClarifyCard } from './ThreadCards.js';
 import { Markdown } from './Markdown.js';
 import {
