@@ -6,26 +6,19 @@
 // NOTE: imports appended below are the minimal set the moved block references.
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import type { DragEvent, ReactNode } from 'react';
+import type { DragEvent } from 'react';
 import { useT } from './i18n.js';
 import { shapeSvg, styleToKind, SHAPE_DEFS } from './shape-engine.js';
 import {
-  avoidRoute,
   bandRect,
-  controlPoints,
-  edgePts,
   GRID,
   intersects,
-  ortho,
-  perim,
   resizeNode,
-  roundedPath,
-  smoothPath,
   snap,
-  straightRoute,
 } from './drawio-geometry.js';
-import type { ArrowKind, BEdge, BNode, XY } from './drawio-geometry.js';
+import type { BEdge, BNode, XY } from './drawio-geometry.js';
 import { cleanLabel, parseDrawioStyle } from './drawio-model.js';
+import { DrawioEdgeHandles, DrawioEdgeLayer, DrawioEdgeToolbar } from './DrawioEdges.js';
 
 export { snap } from './drawio-geometry.js';
 export type { BEdge, BNode } from './drawio-geometry.js';
@@ -33,23 +26,6 @@ export { cleanLabel, extractDrawioOps, innerForStyle, makeRawBoardConv, parseDra
 export type { RawDrawioOp } from './drawio-model.js';
 export { DrawioPalette, DrawioToolbar } from './DrawioChrome.js';
 export type { OnOpen } from './DrawioChrome.js';
-
-const ARROWS: ArrowKind[] = ['classic', 'open', 'diamond', 'circle', 'none'];
-function arrowGlyph(ak: ArrowKind): ReactNode {
-  const x2 = ak === 'none' ? 18 : 11;
-  const head =
-    ak === 'classic' ? <path d="M10,2 L17,6 L10,10 z" fill="currentColor" /> :
-    ak === 'open' ? <path d="M11,2.5 L17,6 L11,9.5" fill="none" stroke="currentColor" strokeWidth={1.3} /> :
-    ak === 'diamond' ? <path d="M9,6 L13,2.5 L17,6 L13,9.5 z" fill="currentColor" /> :
-    ak === 'circle' ? <circle cx="14" cy="6" r="2.6" fill="currentColor" /> :
-    null;
-  return (
-    <g stroke="currentColor">
-      <line x1={1} y1={6} x2={x2} y2={6} strokeWidth={1.3} />
-      {head}
-    </g>
-  );
-}
 
 export interface BoardSel {
   count: number;
@@ -608,78 +584,14 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
     >
       <div className="board-canvas" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
       <svg className="board-svg">
-        <defs>
-          <marker id="otterpatch-arr" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="context-stroke" /></marker>
-          <marker id="otterpatch-arr-sel" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--accent)" /></marker>
-          <marker id="m-classic" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="context-stroke" /></marker>
-          <marker id="m-open" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto"><path d="M1,0.5 L8,4 L1,7.5" fill="none" stroke="context-stroke" strokeWidth="1.4" /></marker>
-          <marker id="m-diamond" markerWidth="13" markerHeight="11" refX="9.5" refY="4" orient="auto"><path d="M0,4 L4.7,0.5 L9.4,4 L4.7,7.5 z" fill="context-stroke" /></marker>
-          <marker id="m-circle" markerWidth="11" markerHeight="11" refX="7.6" refY="4" orient="auto"><circle cx="4" cy="4" r="3" fill="context-stroke" /></marker>
-        </defs>
-        {(() => {
-        // 先整体路由一遍:共用同一垂直/水平通道的 Z 形边分车道错开 10px(drawio 平行段间距语义)
-        const routed = new Map<string, XY[]>();
-        const lanes = new Map<number, string[]>();
-        for (const ed of edges) {
-          const a = nodes.find((n) => n.id === ed.from); const b = nodes.find((n) => n.id === ed.to);
-          if (!a || !b || ed.style === 'curve') continue;
-          const pts = avoidRoute(a, b, ed, nodes);
-          routed.set(ed.id, pts);
-          if (pts.length === 4) {
-            const vert = Math.abs(pts[1]!.x - pts[2]!.x) < 0.5;
-            const key = vert ? Math.round(pts[1]!.x / 20) : 100000 + Math.round(pts[1]!.y / 20);
-            lanes.set(key, [...(lanes.get(key) ?? []), ed.id]);
-          }
-        }
-        for (const ids of lanes.values()) {
-          if (ids.length < 2) continue;
-          ids.forEach((id, i) => {
-            const pts = routed.get(id)!;
-            const off = (i - (ids.length - 1) / 2) * 10;
-            if (Math.abs(pts[1]!.x - pts[2]!.x) < 0.5) { pts[1] = { x: pts[1]!.x + off, y: pts[1]!.y }; pts[2] = { x: pts[2]!.x + off, y: pts[2]!.y }; }
-            else { pts[1] = { x: pts[1]!.x, y: pts[1]!.y + off }; pts[2] = { x: pts[2]!.x, y: pts[2]!.y + off }; }
-          });
-        }
-        return edges.map((ed) => {
-          const a = nodes.find((n) => n.id === ed.from);
-          const b = nodes.find((n) => n.id === ed.to);
-          if (!a || !b) return null;
-          const pts = routed.get(ed.id) ?? avoidRoute(a, b, ed, nodes); // 预路由(含分车道)优先
-          const d = ed.style === 'curve'
-            ? smoothPath([straightRoute(a, b)[0]!, ...(ed.points ?? []), straightRoute(a, b)[1]!])
-            : ed.style === 'straight' && !ed.points?.length ? `M ${pts[0]!.x} ${pts[0]!.y} L ${pts[1]!.x} ${pts[1]!.y}` : roundedPath(pts);
-          const on = selEdge === ed.id;
-          const arrow = ed.arrow ?? 'classic';
-          return (
-            <g key={ed.id}>
-              <path d={d} fill="none" stroke="transparent" strokeWidth={12} style={{ pointerEvents: 'stroke', cursor: 'pointer' }} onPointerDown={(e) => { e.stopPropagation(); setSelEdge(ed.id); setSelIds(new Set()); }} />
-              <path d={d} fill="none" stroke={on ? 'var(--accent)' : ed.color ?? '#5f6673'} strokeWidth={on ? (ed.width ?? 1.5) + 0.5 : ed.width ?? 1.5} strokeDasharray={ed.dash ? '6 4' : undefined} markerEnd={arrow === 'none' ? undefined : `url(#m-${arrow})`} style={{ pointerEvents: 'none' }} />
-              {ed.label ? (() => { const mi = Math.max(1, Math.floor(pts.length / 2)); const p1 = pts[mi - 1]!, p2 = pts[mi]!; return <text x={(p1.x + p2.x) / 2} y={(p1.y + p2.y) / 2 - 6} className="bedge-label">{ed.label}</text>; })() : null}
-            </g>
-          );
-        });
-      })()}
-        {/* 选中边的手柄(端点/航点/虚拟折点)移到节点之上的覆盖层 board-overlay,避免被节点 div 遮挡 */}
-        {conn
-          ? (() => {
-              const a = nodes.find((n) => n.id === conn.from);
-              if (!a) return null;
-              const tgt = conn.tgt ? nodes.find((n) => n.id === conn.tgt) : null;
-              if (tgt) return <path d={roundedPath(ortho(a, tgt))} fill="none" stroke="#16a34a" strokeWidth={2} strokeDasharray="6 3" markerEnd="url(#otterpatch-arr-sel)" />;
-              const p1 = perim(a, conn.x, conn.y);
-              return <line x1={p1.x} y1={p1.y} x2={conn.x} y2={conn.y} stroke="var(--accent)" strokeWidth={1.6} strokeDasharray="5 3" markerEnd="url(#otterpatch-arr-sel)" />;
-            })()
-          : null}
-        {guides ? (
-          <g stroke="#ff5a5a" strokeWidth={1} strokeDasharray="4 4" vectorEffect="non-scaling-stroke" style={{ pointerEvents: 'none' }}>
-            {guides.v.map((vx, i) => (
-              <line key={'v' + i} x1={vx} y1={0} x2={vx} y2={6000} />
-            ))}
-            {guides.h.map((hy, i) => (
-              <line key={'h' + i} x1={0} y1={hy} x2={6000} y2={hy} />
-            ))}
-          </g>
-        ) : null}
+        <DrawioEdgeLayer
+          nodes={nodes}
+          edges={edges}
+          selectedEdgeId={selEdge}
+          connection={conn}
+          guides={guides}
+          onSelect={(edgeId) => { setSelEdge(edgeId); setSelIds(new Set()); }}
+        />
       </svg>
 
       {nodes.map((n) => {
@@ -809,115 +721,43 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
         );
       })}
       <svg className="board-svg board-overlay">
-        {selEdge
-          ? (() => {
-              const ed = edges.find((x) => x.id === selEdge);
-              const a = ed && nodes.find((n) => n.id === ed.from);
-              const b = ed && nodes.find((n) => n.id === ed.to);
-              if (!ed || !a || !b) return null;
-              const pts = edgePts(a, b, ed.style, ed.points);
-              const s = pts[0]!;
-              const e2 = pts[pts.length - 1]!;
-              const wps = ed.points ?? [];
-              const ctrl = controlPoints(a, b, wps);
-              const removeWp = (i: number): void => {
-                commit();
-                setEdges((es) => es.map((x) => (x.id === ed.id ? { ...x, points: wps.length > 1 ? wps.filter((_, k) => k !== i) : undefined } : x)));
-              };
-              const addWpAt = (segIdx: number, p: XY, e: { stopPropagation: () => void; pointerId: number }): void => {
-                e.stopPropagation();
-                capture(e);
-                beginGesture();
-                movedRef.current = true;
-                const np = [...wps];
-                np.splice(segIdx, 0, { x: snap(p.x), y: snap(p.y) });
-                setEdges((es) => es.map((x) => (x.id === ed.id ? { ...x, points: np } : x)));
-                setWpDrag({ edgeId: ed.id, index: segIdx });
-              };
-              const epStart = (end: 'from' | 'to', e: { stopPropagation: () => void; pointerId: number }): void => {
-                e.stopPropagation();
-                capture(e);
-                beginGesture();
-                setEpDrag({ edgeId: ed.id, end, tgt: null });
-              };
-              return (
-                <g>
-                  <g style={{ cursor: 'pointer', pointerEvents: 'all' }} onPointerDown={(e) => epStart('from', e)}>
-                    <circle cx={s.x} cy={s.y} r={9} fill="transparent" />
-                    <circle cx={s.x} cy={s.y} r={5} fill="#fff" stroke="var(--accent)" strokeWidth={2} />
-                  </g>
-                  <g style={{ cursor: 'pointer', pointerEvents: 'all' }} transform={`translate(${e2.x},${e2.y})`} onPointerDown={(e) => epStart('to', e)}>
-                    <circle r={10} fill="transparent" />
-                    <circle r={6} fill="#fff" stroke="#00c853" strokeWidth={1.5} />
-                    <line x1={-3.4} y1={-3.4} x2={3.4} y2={3.4} stroke="#00c853" strokeWidth={2.2} strokeLinecap="round" />
-                    <line x1={3.4} y1={-3.4} x2={-3.4} y2={3.4} stroke="#00c853" strokeWidth={2.2} strokeLinecap="round" />
-                  </g>
-                  {ctrl.slice(0, -1).map((c, i) => {
-                    const q = ctrl[i + 1]!;
-                    const mid = { x: (c.x + q.x) / 2, y: (c.y + q.y) / 2 };
-                    return (
-                      <g key={'vb' + i} style={{ cursor: 'crosshair', pointerEvents: 'all' }} onPointerDown={(e) => addWpAt(i, mid, e)}>
-                        <circle cx={mid.x} cy={mid.y} r={10} fill="transparent" />
-                        <circle cx={mid.x} cy={mid.y} r={4.5} fill="var(--accent)" fillOpacity={0.18} stroke="var(--accent)" strokeOpacity={0.65} strokeWidth={1.2} />
-                      </g>
-                    );
-                  })}
-                  {wps.map((p, i) => (
-                    <circle
-                      key={'wp' + i}
-                      cx={p.x}
-                      cy={p.y}
-                      r={5}
-                      fill="var(--accent)"
-                      stroke="#fff"
-                      strokeWidth={1.6}
-                      style={{ cursor: 'move', pointerEvents: 'all' }}
-                      onPointerDown={(e) => { e.stopPropagation(); capture(e); beginGesture(); setWpDrag({ edgeId: ed.id, index: i }); }}
-                      onDoubleClick={(e) => { e.stopPropagation(); removeWp(i); }}
-                    />
-                  ))}
-                </g>
-              );
-            })()
-          : null}
+        <DrawioEdgeHandles
+          nodes={nodes}
+          edge={edges.find((edge) => edge.id === selEdge) ?? null}
+          onEndpointStart={(edgeId, end, pointerId) => { capture({ pointerId }); beginGesture(); setEpDrag({ edgeId, end, tgt: null }); }}
+          onWaypointAdd={(edgeId, index, point, pointerId) => {
+            capture({ pointerId });
+            beginGesture();
+            movedRef.current = true;
+            setEdges((es) => es.map((edge) => {
+              if (edge.id !== edgeId) return edge;
+              const points = [...(edge.points ?? [])];
+              points.splice(index, 0, { x: snap(point.x), y: snap(point.y) });
+              return { ...edge, points };
+            }));
+            setWpDrag({ edgeId, index });
+          }}
+          onWaypointStart={(edgeId, index, pointerId) => { capture({ pointerId }); beginGesture(); setWpDrag({ edgeId, index }); }}
+          onWaypointRemove={(edgeId, index) => {
+            commit();
+            setEdges((es) => es.map((edge) => edge.id === edgeId
+              ? { ...edge, points: (edge.points?.length ?? 0) > 1 ? edge.points!.filter((_, pointIndex) => pointIndex !== index) : undefined }
+              : edge));
+          }}
+        />
       </svg>
       {band ? (() => { const r = bandRect(band); return <div className="band" style={{ left: r.x, top: r.y, width: r.w, height: r.h }} />; })() : null}
       </div>
-      {selEdge
-        ? (() => {
-            const ed = edges.find((x) => x.id === selEdge);
-            const a = ed && nodes.find((n) => n.id === ed.from);
-            const b = ed && nodes.find((n) => n.id === ed.to);
-            if (!ed || !a || !b) return null;
-            const pts = edgePts(a, b, ed.style, ed.points);
-            const mid = pts[Math.floor(pts.length / 2)] ?? pts[0]!;
-            const setEdge = (patch: Partial<BEdge>): void => {
-              commit();
-              setEdges((es) => es.map((x) => (x.id === ed.id ? { ...x, ...patch } : x)));
-            };
-            return (
-              <div className="etoolbar" style={{ left: mid.x * zoom + pan.x, top: mid.y * zoom + pan.y - 44 }} onPointerDown={(e) => e.stopPropagation()}>
-                <button className={'etb' + (ed.style !== 'straight' ? ' on' : '')} title={t('正交')} onClick={() => setEdge({ style: 'ortho' })}>⌐</button>
-                <button className={'etb' + (ed.style === 'straight' ? ' on' : '')} title={t('直线')} onClick={() => setEdge({ style: 'straight' })}>╱</button>
-                <button className={'etb' + (ed.style === 'curve' ? ' on' : '')} title={t('曲线')} onClick={() => setEdge({ style: 'curve' })}>⌒</button>
-                <span className="etb-sep" />
-                <span className="etb-sep" />
-                <button className={'etb' + (ed.dash ? ' on' : '')} title={t('虚线')} onClick={() => setEdge({ dash: !ed.dash })}>┄</button>
-                <button className={'etb' + ((ed.width ?? 1.5) > 2 ? ' on' : '')} title={t('粗线')} onClick={() => setEdge({ width: (ed.width ?? 1.5) > 2 ? 1.5 : 2.5 })}>━</button>
-                {['#5f6673', '#2563eb', '#16a34a', '#dc2626'].map((c) => (
-                  <button key={c} className={'etb' + ((ed.color ?? '#5f6673') === c ? ' on' : '')} title={t('线色')} onClick={() => setEdge({ color: c })}><span className="etb-dot" style={{ background: c }} /></button>
-                ))}
-                <button className="etb" title={t('标签')} onClick={() => { const v = window.prompt(t('连线文字'), ed.label ?? ''); if (v != null) setEdge({ label: v }); }}>A</button>
-                <span className="etb-sep" />
-                {ARROWS.map((ak) => (
-                  <button key={ak} className={'etb' + ((ed.arrow ?? 'classic') === ak ? ' on' : '')} title={t('箭头') + ' ' + ak} onClick={() => setEdge({ arrow: ak })}>
-                    <svg width="20" height="12" viewBox="0 0 20 12">{arrowGlyph(ak)}</svg>
-                  </button>
-                ))}
-              </div>
-            );
-          })()
-        : null}
+      <DrawioEdgeToolbar
+        nodes={nodes}
+        edge={edges.find((edge) => edge.id === selEdge) ?? null}
+        zoom={zoom}
+        pan={pan}
+        onChange={(edgeId, patch) => {
+          commit();
+          setEdges((es) => es.map((edge) => edge.id === edgeId ? { ...edge, ...patch } : edge));
+        }}
+      />
       {nodes.length === 0 && <div className="board-hint">{t('从左侧拖拽形状到画板,或双击空白处新建;拖节点边缘圆点连线;框选多选;Ctrl+滚轮缩放')}</div>}
       <div className="board-pages">
         {pageNames.map((n, i) => (
