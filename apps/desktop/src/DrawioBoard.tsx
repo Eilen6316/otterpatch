@@ -1,9 +1,7 @@
 /**
- * Drawio workspace: toolbar, shape palette, board state, selection, and edge editing.
- * Pure geometry and routing live in drawio-geometry.ts.
+ * Drawio workspace state coordinator and node interaction surface.
+ * Persistence, projection, geometry, edge UI, and chrome live in focused modules.
  */
-/* eslint-disable */
-// NOTE: imports appended below are the minimal set the moved block references.
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
@@ -19,6 +17,15 @@ import {
 import type { BEdge, BNode, XY } from './drawio-geometry.js';
 import { cleanLabel, parseDrawioStyle } from './drawio-model.js';
 import { DrawioEdgeHandles, DrawioEdgeLayer, DrawioEdgeToolbar } from './DrawioEdges.js';
+import {
+  buildBoardSelection,
+  loadBoardStore,
+  sanitizeBoardEdge,
+  sanitizeBoardNode,
+  sanitizeBoardPage,
+  saveBoardStore,
+} from './drawio-board-state.js';
+import type { BoardPage, BoardSel } from './drawio-board-state.js';
 
 export { snap } from './drawio-geometry.js';
 export type { BEdge, BNode } from './drawio-geometry.js';
@@ -26,16 +33,7 @@ export { cleanLabel, extractDrawioOps, innerForStyle, makeRawBoardConv, parseDra
 export type { RawDrawioOp } from './drawio-model.js';
 export { DrawioPalette, DrawioToolbar } from './DrawioChrome.js';
 export type { OnOpen } from './DrawioChrome.js';
-
-export interface BoardSel {
-  count: number;
-  chip: string;
-  context: string;
-  board: {
-    nodes: Array<{ id: string; x: number; y: number; width: number; height: number }>;
-    edges: Array<{ id: string; source: string; target: string }>;
-  };
-}
+export type { BoardPage, BoardSel } from './drawio-board-state.js';
 /** App ↔ DrawioBoard 命令式句柄:把 Agent 提案的节点/连线落到画板、移除、或高亮某个对象供审阅。 */
 export interface BoardHandle {
   addObjects(nodes: BNode[], edges: BEdge[]): void;
@@ -50,7 +48,7 @@ export interface BoardHandle {
   /** 整板读取(导出 .drawio)。 */
   getBoard(): { nodes: BNode[]; edges: BEdge[] };
   /** 多页导入:整簿替换(页名保留),激活第一页。 */
-  loadPages(pages: Array<{ name: string; nodes: BNode[]; edges: BEdge[] }>): void;
+  loadPages(pages: BoardPage[]): void;
   /** 按快照恢复/重放对象(存在则整体替换,被删则补回)。 */
   restoreObject(obj: { node?: BNode; edge?: BEdge }): void;
 }
@@ -62,35 +60,10 @@ const HANDLES: { k: string; fx: number; fy: number }[] = [
 const PORTS: XY[] = [{ x: 0.5, y: 0 }, { x: 1, y: 0.5 }, { x: 0.5, y: 1 }, { x: 0, y: 0.5 }];
 
 /** 高度复刻 drawio 的交互画板:周界正交圆角连线、悬停连接点拖拽连线(绿色目标高亮)、8 缩放手柄、网格吸附、改名、删边删点、双击空白建节点。 */
-const BOARD_KEY = 'oa.board';
-export interface BoardPage { name: string; nodes: BNode[]; edges: BEdge[] }
-
-const FALLBACK_INNER = '<rect x="4" y="5" width="32" height="20"/>';
-const FORBIDDEN_SVG_INNER = /<\s*(script|foreignObject|iframe|object|embed|image|use|a|audio|video|canvas|style|animate|set)\b|\bon[a-z]+\s*=|(?:href|xlink:href)\s*=|javascript:/i;
-const isKnownShape = (shape?: string): shape is string => !!shape && SHAPE_DEFS.some((s) => s.kind === shape);
-const safeSvgInner = (inner: string | undefined): string => {
-  if (!inner) return '';
-  return FORBIDDEN_SVG_INNER.test(inner) ? FALLBACK_INNER : inner;
-};
-function sanitizeNode(n: BNode): BNode {
-  const next: BNode = { ...n, inner: safeSvgInner(n.inner) };
-  if (next.shape && !isKnownShape(next.shape)) delete next.shape;
-  return next;
-}
-const sanitizePage = (p: BoardPage): BoardPage => ({ name: p.name, nodes: (p.nodes ?? []).map(sanitizeNode), edges: p.edges ?? [] });
-/** 读持久化画板(多页;兼容旧单页 {nodes,edges} 格式迁移)。 */
-function loadBoardStore(): { pages: BoardPage[]; cur: number } {
-  try {
-    const j = JSON.parse(localStorage.getItem(BOARD_KEY) ?? '{}') as { pages?: BoardPage[]; cur?: number; nodes?: BNode[]; edges?: BEdge[] };
-    if (Array.isArray(j.pages) && j.pages.length) return { pages: j.pages.map(sanitizePage), cur: Math.min(Math.max(j.cur ?? 0, 0), j.pages.length - 1) };
-    if (j.nodes?.length || j.edges?.length) return { pages: [sanitizePage({ name: 'Page-1', nodes: j.nodes ?? [], edges: j.edges ?? [] })], cur: 0 };
-  } catch { /* 损坏则重建 */ }
-  return { pages: [{ name: 'Page-1', nodes: [], edges: [] }], cur: 0 };
-}
 export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel | null) => void }>(function DrawioBoard({ onBoardSel }, apiRef) {
   const t = useT();
   // 多页 + 持久化:nodes/edges = 当前页工作集,非活动页存 stash;整簿(含页名/当前页)落 localStorage
-  const store0 = useRef(loadBoardStore()).current;
+  const store0 = useRef(loadBoardStore(localStorage)).current;
   const [nodes, setNodes] = useState<BNode[]>(store0.pages[store0.cur]?.nodes ?? []);
   const [edges, setEdges] = useState<BEdge[]>(store0.pages[store0.cur]?.edges ?? []);
   const [pageNames, setPageNames] = useState<string[]>(store0.pages.map((p) => p.name));
@@ -99,7 +72,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
   useEffect(() => {
     stashRef.current[curPage] = { nodes, edges };
     const timer = window.setTimeout(() => {
-      try { localStorage.setItem(BOARD_KEY, JSON.stringify({ pages: pageNames.map((name, i) => sanitizePage({ name, ...(stashRef.current[i] ?? { nodes: [], edges: [] }) })), cur: curPage })); } catch { /* 配额满忽略 */ }
+      saveBoardStore(localStorage, pageNames, stashRef.current, curPage);
     }, 300);
     return () => window.clearTimeout(timer);
   }, [nodes, edges, pageNames, curPage]);
@@ -111,10 +84,18 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
   const edgesRef = useRef<BEdge[]>([]); edgesRef.current = edges;
   useImperativeHandle(apiRef, () => ({
     addObjects: (nn, ee) => {
-      if (nn.length || ee.length) commit();
-      if (nn.length) setNodes((ns) => [...ns, ...nn.map(sanitizeNode)]);
-      if (ee.length) setEdges((es) => [...es, ...ee]);
-      setSelIds(new Set(nn.map((n) => n.id)));
+      const safeNodes = nn.flatMap((node) => {
+        const safe = sanitizeBoardNode(node);
+        return safe ? [safe] : [];
+      });
+      const safeEdges = ee.flatMap((edge) => {
+        const safe = sanitizeBoardEdge(edge);
+        return safe ? [safe] : [];
+      });
+      if (safeNodes.length || safeEdges.length) commit();
+      if (safeNodes.length) setNodes((ns) => [...ns, ...safeNodes]);
+      if (safeEdges.length) setEdges((es) => [...es, ...safeEdges]);
+      setSelIds(new Set(safeNodes.map((node) => node.id)));
       setSelEdge(null);
     },
     removeObjects: (ids) => {
@@ -131,9 +112,12 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
       setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...(box.x != null ? { x: snap(box.x) } : {}), ...(box.y != null ? { y: snap(box.y) } : {}), ...(box.w != null ? { w: box.w } : {}), ...(box.h != null ? { h: box.h } : {}) } : n)));
     },
     highlight: (id) => { setHi(id); setSelIds(new Set([id])); setSelEdge(null); },
-    loadBoard: (nn, ee) => { commit(); setNodes(nn.map(sanitizeNode)); setEdges(ee); setSelIds(new Set()); setSelEdge(null); },
+    loadBoard: (nn, ee) => {
+      const page = sanitizeBoardPage({ name: 'Page-1', nodes: nn, edges: ee });
+      commit(); setNodes(page.nodes); setEdges(page.edges); setSelIds(new Set()); setSelEdge(null);
+    },
     loadPages: (pgs) => {
-      const pages = (pgs.length ? pgs : [{ name: 'Page-1', nodes: [], edges: [] }]).map(sanitizePage);
+      const pages = (pgs.length ? pgs : [{ name: 'Page-1', nodes: [], edges: [] }]).map((page, index) => sanitizeBoardPage(page, `Page-${index + 1}`));
       stashRef.current = pages.map((x) => ({ nodes: x.nodes, edges: x.edges }));
       setPageNames(pages.map((x) => x.name));
       setCurPage(0);
@@ -149,8 +133,14 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
       return e ? { edge: { ...e } } : null;
     },
     restoreObject: (obj) => {
-      if (obj.node) { const nd = sanitizeNode(obj.node); setNodes((ns) => (ns.some((n) => n.id === nd.id) ? ns.map((n) => (n.id === nd.id ? nd : n)) : [...ns, nd])); }
-      if (obj.edge) { const ed = obj.edge; setEdges((es) => (es.some((e) => e.id === ed.id) ? es.map((e) => (e.id === ed.id ? ed : e)) : [...es, ed])); }
+      if (obj.node) {
+        const node = sanitizeBoardNode(obj.node);
+        if (node) setNodes((ns) => (ns.some((current) => current.id === node.id) ? ns.map((current) => (current.id === node.id ? node : current)) : [...ns, node]));
+      }
+      if (obj.edge) {
+        const edge = sanitizeBoardEdge(obj.edge);
+        if (edge) setEdges((es) => (es.some((current) => current.id === edge.id) ? es.map((current) => (current.id === edge.id ? edge : current)) : [...es, edge]));
+      }
     },
   }));
   const [editing, setEditing] = useState<string | null>(null);
@@ -181,35 +171,7 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
   // 画板内容 → 上抛给 App。核心:不只是选中,还把【完整拓扑(每个节点 + 连接关系)】给 Agent,
   // 让 Agent 理解整张流程图的结构,从而能据此驱动修改。
   useEffect(() => {
-    if (nodes.length === 0 && edges.length === 0) {
-      cb.current?.(null);
-      return;
-    }
-    const nm = (n: BNode): string => n.label || n.kind || '形状';
-    const sn = nodes.filter((n) => selIds.has(n.id));
-    // 关键:把【节点 id】明确给 Agent —— 改/删/移动现有节点时必须用这些 id(否则它会瞎猜 id,改不到)
-    const ctx: string[] = [`[流程图] ${nodes.length} 个节点、${edges.length} 条连线。改/删/移动现有节点时,update/delete/move 的 cellId 必须用下面给出的真实 id。`];
-    if (nodes.length) ctx.push('节点(id=文字): ' + nodes.map((n) => `${n.id}=${nm(n)}`).join('、'));
-    if (edges.length) ctx.push('连接关系(按 id): ' + edges.map((e) => `${e.from}→${e.to}`).join(';'));
-    if (sn.length) ctx.push('当前选中节点 id: ' + sn.map((n) => n.id).join('、') + '(即 ' + sn.map((n) => nm(n)).join('、') + '),用户多半是想改这些。');
-    else if (selEdge) {
-      const e = edges.find((x) => x.id === selEdge);
-      if (e) ctx.push(`当前选中连线: ${e.from}→${e.to}`);
-    }
-    const chip = sn.length
-      ? `画板选中 ${sn.length} 个节点: ${sn.map((n) => nm(n)).join('、')}`
-      : selEdge
-        ? '选中 1 条连线'
-        : `流程图 ${nodes.length} 节点 · ${edges.length} 连线`;
-    cb.current?.({
-      count: sn.length,
-      chip,
-      context: ctx.join('\n'),
-      board: {
-        nodes: nodes.map((node) => ({ id: node.id, x: node.x, y: node.y, width: node.w, height: node.h })),
-        edges: edges.map((edge) => ({ id: edge.id, source: edge.from, target: edge.to })),
-      },
-    });
+    cb.current?.(buildBoardSelection(nodes, edges, selIds, selEdge));
   }, [selIds, selEdge, nodes, edges]);
 
   // 屏幕坐标 → 画布坐标(扣除平移/缩放),所有节点/连线都用画布坐标
