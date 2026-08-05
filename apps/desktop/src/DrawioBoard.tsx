@@ -6,7 +6,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
 import { useT } from './i18n.js';
-import { shapeSvg, styleToKind, SHAPE_DEFS } from './shape-engine.js';
+import { styleToKind, SHAPE_DEFS } from './shape-engine.js';
 import {
   bandRect,
   GRID,
@@ -17,6 +17,7 @@ import {
 import type { BEdge, BNode, XY } from './drawio-geometry.js';
 import { cleanLabel, parseDrawioStyle } from './drawio-model.js';
 import { DrawioEdgeHandles, DrawioEdgeLayer, DrawioEdgeToolbar } from './DrawioEdges.js';
+import { DrawioNodeLayer } from './DrawioNodes.js';
 import {
   buildBoardSelection,
   loadBoardStore,
@@ -52,13 +53,6 @@ export interface BoardHandle {
   /** 按快照恢复/重放对象(存在则整体替换,被删则补回)。 */
   restoreObject(obj: { node?: BNode; edge?: BEdge }): void;
 }
-const HANDLES: { k: string; fx: number; fy: number }[] = [
-  { k: 'nw', fx: 0, fy: 0 }, { k: 'n', fx: 0.5, fy: 0 }, { k: 'ne', fx: 1, fy: 0 },
-  { k: 'e', fx: 1, fy: 0.5 }, { k: 'se', fx: 1, fy: 1 }, { k: 's', fx: 0.5, fy: 1 },
-  { k: 'sw', fx: 0, fy: 1 }, { k: 'w', fx: 0, fy: 0.5 },
-];
-const PORTS: XY[] = [{ x: 0.5, y: 0 }, { x: 1, y: 0.5 }, { x: 0.5, y: 1 }, { x: 0, y: 0.5 }];
-
 /** 高度复刻 drawio 的交互画板:周界正交圆角连线、悬停连接点拖拽连线(绿色目标高亮)、8 缩放手柄、网格吸附、改名、删边删点、双击空白建节点。 */
 export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel | null) => void }>(function DrawioBoard({ onBoardSel }, apiRef) {
   const t = useT();
@@ -78,7 +72,6 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
   }, [nodes, edges, pageNames, curPage]);
   const [selIds, setSelIds] = useState<Set<string>>(new Set());
   const [selEdge, setSelEdge] = useState<string | null>(null);
-  const [hover, setHover] = useState<string | null>(null);
   const [hi, setHi] = useState<string | null>(null);
   const nodesRef = useRef<BNode[]>([]); nodesRef.current = nodes; // getObject 走 ref,句柄闭包不吃 state 陈旧值
   const edgesRef = useRef<BEdge[]>([]); edgesRef.current = edges;
@@ -556,132 +549,56 @@ export const DrawioBoard = forwardRef<BoardHandle, { onBoardSel?: (s: BoardSel |
         />
       </svg>
 
-      {nodes.map((n) => {
-        const isSel = selIds.has(n.id);
-        const isHover = hover === n.id;
-        const isTgt = conn?.tgt === n.id || epDrag?.tgt === n.id;
-        // 几何兜底:真框住了其它节点的才是容器(面积须明显更大,避免同尺寸叠放互判),标签贴顶别压子节点
-        const isContainer = n.vTop || (!n.text && nodes.some((b) => b.id !== n.id && b.x >= n.x && b.y >= n.y && b.x + b.w <= n.x + n.w && b.y + b.h <= n.y + n.h && b.w * b.h < n.w * n.h * 0.8));
-        return (
-          <div
-            key={n.id}
-            className={'bnode' + (isSel ? ' sel' : '') + (isHover && !isSel ? ' hover' : '') + (isTgt ? ' tgt' : '') + (n.id === hi ? ' hi' : '')}
-            style={{ left: n.x, top: n.y, width: n.w, height: n.h, ...(n.rot ? { transform: `rotate(${n.rot}deg)` } : {}) }}
-            onPointerEnter={() => setHover(n.id)}
-            onPointerLeave={() => setHover((h) => (h === n.id ? null : h))}
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              capture(e);
-              beginGesture();
-              const ids = e.shiftKey ? new Set(selIds).add(n.id) : selIds.has(n.id) ? selIds : new Set([n.id]);
-              setSelIds(ids);
-              setSelEdge(null);
-              const { x, y } = pt(e);
-              const origins: Record<string, XY> = {};
-              nodes.forEach((nd) => {
-                if (ids.has(nd.id)) origins[nd.id] = { x: nd.x, y: nd.y };
-              });
-              setDrag({ sx: x, sy: y, origins });
-            }}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              setEditing(n.id);
-            }}
-          >
-            {n.text ? null : (n.shape ?? (n.style ? styleToKind(n.style) : null)) ? (
-              // 参数化形状引擎(drawio 同源):按实际 w×h 生成几何,箭头深度/圆角/折角等细节定值钳制——缩放不变形
-              <svg width="100%" height="100%" viewBox={`0 0 ${Math.max(8, n.w)} ${Math.max(8, n.h)}`} fill={n.fill ?? '#ffffff'} stroke={n.stroke ?? '#9aa3b2'} strokeWidth={1.3} dangerouslySetInnerHTML={{ __html: shapeSvg((n.shape ?? styleToKind(n.style))!, Math.max(8, n.w), Math.max(8, n.h)) }} />
-            ) : (n.fill || n.stroke || n.kind === 'agent') && (!n.inner || /^<rect/.test(n.inner)) ? (
-              <div className="bnode-box" style={{ background: n.fill ?? '#ffffff', borderColor: n.stroke ?? '#9aa3b2' }} />
-            ) : n.fill || n.stroke || n.kind === 'agent' ? (
-              // 带填充的非矩形形状:真按 innerForStyle 的形状渲染(此前一律画成矩形盒,90 种形状全被吃掉)
-              <svg viewBox="3 3 34 24" preserveAspectRatio="none" fill={n.fill ?? '#ffffff'} stroke={n.stroke ?? '#9aa3b2'} strokeWidth={0.9} dangerouslySetInnerHTML={{ __html: n.inner }} />
-            ) : (
-              <svg viewBox="3 3 34 24" preserveAspectRatio="none" fill="none" stroke="#3a3f4b" strokeWidth={0.9} dangerouslySetInnerHTML={{ __html: n.inner }} />
-            )}
-            {editing === n.id ? (
-              <input
-                className="bnode-edit"
-                autoFocus
-                defaultValue={n.label}
-                onBlur={(e) => {
-                  const v = e.target.value;
-                  setNodes((ns) => ns.map((m) => (m.id === n.id ? { ...m, label: v } : m)));
-                  setEditing(null);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-              />
-            ) : (
-              <span className={'bnode-label' + (n.text ? ' txt' : '') + (isContainer && !n.text ? ' top' : '') + (n.wrap ? ' wrap' : '')} style={{ ...(n.fontColor ? { color: n.fontColor } : {}), ...(n.fontSize ? { fontSize: n.fontSize } : {}), ...(n.bold ? { fontWeight: 700 } : {}) }}>{n.label}</span>
-            )}
-            {(isHover || isSel) && !drag && !resize
-              ? PORTS.map((p, i) => (
-                  <span
-                    key={i}
-                    className="bport"
-                    style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      capture(e);
-                      beginGesture();
-                      const { x, y } = pt(e);
-                      setConn({ from: n.id, x, y, tgt: null });
-                    }}
-                  />
-                ))
-              : null}
-            {isSel && selIds.size === 1
-              ? HANDLES.map((h) => (
-                  <span
-                    key={h.k}
-                    className={'bhandle h-' + h.k}
-                    style={{ left: `${h.fx * 100}%`, top: `${h.fy * 100}%` }}
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      capture(e);
-                      beginGesture();
-                      const { x, y } = pt(e);
-                      setResize({ id: n.id, k: h.k, box: n, sx: x, sy: y });
-                    }}
-                  />
-                ))
-              : null}
-            {isSel && selIds.size === 1 ? (
-              <span
-                className="brot"
-                title={t('拖动旋转,按住 Shift 吸附 15°')}
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  capture(e);
-                  beginGesture();
-                  setRotate({ id: n.id, cx: n.x + n.w / 2, cy: n.y + n.h / 2 });
-                }}
-              >
-                ↻
-              </span>
-            ) : null}
-            {isHover && selIds.size <= 1 && !drag && !resize && !conn && !band && !rotate
-              ? (['up', 'right', 'down', 'left'] as const).map((dir) => (
-                  <span
-                    key={dir}
-                    className={'barrow ba-' + dir}
-                    title={t('点=克隆并连接,拖=连线')}
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      capture(e);
-                      beginGesture();
-                      const { x, y } = pt(e);
-                      setArrow({ from: n.id, dir, sx: x, sy: y });
-                    }}
-                  />
-                ))
-              : null}
-          </div>
-        );
-      })}
+      <DrawioNodeLayer
+        nodes={nodes}
+        selectedIds={selIds}
+        targetNodeId={conn?.tgt ?? epDrag?.tgt ?? null}
+        highlightedId={hi}
+        editingId={editing}
+        portsEnabled={!drag && !resize}
+        quickConnectEnabled={selIds.size <= 1 && !drag && !resize && !conn && !band && !rotate}
+        onNodeStart={(node, pointer) => {
+          capture(pointer);
+          beginGesture();
+          const ids = pointer.shiftKey ? new Set(selIds).add(node.id) : selIds.has(node.id) ? selIds : new Set([node.id]);
+          setSelIds(ids);
+          setSelEdge(null);
+          const { x, y } = pt(pointer);
+          const origins: Record<string, XY> = {};
+          nodes.forEach((candidate) => {
+            if (ids.has(candidate.id)) origins[candidate.id] = { x: candidate.x, y: candidate.y };
+          });
+          setDrag({ sx: x, sy: y, origins });
+        }}
+        onEditStart={setEditing}
+        onLabelCommit={(nodeId, label) => {
+          setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, label } : node));
+          setEditing(null);
+        }}
+        onPortStart={(node, pointer) => {
+          capture(pointer);
+          beginGesture();
+          const { x, y } = pt(pointer);
+          setConn({ from: node.id, x, y, tgt: null });
+        }}
+        onResizeStart={(node, handle, pointer) => {
+          capture(pointer);
+          beginGesture();
+          const { x, y } = pt(pointer);
+          setResize({ id: node.id, k: handle, box: node, sx: x, sy: y });
+        }}
+        onRotateStart={(node, pointerId) => {
+          capture({ pointerId });
+          beginGesture();
+          setRotate({ id: node.id, cx: node.x + node.w / 2, cy: node.y + node.h / 2 });
+        }}
+        onArrowStart={(node, direction, pointer) => {
+          capture(pointer);
+          beginGesture();
+          const { x, y } = pt(pointer);
+          setArrow({ from: node.id, dir: direction, sx: x, sy: y });
+        }}
+      />
       <svg className="board-svg board-overlay">
         <DrawioEdgeHandles
           nodes={nodes}
