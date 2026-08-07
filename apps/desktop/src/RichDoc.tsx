@@ -8,6 +8,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
 import { useT } from './i18n.js';
 import { DiffToggle } from './DiffToggle.js';
+import { RichDocRibbon } from './RichDocRibbon.js';
 import {
   RICH_DOC_BLOCK_TAGS as BLOCK_TAGS,
   applyRichDocEdit,
@@ -40,29 +41,7 @@ import {
   visibleBlocks,
 } from './richdoc-projection.js';
 import type { RichDocSnapshot } from './richdoc-projection.js';
-import {
-  IconUndo, IconRedo, IconClipboard, IconScissors, IconCopy, IconFormatBrush,
-  IconFontGrow, IconFontShrink, IconChangeCase, IconClearFormat, IconStrikethrough,
-  IconSubscript, IconSuperscript, IconWordArt, IconTextEffect, IconHighlighter, IconFontColor, IconPhonetic, IconEncloseChar,
-  IconBulletsRb, IconNumberingRb, IconMultilevelListRb, IconIndentDecrease, IconIndentIncrease,
-  IconChineseLayoutRb, IconSortAsc, IconAlignLeft, IconAlignCenter, IconAlignRight, IconAlignJustify,
-  IconLineSpacing, IconShadingRb, IconBorders, IconSearch, IconReplace, IconSelect,
-  IconCoverPageRb, IconBlankPageRb, IconPageBreakRb, IconTable, IconImage, IconShapes, IconStar,
-  IconSmartArt, IconBarChart, IconScreenshot, IconObject, IconAddin, IconVariantsRb, IconHelp,
-  IconLink, IconBookmark, IconCrossRef, IconHeader, IconFooter, IconPageNumber, IconTextBox, IconDocPartsRb, IconDropCapRb,
-  IconDateTime, IconSignatureLineRb, IconRoot, IconOmega, IconHorizontalRule,
-  IconTextDirectionRb, IconMargins, IconOrientation, IconPaperSize, IconColumnsRb, IconSeparator,
-  IconLineNumbersRb, IconHyphenationRb, IconGridPaperRb, IconIndentLeftRb, IconIndentRightRb,
-  IconSpaceBeforeRb, IconSpaceAfterRb, IconPositionRb, IconWrapTextRb, IconBringForwardRb,
-  IconSendBackwardRb, IconSelectionPaneRb, IconAlignRb, IconGroupRb, IconRotateRb,
-  IconTocRb, IconAddTextRb, IconUpdateTocRb, IconFootnoteRb, IconEndnoteRb, IconNextFootnoteRb,
-  IconShowNotesRb, IconCitationRb, IconManageSourcesRb, IconStylesRb, IconBibliographyRb,
-  IconCaptionRb, IconTableOfFiguresRb, IconMarkEntryRb, IconIndexRb, IconUpdateIndexRb,
-  IconSpellingRb, IconWordCountRb, IconTranslate, IconLanguage, IconComment, IconShowComments, IconEraser, IconPreviousRb,
-  IconNextItemRb, IconTrackChangesRb, IconShowMarkupRb, IconAcceptRb, IconRejectRb,
-  IconReadingViewRb, IconPageViewRb, IconWebLayoutRb, IconOutlineRb, IconRulerRb, IconGridlines,
-  IconNavPaneRb, IconZoomRb, IconZoom100Rb, IconSinglePageRb, IconMultiPageRb, IconWidthRb, IconCheck,
-} from './icons.js';
+import { IconCheck } from './icons.js';
 
 export type { DocFmt, DocTable } from './richdoc-editing.js';
 
@@ -102,8 +81,6 @@ export interface RichDocProps {
   onChangeHover?: (cid: string | null) => void; // 文档里悬停某改动 → 点亮 rail 对应条
   onChangeResolve?: (cid: string, verb: 'accept' | 'reject') => void; // 行内卡片 ✓/✕ → 走 rail 的接受/拒绝
 }
-
-type IconCmp = (p: { size?: number }) => ReactNode;
 
 const FONTS = ['宋体', '黑体', '微软雅黑', '楷体', '仿宋', '等线', 'Arial', 'Times New Roman', 'Calibri', 'Georgia'];
 const SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 22, 26, 28, 36, 48, 72];
@@ -157,11 +134,6 @@ const SHAPES: [string, string][] = [
   ['箭头', '<path d="M6 40 L104 40 M88 26 L114 40 L88 54"/>'],
 ];
 const WORDARTS = ['rd-wa-1', 'rd-wa-2', 'rd-wa-3', 'rd-wa-4'];
-const STYLE_CELLS: [string, string, string][] = [
-  ['正文', 'st-body', '正文'], ['无间隔', 'st-body', '无间隔'], ['标题1', 'st-h1', '标题 1'], ['标题2', 'st-h2', '标题 2'],
-  ['标题3', 'st-h3', '标题 3'], ['标题', 'st-title', '标题'], ['副标题', 'st-sub', '副标题'], ['引用', 'st-body', '❝ 引用'], ['强调', 'st-sub', '强调'],
-];
-
 const DEMO_HTML = `
 <h1>项目周报 · 2026 年第 26 周</h1>
 <p>本周核心进展:OtterPatch 完成了 Excel 透视图的内联渲染,并新增了"需求模糊时主动澄清"的能力,Agent 在意图不清时会先给用户一张引导选择表。整体进度符合预期。</p>
@@ -1246,148 +1218,40 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     (label === '拼写和语法' && !!page.spell) || (label === '修订' && !!page.track) ||
     (label === '阅读视图' && page.view === 'read') || (label === '页面视图' && !page.view) || (label === 'Web 版式' && page.view === 'web') || (label === '大纲' && page.view === 'outline')
   );
-  const MENU = new Set(['粘贴', '字体', '字号', '更改大小写', '文本效果', '多级列表', '中文版式', '排序', '行距', '底纹', '边框', '查找', '替换', '选择', '封面', '表格', '形状', '图标', 'SmartArt', '图表', '页码', '文档部件', '艺术字', '首字下沉', '日期和时间', '公式', '符号', '文字方向', '页边距', '纸张方向', '纸张大小', '栏', '分隔符', '行号', '断字', '稿纸设置', '位置', '环绕文字', '对齐', '组合', '旋转', '目录', '添加文字', '插入引文', '样式', '语言', '缩放']);
-  const GLYPH: Record<string, ReactNode> = { 加粗: <b>B</b>, 斜体: <i>I</i>, 下划线: <u>U</u> };
-
-  const clickCell = (label: string, e: React.MouseEvent<HTMLElement>): void => { e.preventDefault(); if (MENU.has(label)) openPop(label, e.currentTarget); else run(label); };
-
-  const Big = ({ label, icon }: { label: string; icon: IconCmp }): ReactNode => {
-    const Ico = icon;
-    return <button className="rbig" aria-label={t(label)} data-cmd={label} onMouseDown={(e) => clickCell(label, e)}><span className="rbig-ic"><Ico size={20} /></span><span className="rbig-lb">{t(label)}{MENU.has(label) ? ' ▾' : ''}</span></button>;
-  };
-  const Small = ({ label, icon, accent }: { label: string; icon?: IconCmp; accent?: 'red' | 'amber' }): ReactNode => {
-    const Ico = icon;
-    const g = GLYPH[label];
-    return <button className={'rs' + (g ? ' biu biu-' + (label === '加粗' ? 'b' : label === '斜体' ? 'i' : 'u') : '') + (accent === 'red' ? ' ic-red' : accent === 'amber' ? ' ic-amber' : '') + (isActive(label) ? ' on' : '')} aria-label={t(label)} data-cmd={label} onMouseDown={(e) => clickCell(label, e)}>
-      {g ?? (Ico ? <Ico size={15} /> : t(label))}{MENU.has(label) ? <span className="caret">▾</span> : null}
-    </button>;
-  };
-  const Combo = ({ label, cls }: { label: string; cls: string }): ReactNode => {
-    const val = label === '字体' ? (st.font || t('字体')) : label === '字号' ? (st.size ? String(st.size) : t('字号')) : t(label);
-    return <button className={'rcombo ' + cls + (pop?.key === label ? ' open' : '')} aria-label={t(label)} data-cmd={label} onMouseDown={(e) => { e.preventDefault(); openPop(label, e.currentTarget); }}><span className="rc-val">{val}</span><span className="caret">▾</span></button>;
-  };
-  const SplitColor = ({ label, icon, color }: { label: string; icon: IconCmp; color: 'fore' | 'hi' }): ReactNode => {
-    const Ico = icon;
-    const cur = color === 'fore' ? lastFore.current : lastHi.current;
-    const apply = (): void => color === 'fore' ? exec('foreColor', cur) : exec('hiliteColor', cur);
-    return <span className="rd-split" aria-label={t(label)} data-cmd={label}>
-      <button className={'rd-split-main' + (color === 'fore' ? ' ic-red' : ' ic-amber')} onMouseDown={(e) => { e.preventDefault(); apply(); }}><Ico size={15} /><span className="rd-underbar" style={{ background: cur }} /></button>
-      <button className="rd-split-caret" onMouseDown={(e) => { e.preventDefault(); openPop(label, e.currentTarget); }}>▾</button>
-    </span>;
-  };
-  const Spin = ({ label, icon }: { label: string; icon: IconCmp }): ReactNode => {
-    const Ico = icon;
-    const step = (d: number): void => {
-      if (label === '左缩进') styleBlocks((el) => { el.style.marginLeft = Math.max(0, parseFloat(el.style.marginLeft || '0') + d * 2) + 'em'; });
-      else if (label === '右缩进') styleBlocks((el) => { el.style.marginRight = Math.max(0, parseFloat(el.style.marginRight || '0') + d * 2) + 'em'; });
-      else if (label === '段前间距') styleBlocks((el) => { el.style.marginTop = Math.max(0, parseFloat(el.style.marginTop || '0') + d * 6) + 'pt'; });
-      else styleBlocks((el) => { el.style.marginBottom = Math.max(0, parseFloat(el.style.marginBottom || '0') + d * 6) + 'pt'; });
-    };
-    return <span className="rd-num" aria-label={t(label)} data-cmd={label}><span className="rd-num-ic"><Ico size={13} /></span><span className="rd-num-lb">{t(label)}</span><button onMouseDown={(e) => { e.preventDefault(); step(-1); }}>−</button><button onMouseDown={(e) => { e.preventDefault(); step(1); }}>＋</button></span>;
-  };
-
-  type Cell =
-    | { k: 'big'; label: string; icon: IconCmp }
-    | { k: 'row'; items: { label: string; icon?: IconCmp; accent?: 'red' | 'amber' }[] }
-    | { k: 'combo'; label: string; cls: string }
-    | { k: 'split'; label: string; icon: IconCmp; color: 'fore' | 'hi' }
-    | { k: 'styles' }
-    | { k: 'spin'; label: string; icon: IconCmp };
-  interface Grp { name: string; cells: Cell[] }
-  interface TabDef { name: string; groups: Grp[] }
-
-  const TABS: TabDef[] = [
-    { name: '开始', groups: [
-      { name: '剪贴板', cells: [{ k: 'big', label: '粘贴', icon: IconClipboard }, { k: 'row', items: [{ label: '剪切', icon: IconScissors }, { label: '复制', icon: IconCopy }, { label: '格式刷', icon: IconFormatBrush }] }] },
-      { name: '字体', cells: [
-        { k: 'combo', label: '字体', cls: 'font' }, { k: 'combo', label: '字号', cls: 'size' },
-        { k: 'row', items: [{ label: '增大字号', icon: IconFontGrow }, { label: '减小字号', icon: IconFontShrink }, { label: '更改大小写', icon: IconChangeCase }, { label: '清除格式', icon: IconClearFormat }] },
-        { k: 'row', items: [{ label: '加粗' }, { label: '斜体' }, { label: '下划线' }, { label: '删除线', icon: IconStrikethrough }, { label: '下标', icon: IconSubscript }, { label: '上标', icon: IconSuperscript }, { label: '文本效果', icon: IconTextEffect }, { label: '拼音指南', icon: IconPhonetic }, { label: '带圈字符', icon: IconEncloseChar }] },
-        { k: 'split', label: '字体颜色', icon: IconFontColor, color: 'fore' }, { k: 'split', label: '突出显示', icon: IconHighlighter, color: 'hi' },
-      ] },
-      { name: '段落', cells: [
-        { k: 'row', items: [{ label: '项目符号', icon: IconBulletsRb }, { label: '编号', icon: IconNumberingRb }, { label: '多级列表', icon: IconMultilevelListRb }, { label: '减少缩进', icon: IconIndentDecrease }, { label: '增加缩进', icon: IconIndentIncrease }, { label: '中文版式', icon: IconChineseLayoutRb }, { label: '排序', icon: IconSortAsc }] },
-        { k: 'row', items: [{ label: '左对齐', icon: IconAlignLeft }, { label: '居中', icon: IconAlignCenter }, { label: '右对齐', icon: IconAlignRight }, { label: '两端对齐', icon: IconAlignJustify }, { label: '行距', icon: IconLineSpacing }, { label: '底纹', icon: IconShadingRb }, { label: '边框', icon: IconBorders }] },
-      ] },
-      { name: '样式', cells: [{ k: 'styles' }] },
-      { name: '编辑', cells: [{ k: 'row', items: [{ label: '查找', icon: IconSearch }, { label: '替换', icon: IconReplace }, { label: '选择', icon: IconSelect }] }] },
-    ] },
-    { name: '插入', groups: [
-      { name: '页面', cells: [{ k: 'big', label: '封面', icon: IconCoverPageRb }, { k: 'row', items: [{ label: '空白页', icon: IconBlankPageRb }, { label: '分页', icon: IconPageBreakRb }] }] },
-      { name: '表格', cells: [{ k: 'big', label: '表格', icon: IconTable }] },
-      { name: '插图', cells: [{ k: 'row', items: [{ label: '图片', icon: IconImage }, { label: '形状', icon: IconShapes }, { label: '图标', icon: IconStar }, { label: 'SmartArt', icon: IconSmartArt }, { label: '图表', icon: IconBarChart }, { label: '屏幕截图', icon: IconScreenshot }] }] },
-      { name: '加载项', cells: [{ k: 'row', items: [{ label: '获取加载项', icon: IconAddin }, { label: '我的加载项', icon: IconVariantsRb }, { label: '维基百科', icon: IconHelp }] }] },
-      { name: '链接', cells: [{ k: 'row', items: [{ label: '链接', icon: IconLink }, { label: '书签', icon: IconBookmark }, { label: '交叉引用', icon: IconCrossRef }] }] },
-      { name: '页眉页脚', cells: [{ k: 'row', items: [{ label: '页眉', icon: IconHeader }, { label: '页脚', icon: IconFooter }, { label: '页码', icon: IconPageNumber }] }] },
-      { name: '文本', cells: [{ k: 'row', items: [{ label: '文本框', icon: IconTextBox }, { label: '文档部件', icon: IconDocPartsRb }, { label: '艺术字', icon: IconWordArt }, { label: '首字下沉', icon: IconDropCapRb }, { label: '签名行', icon: IconSignatureLineRb }, { label: '日期和时间', icon: IconDateTime }, { label: '对象', icon: IconObject }] }] },
-      { name: '符号', cells: [{ k: 'row', items: [{ label: '公式', icon: IconRoot }, { label: '符号', icon: IconOmega }, { label: '水平线', icon: IconHorizontalRule }] }] },
-    ] },
-    { name: '布局', groups: [
-      { name: '页面设置', cells: [
-        { k: 'big', label: '页边距', icon: IconMargins },
-        { k: 'row', items: [{ label: '文字方向', icon: IconTextDirectionRb }, { label: '纸张方向', icon: IconOrientation }, { label: '纸张大小', icon: IconPaperSize }, { label: '栏', icon: IconColumnsRb }] },
-        { k: 'row', items: [{ label: '分隔符', icon: IconSeparator }, { label: '行号', icon: IconLineNumbersRb }, { label: '断字', icon: IconHyphenationRb }] },
-      ] },
-      { name: '稿纸', cells: [{ k: 'big', label: '稿纸设置', icon: IconGridPaperRb }] },
-      { name: '段落', cells: [{ k: 'spin', label: '左缩进', icon: IconIndentLeftRb }, { k: 'spin', label: '右缩进', icon: IconIndentRightRb }, { k: 'spin', label: '段前间距', icon: IconSpaceBeforeRb }, { k: 'spin', label: '段后间距', icon: IconSpaceAfterRb }] },
-      { name: '排列', cells: [{ k: 'row', items: [{ label: '位置', icon: IconPositionRb }, { label: '环绕文字', icon: IconWrapTextRb }, { label: '上移一层', icon: IconBringForwardRb }, { label: '下移一层', icon: IconSendBackwardRb }, { label: '选择窗格', icon: IconSelectionPaneRb }, { label: '对齐', icon: IconAlignRb }, { label: '组合', icon: IconGroupRb }, { label: '旋转', icon: IconRotateRb }] }] },
-    ] },
-    { name: '引用', groups: [
-      { name: '目录', cells: [{ k: 'big', label: '目录', icon: IconTocRb }, { k: 'row', items: [{ label: '添加文字', icon: IconAddTextRb }, { label: '更新目录', icon: IconUpdateTocRb }] }] },
-      { name: '脚注', cells: [{ k: 'row', items: [{ label: '插入脚注', icon: IconFootnoteRb }, { label: '插入尾注', icon: IconEndnoteRb }, { label: '下一条脚注', icon: IconNextFootnoteRb }, { label: '显示备注', icon: IconShowNotesRb }] }] },
-      { name: '引文与书目', cells: [{ k: 'row', items: [{ label: '插入引文', icon: IconCitationRb }, { label: '管理源', icon: IconManageSourcesRb }, { label: '样式', icon: IconStylesRb }, { label: '书目', icon: IconBibliographyRb }] }] },
-      { name: '题注', cells: [{ k: 'row', items: [{ label: '插入题注', icon: IconCaptionRb }, { label: '插入表目录', icon: IconTableOfFiguresRb }, { label: '交叉引用', icon: IconCrossRef }] }] },
-      { name: '索引', cells: [{ k: 'row', items: [{ label: '标记条目', icon: IconMarkEntryRb }, { label: '插入索引', icon: IconIndexRb }, { label: '更新索引', icon: IconUpdateIndexRb }] }] },
-    ] },
-    { name: '审阅', groups: [
-      { name: '校对', cells: [{ k: 'big', label: '字数统计', icon: IconWordCountRb }, { k: 'row', items: [{ label: '拼写和语法', icon: IconSpellingRb }] }] },
-      { name: '语言', cells: [{ k: 'row', items: [{ label: '翻译', icon: IconTranslate }, { label: '语言', icon: IconLanguage }] }] },
-      { name: '批注', cells: [{ k: 'row', items: [{ label: '新建批注', icon: IconComment }, { label: '删除', icon: IconEraser }, { label: '上一条', icon: IconPreviousRb }, { label: '下一条', icon: IconNextItemRb }, { label: '显示批注', icon: IconShowComments }] }] },
-      { name: '修订', cells: [{ k: 'big', label: '修订', icon: IconTrackChangesRb }, { k: 'row', items: [{ label: '显示标记', icon: IconShowMarkupRb }, { label: '接受', icon: IconAcceptRb }, { label: '拒绝', icon: IconRejectRb }] }] },
-    ] },
-    { name: '视图', groups: [
-      { name: '视图', cells: [{ k: 'row', items: [{ label: '阅读视图', icon: IconReadingViewRb }, { label: '页面视图', icon: IconPageViewRb }, { label: 'Web 版式', icon: IconWebLayoutRb }, { label: '大纲', icon: IconOutlineRb }] }] },
-      { name: '显示', cells: [{ k: 'row', items: [{ label: '标尺', icon: IconRulerRb }, { label: '网格线', icon: IconGridlines }, { label: '导航窗格', icon: IconNavPaneRb }] }] },
-      { name: '缩放', cells: [{ k: 'big', label: '缩放', icon: IconZoomRb }, { k: 'row', items: [{ label: '100%', icon: IconZoom100Rb }, { label: '单页', icon: IconSinglePageRb }, { label: '页宽', icon: IconWidthRb }, { label: '多页', icon: IconMultiPageRb }] }] },
-    ] },
-  ];
-
-  const renderCell = (cell: Cell, i: number): ReactNode => {
-    switch (cell.k) {
-      case 'big': return <Big key={i} label={cell.label} icon={cell.icon} />;
-      case 'combo': return <Combo key={i} label={cell.label} cls={cell.cls} />;
-      case 'split': return <SplitColor key={i} label={cell.label} icon={cell.icon} color={cell.color} />;
-      case 'spin': return <Spin key={i} label={cell.label} icon={cell.icon} />;
-      case 'styles': return <div className="rstyles" key={i}>{STYLE_CELLS.map(([name, kind, sample]) => <button key={name} className={'rstyle ' + kind} aria-label={t(name)} data-cmd={name} onMouseDown={(e) => { e.preventDefault(); applyStyle(name); }}>{t(sample)}</button>)}</div>;
-      case 'row': return <div className="rsmall-grid" key={i}>{cell.items.map((it) => <Small key={it.label} label={it.label} icon={it.icon} accent={it.accent} />)}</div>;
-      default: return null;
-    }
+  const spinRibbonValue = (label: string, direction: number): void => {
+    if (label === '左缩进') styleBlocks((el) => { el.style.marginLeft = Math.max(0, parseFloat(el.style.marginLeft || '0') + direction * 2) + 'em'; });
+    else if (label === '右缩进') styleBlocks((el) => { el.style.marginRight = Math.max(0, parseFloat(el.style.marginRight || '0') + direction * 2) + 'em'; });
+    else if (label === '段前间距') styleBlocks((el) => { el.style.marginTop = Math.max(0, parseFloat(el.style.marginTop || '0') + direction * 6) + 'pt'; });
+    else styleBlocks((el) => { el.style.marginBottom = Math.max(0, parseFloat(el.style.marginBottom || '0') + direction * 6) + 'pt'; });
   };
 
   const wrapCls = 'rd-wrap' + (page.view === 'read' ? ' rd-view-read' : page.view === 'web' ? ' rd-view-web' : page.view === 'outline' ? ' rd-view-outline' : '');
   const zoomPct = Math.round((page.zoom ?? 1) * 100);
-  const active = TABS[tab] ?? TABS[0]!;
 
   return (
     <div className={wrapCls}>
       <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPickImg} />
       <input ref={objRef} type="file" hidden onChange={onPickObj} />
-      <div className="ribbon rd-ribbon" onMouseOver={onRibbonOver} onMouseOut={onRibbonOut} onMouseDownCapture={() => { if (tipTimer.current) window.clearTimeout(tipTimer.current); setTip(null); }}>
-        <div className="ribbon-tabs">
-          {TABS.map((tb, i) => <button key={tb.name} className={'rtab' + (i === tab ? ' on' : '')} onClick={() => { setTab(i); localStorage.setItem(TAB_KEY, String(i)); }}>{t(tb.name)}</button>)}
-          <span className="rd-tabs-grow" />
-          <button className="rd-chip" aria-label={t('字数统计')} data-cmd="字数统计" onMouseDown={(e) => { e.preventDefault(); openWordCount(); }}><IconWordCountRb size={13} />{t('字数')} {(edRef.current ? (cleanClone(edRef.current).textContent ?? '').replace(/\s/g, '').length : 0)}</button>
-          <button className="rd-chip" aria-label={t('缩放')} data-cmd="缩放" onMouseDown={(e) => { e.preventDefault(); openPop('缩放', e.currentTarget); }}>{zoomPct}%</button>
-        </div>
-        <div className="ribbon-bar">
-          {active.groups.map((g) => (
-            <div className="rgroup" key={g.name}>
-              <div className="rgbody">{g.cells.map((c, i) => renderCell(c, i))}</div>
-              <div className="rgname">{t(g.name)}</div>
-            </div>
-          ))}
-        </div>
-      </div>
+      <RichDocRibbon
+        tab={tab}
+        font={st.font}
+        fontSize={st.size}
+        openMenuKey={pop?.key ?? null}
+        foregroundColor={lastFore.current}
+        highlightColor={lastHi.current}
+        wordCount={edRef.current ? (cleanClone(edRef.current).textContent ?? '').replace(/\s/g, '').length : 0}
+        zoomPercent={zoomPct}
+        isActive={isActive}
+        onTabChange={(index) => { setTab(index); localStorage.setItem(TAB_KEY, String(index)); }}
+        onCommand={run}
+        onOpenMenu={openPop}
+        onApplyStyle={applyStyle}
+        onApplyColor={(color, value) => color === 'fore' ? exec('foreColor', value) : exec('hiliteColor', value)}
+        onSpin={spinRibbonValue}
+        onMouseOver={onRibbonOver}
+        onMouseOut={onRibbonOut}
+        onMouseDownCapture={() => { if (tipTimer.current) window.clearTimeout(tipTimer.current); setTip(null); }}
+      />
 
       {page.ruler ? <div className="rd-ruler" /> : null}
       <div className="rd-stage">
