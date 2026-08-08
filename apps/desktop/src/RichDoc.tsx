@@ -47,6 +47,8 @@ import {
   visibleBlocks,
 } from './richdoc-projection.js';
 import type { RichDocSnapshot } from './richdoc-projection.js';
+import { dispatchRichDocCommand } from './richdoc-command-dispatch.js';
+import type { RichDocCommandContext } from './richdoc-command-dispatch.js';
 import { IconCheck } from './icons.js';
 
 export type { DocFmt, DocTable } from './richdoc-editing.js';
@@ -1028,90 +1030,55 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     setTip(null);
   };
 
-  // ── 直接动作分发(非弹层项) ──
-  const run = (label: string): void => {
-    switch (label) {
-      case '撤销': exec('undo'); break;
-      case '重做': exec('redo'); break;
-      case '剪切': exec('cut'); break;
-      case '复制': exec('copy'); break;
-      case '格式刷': capturePaint(); break;
-      case '增大字号': stepFont(1); break;
-      case '减小字号': stepFont(-1); break;
-      case '清除格式': exec('removeFormat'); document.execCommand('formatBlock', false, 'p'); persist(); break;
-      case '加粗': exec('bold'); break;
-      case '斜体': exec('italic'); break;
-      case '下划线': exec('underline'); break;
-      case '删除线': exec('strikeThrough'); break;
-      case '下标': exec('subscript'); break;
-      case '上标': exec('superscript'); break;
-      case '拼音指南': ruby(); break;
-      case '带圈字符': insertEnclosed(); break;
-      case '项目符号': exec('insertUnorderedList'); break;
-      case '编号': exec('insertOrderedList'); break;
-      case '减少缩进': exec('outdent'); break;
-      case '增加缩进': exec('indent'); break;
-      case '左对齐': exec('justifyLeft'); break;
-      case '居中': exec('justifyCenter'); break;
-      case '右对齐': exec('justifyRight'); break;
-      case '两端对齐': exec('justifyFull'); break;
-      case '分散对齐': styleBlocks((el) => { el.style.textAlign = 'justify'; el.style.textAlignLast = 'justify'; }); break;
-      case '空白页': insertHTML('<div class="rd-pagebreak" contenteditable="false"></div><p><br></p><div class="rd-pagebreak" contenteditable="false"></div>'); break;
-      case '分页': insertHTML('<div class="rd-pagebreak" contenteditable="false"></div>'); break;
-      case '图片': fileRef.current?.click(); break;
-      case '屏幕截图': void takeScreenshot(); break;
-      case '链接': insertLink(); break;
-      case '书签': insertBookmark(); break;
-      case '交叉引用': insertXref(); break;
-      case '页眉': toggleHeaderFooter('header'); break;
-      case '页脚': toggleHeaderFooter('footer'); break;
-      case '文本框': insertTextbox(); break;
-      case '签名行': insertSign(); break;
-      case '对象': objRef.current?.click(); break;
-      case '水平线': exec('insertHorizontalRule'); break;
-      case '上移一层': zStep(1); break;
-      case '下移一层': zStep(-1); break;
-      case '选择窗格': notify(t('对象选择窗格暂不可用')); break;
-      case '更新目录': updateToc(); break;
-      case '插入脚注': insertNote('fn'); break;
-      case '插入尾注': insertNote('en'); break;
-      case '下一条脚注': nextNote(); break;
-      case '显示备注': showNotes(); break;
-      case '书目': insertBiblio(); break;
-      case '管理源': notify(t('源管理暂用文档内直接编辑')); break;
-      case '插入题注': insertCaption(); break;
-      case '插入表目录': insertTof(); break;
-      case '标记条目': markIndex(); break;
-      case '插入索引': buildIndex(false); break;
-      case '更新索引': buildIndex(true); break;
-      case '拼写和语法': setPage((p) => ({ ...p, spell: !p.spell })); break;
-      case '字数统计': openWordCount(); break;
-      case '翻译': notify(t('可把选中文字交给右侧 Agent 翻译')); break;
-      case '新建批注': addComment(); break;
-      case '删除': delComment(); break;
-      case '上一条': navComment(-1); break;
-      case '下一条': navComment(1); break;
-      case '显示批注': setPage((p) => ({ ...p, hideComments: !p.hideComments })); break;
-      case '修订': setPage((p) => ({ ...p, track: !p.track })); notify(t('修订标记视图') + ' · ' + (page.track ? t('关') : t('开'))); break;
-      case '显示标记': setDiffView((v) => (v === 'final' ? 'mark' : 'final')); break; // 与四态切换条同一状态源,不再双头管理
-      case '接受': resolveChange(true); break;
-      case '拒绝': resolveChange(false); break;
-      case '阅读视图': setView('read'); break;
-      case '页面视图': setView(undefined); break;
-      case 'Web 版式': setView('web'); break;
-      case '大纲': setView('outline'); break;
-      case '标尺': setPage((p) => ({ ...p, ruler: !p.ruler })); break;
-      case '网格线': setPage((p) => ({ ...p, grid: !p.grid })); break;
-      case '导航窗格': toggleNav(); break;
-      case '100%': setPage((p) => ({ ...p, zoom: 1 })); break;
-      case '单页': fitZoom('page'); break;
-      case '页宽': fitZoom('width'); break;
-      case '多页': setPage((p) => ({ ...p, zoom: 0.5 })); break;
-      case '获取加载项': case '我的加载项': notify(t('加载项市场开发中')); break;
-      case '维基百科': { const q = savedRange.current?.toString() ?? ''; window.open('https://zh.wikipedia.org/wiki/Special:Search?search=' + encodeURIComponent(q), '_blank'); break; }
-      default: notify(t('执行') + ' · ' + t(label));
-    }
+  const commandContext: RichDocCommandContext = {
+    exec,
+    clearFormat: () => { exec('removeFormat'); document.execCommand('formatBlock', false, 'p'); persist(); },
+    capturePaint,
+    stepFont,
+    ruby,
+    insertEnclosed,
+    styleBlocks,
+    insertHTML,
+    openImagePicker: () => fileRef.current?.click(),
+    takeScreenshot: () => takeScreenshot(),
+    insertLink,
+    insertBookmark,
+    insertCrossReference: insertXref,
+    toggleHeaderFooter,
+    insertTextbox,
+    insertSign,
+    openObjectPicker: () => objRef.current?.click(),
+    changeImageLayer: zStep,
+    notify,
+    translate: t,
+    updateToc,
+    insertNote,
+    nextNote,
+    showNotes,
+    insertBiblio,
+    insertCaption,
+    insertTableOfFigures: insertTof,
+    markIndex,
+    buildIndex,
+    toggleSpell: () => setPage((p) => ({ ...p, spell: !p.spell })),
+    openWordCount,
+    translateSelection: () => notify(t('可把选中文字交给右侧 Agent 翻译')),
+    addComment,
+    deleteComment: delComment,
+    navigateComment: navComment,
+    toggleComments: () => setPage((p) => ({ ...p, hideComments: !p.hideComments })),
+    toggleTrackChanges: () => { setPage((p) => ({ ...p, track: !p.track })); notify(t('修订标记视图') + ' · ' + (page.track ? t('关') : t('开'))); },
+    toggleDiffView: () => setDiffView((v) => (v === 'final' ? 'mark' : 'final')),
+    acceptChange: resolveChange,
+    setView,
+    toggleRuler: () => setPage((p) => ({ ...p, ruler: !p.ruler })),
+    toggleGrid: () => setPage((p) => ({ ...p, grid: !p.grid })),
+    toggleNavigation: toggleNav,
+    setZoom: (zoom) => setPage((p) => ({ ...p, zoom })),
+    fitZoom,
+    openWikipedia: () => { const q = savedRange.current?.toString() ?? ''; window.open('https://zh.wikipedia.org/wiki/Special:Search?search=' + encodeURIComponent(q), '_blank'); },
   };
+  const run = (label: string): void => dispatchRichDocCommand(label, commandContext);
 
   // ── 弹层内容 ──
   const PopItem = ({ label, sub, onPick, check }: { label: string; sub?: string; onPick: () => void; check?: boolean }): ReactNode => (
