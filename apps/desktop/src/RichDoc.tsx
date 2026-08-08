@@ -7,8 +7,14 @@
  */
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
 import { useT } from './i18n.js';
-import { DiffToggle } from './DiffToggle.js';
 import { RichDocRibbon } from './RichDocRibbon.js';
+import {
+  RichDocChangeCard,
+  RichDocNavigationPane,
+  RichDocRevisionBar,
+  RichDocWordCountDialog,
+} from './RichDocReview.js';
+import type { RichDocDiffView, RichDocHoverCardState, RichDocWordCount } from './RichDocReview.js';
 import {
   RICH_DOC_BLOCK_TAGS as BLOCK_TAGS,
   applyRichDocEdit,
@@ -188,9 +194,9 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   const [page, setPage] = useState<PageState>(() => { try { return JSON.parse(localStorage.getItem(PAGE_KEY) ?? '{}') as PageState; } catch { return {}; } });
   const pageRef = useRef(page); pageRef.current = page; // imperative handle 里读取当前页面态(闭包安全)
   const [toast, setToast] = useState<string | null>(null);
-  const [wc, setWc] = useState<{ chars: number; noSpace: number; cjk: number; words: number; paras: number } | null>(null);
+  const [wc, setWc] = useState<RichDocWordCount | null>(null);
   const [nav, setNav] = useState<{ level: number; text: string; idx: number }[]>([]);
-  const [diffView, setDiffView] = useState<'orig' | 'mark' | 'clean' | 'final'>('mark'); // Agent 改动四态:原文/修订/清样/改后
+  const [diffView, setDiffView] = useState<RichDocDiffView>('mark'); // Agent 改动四态:原文/修订/清样/改后
   const [hasDiff, setHasDiff] = useState(false); // 文档里是否存在 Agent 改动(决定是否显示修订切换条)
   const [chgCount, setChgCount] = useState(0); // 改动条数(计数器)
   const [stepPos, setStepPos] = useState(0); // 步进导航当前位置(0 基)
@@ -198,7 +204,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   const docChgsRef = useRef<Array<{ cid: string; label: string }>>([]); // imperative handle 闭包安全的镜像
   const setDocChanges = (list: Array<{ cid: string; label: string }>): void => { docChgsRef.current = list; setDocChgs(list); };
   const [linkedCid, setLinkedCid] = useState<string | null>(null); // rail 悬停联动(chip 用状态点亮,行内标记走类)
-  const [hoverCard, setHoverCard] = useState<{ cid: string; kind: string; oldText: string; newText: string; glyph: string; x: number; y: number; below: boolean } | null>(null); // 逐条改动悬浮卡
+  const [hoverCard, setHoverCard] = useState<RichDocHoverCardState | null>(null); // 逐条改动悬浮卡
   const cardTimer = useRef<number | null>(null);
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null); // Office 式即时悬浮提示
   const tipTimer = useRef<number | null>(null);
@@ -1255,38 +1261,18 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
 
       {page.ruler ? <div className="rd-ruler" /> : null}
       <div className="rd-stage">
-        {hasDiff ? (
-          <DiffToggle<'orig' | 'mark' | 'clean' | 'final'>
-            label="Agent 修订"
-            segs={[
-              { v: 'orig', label: '原文', title: '只看改前' },
-              { v: 'mark', label: '修订', title: '红删绿增对照' },
-              { v: 'clean', label: '清样', title: '清样:只留改后 + 左侧改动条' },
-              { v: 'final', label: '改后', title: '只看改后' },
-            ] as const}
-            active={diffView}
-            count={chgCount > 0 ? { pos: stepPos, total: chgCount } : null}
-            onPick={setDiffView}
-            onStep={step}
-          >
-            {docChgs.map((c) => (
-              <span key={c.cid} className={'rd-dt-docchg' + (linkedCid === c.cid ? ' is-linked' : '')} title={'全文/版面改动:' + c.label}>
-                <span className="rd-dt-docchg-glyph">¶</span>
-                <span className="rd-dt-docchg-lb">{c.label}</span>
-                <button className="rd-dt-docchg-btn no" onMouseDown={(e) => { e.preventDefault(); resolveCb.current?.(c.cid, 'reject'); }} aria-label="拒绝该全文改动" title="拒绝">✕</button>
-                <button className="rd-dt-docchg-btn ok" onMouseDown={(e) => { e.preventDefault(); resolveCb.current?.(c.cid, 'accept'); }} aria-label="接受该全文改动" title="接受">✓</button>
-              </span>
-            ))}
-          </DiffToggle>
-        ) : null}
-        {page.nav ? (
-          <aside className="rd-nav">
-            <div className="rd-nav-h">{t('导航')}</div>
-            <div className="rd-nav-list">
-              {nav.length === 0 ? <div className="rd-nav-empty">{t('暂无标题')}</div> : nav.map((h) => <button key={h.idx} className={'rd-nav-i lv' + h.level} onClick={() => navTo(h.idx)}>{h.text}</button>)}
-            </div>
-          </aside>
-        ) : null}
+        <RichDocRevisionBar
+          visible={hasDiff}
+          active={diffView}
+          changeCount={chgCount}
+          stepPosition={stepPos}
+          documentChanges={docChgs}
+          linkedChangeId={linkedCid}
+          onPick={setDiffView}
+          onStep={step}
+          onResolve={(changeId, verb) => resolveCb.current?.(changeId, verb)}
+        />
+        {page.nav ? <RichDocNavigationPane items={nav} onNavigate={navTo} /> : null}
         <div className="rd-scroll" onScroll={() => { setTip(null); if (cardTimer.current) window.clearTimeout(cardTimer.current); setHoverCard(null); }}>
           <div className="rd-page" ref={edRef} contentEditable suppressContentEditableWarning onInput={() => { persist(); refreshHasDiff(); if (page.nav) refreshNav(); }} onMouseUp={onEdMouseUp} onClick={onEdClick} onMouseOver={onDocOver} onMouseOut={onDocOut} onKeyDown={onEdKey} />
         </div>
@@ -1299,35 +1285,13 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
         </>
       ) : null}
 
-      {wc ? (
-        <>
-          <div className="drop-backdrop" onMouseDown={() => setWc(null)} />
-          <div className="rd-wc">
-            <div className="rd-wc-h">{t('字数统计')}</div>
-            {[['页数', '1'], ['字数', String(wc.words)], ['字符数(不计空格)', String(wc.noSpace)], ['字符数(计空格)', String(wc.chars)], ['中文字符', String(wc.cjk)], ['段落数', String(wc.paras)]].map(([k, v]) => (
-              <div className="rd-wc-row" key={k}><span>{t(k!)}</span><b>{v}</b></div>
-            ))}
-            <button className="rd-wc-close" onMouseDown={(e) => { e.preventDefault(); setWc(null); }}>{t('关闭')}</button>
-          </div>
-        </>
-      ) : null}
-
-      {hoverCard ? (
-        <div className={'rd-cardwrap' + (hoverCard.below ? ' below' : '')} style={{ left: hoverCard.x, top: hoverCard.y }} onMouseEnter={keepCard} onMouseLeave={closeCard}>
-          <div className="rd-card">
-            <div className="rd-card-h"><span className="rd-card-dot" /><span className="rd-card-kind">{({ replace: '替换', insert: '插入', delete: '删除', format: '改格式' } as Record<string, string>)[hoverCard.kind] ?? '改动'}</span></div>
-            {hoverCard.kind === 'format' ? (
-              <div className="rd-card-fmt"><span className="rd-fmt-chip">{hoverCard.glyph}</span>{hoverCard.newText}</div>
-            ) : (
-              <div className="rd-card-diff">{hoverCard.oldText ? <span className="rd-card-old">{hoverCard.oldText}</span> : null}{hoverCard.oldText && hoverCard.newText ? <span className="rd-card-arw">→</span> : null}{hoverCard.newText ? <span className="rd-card-new">{hoverCard.newText}</span> : null}</div>
-            )}
-            <div className="rd-card-acts">
-              <button className="rd-cbtn no" onMouseDown={(e) => { e.preventDefault(); resolveCb.current?.(hoverCard.cid, 'reject'); closeCard(); }}>✕ 拒绝</button>
-              <button className="rd-cbtn ok" onMouseDown={(e) => { e.preventDefault(); resolveCb.current?.(hoverCard.cid, 'accept'); closeCard(); }}>✓ 接受</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <RichDocWordCountDialog count={wc} onClose={() => setWc(null)} />
+      <RichDocChangeCard
+        card={hoverCard}
+        onKeep={keepCard}
+        onClose={closeCard}
+        onResolve={(changeId, verb) => { resolveCb.current?.(changeId, verb); closeCard(); }}
+      />
       {tip ? <div className="rd-tip" style={{ left: tip.x, top: tip.y }}>{tip.text}</div> : null}
       {toast ? <div className="rd-toast">{toast}</div> : null}
     </div>
