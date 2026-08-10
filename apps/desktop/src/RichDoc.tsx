@@ -5,7 +5,7 @@
  * 交互全部用 onMouseDown+preventDefault 保住选区(savedRange);弹层点外部关闭。
  * Agent 改动仍由 applyEdit/revert/highlight 完全掌控地落到文档(按 editId 包裹,可逐条还原)。
  */
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { useT } from './i18n.js';
 import { RichDocRibbon } from './RichDocRibbon.js';
 import {
@@ -49,12 +49,9 @@ import {
 import type { RichDocSnapshot } from './richdoc-projection.js';
 import { dispatchRichDocCommand } from './richdoc-command-dispatch.js';
 import type { RichDocCommandContext } from './richdoc-command-dispatch.js';
-import {
-  BORDERS, CASES, CN_LAYOUTS, COLORS, COLUMNS, DATE_FMTS, EFFECTS, EQUATIONS, FONTS, HILITES,
-  LINE_SPACINGS, MARGINS, PAPERS, RichDocMenuItem, RichDocSymbolGrid as SymGrid,
-  RichDocTableGrid as TableGrid, SHAPES, SIZES, SYMBOLS, WORDARTS, ZOOMS,
-} from './RichDocMenus.js';
-import type { RichDocMenuItemProps } from './RichDocMenus.js';
+import { MARGINS, PAPERS, SIZES } from './RichDocMenus.js';
+import { RichDocMenuPopup } from './RichDocMenuPopup.js';
+import type { RichDocMenuActions } from './RichDocMenuPopup.js';
 
 export type { DocFmt, DocTable } from './richdoc-editing.js';
 
@@ -808,7 +805,6 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     notify(t('索引已生成'));
   };
   const insertBiblio = (): void => insertHTML('<section class="rd-biblio"><h2>参考文献</h2><ol><li>作者. 标题[M]. 出版社, 年份.</li></ol></section><p><br></p>');
-  const insertCitation = (): void => insertHTML('<span class="rd-cite">(作者, 2026)</span>');
 
   // ── 页眉页脚 / 书签 / 交叉引用 ──
   const toggleHeaderFooter = (which: 'header' | 'footer'): void => {
@@ -1033,102 +1029,87 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   };
   const run = (label: string): void => dispatchRichDocCommand(label, commandContext);
 
-  // ── 弹层内容 ──
-  const PopItem = (props: Omit<RichDocMenuItemProps, 'onClose'>): ReactNode => <RichDocMenuItem {...props} onClose={() => setPop(null)} />;
-  const closeAfter = (fn: () => void): void => { fn(); setPop(null); };
-
-  const renderPop = (key: string): ReactNode => {
-    switch (key) {
-      case '粘贴': return <div className="drop-list">
-        <PopItem label="保留源格式粘贴" onPick={() => void doPaste('rich')} />
-        <PopItem label="合并格式" onPick={() => void doPaste('merge')} />
-        <PopItem label="只保留文本" onPick={() => void doPaste('text')} />
-      </div>;
-      case '字体': return <div className="drop-list">{FONTS.map((f) => <button key={f} className="drop-item" style={{ fontFamily: f }} onMouseDown={(e) => { e.preventDefault(); closeAfter(() => setFont(f)); }}>{f}</button>)}</div>;
-      case '字号': return <div className="drop-list">{SIZES.map((sz) => <PopItem key={sz} label={String(sz)} onPick={() => setSize(String(sz))} />)}</div>;
-      case '更改大小写': return <div className="drop-list">{CASES.map(([lb, mode]) => <PopItem key={mode} label={lb} onPick={() => { restoreSel(); const txt = window.getSelection()?.toString() ?? ''; if (txt) insertText(transformCase(txt, mode)); }} />)}</div>;
-      case '文本效果': return <div className="drop-list">{EFFECTS.map(([lb, style]) => <button key={lb} className="drop-item" onMouseDown={(e) => { e.preventDefault(); closeAfter(() => lb === '无' ? exec('removeFormat') : wrapSel((sp) => Object.assign(sp.style, style))); }}>{t(lb)}</button>)}</div>;
-      case '突出显示': case '底纹': case '字体颜色': {
-        const isFore = key === '字体颜色';
-        const isShade = key === '底纹';
-        const palette = key === '突出显示' ? HILITES : COLORS;
-        const apply = (c: string): void => {
-          if (isFore) { lastFore.current = c; exec('foreColor', c); }
-          else if (isShade) styleBlocks((el) => { el.style.backgroundColor = c === 'transparent' ? '' : c; });
-          else { lastHi.current = c; exec('hiliteColor', c); }
-        };
-        return <div>
-          <div className="drop-colors">{palette.map((c) => <button key={c} className="swatch" style={{ background: c }} title={c} onMouseDown={(e) => { e.preventDefault(); closeAfter(() => apply(c)); }} />)}</div>
-          <div className="drop-list">
-            <PopItem label={isShade ? '无填充' : '无颜色'} onPick={() => apply('transparent')} />
-            {isFore ? <label className="drop-item drop-sec" onMouseDown={(e) => e.preventDefault()}>{t('更多颜色…')}<input type="color" style={{ marginLeft: 8 }} onChange={(e) => closeAfter(() => apply(e.target.value))} /></label> : null}
-          </div>
-        </div>;
+  const menuActions: RichDocMenuActions = {
+    paste: doPaste,
+    setFont,
+    setSize,
+    changeCase: (mode) => {
+      restoreSel();
+      const text = window.getSelection()?.toString() ?? '';
+      if (text) insertText(transformCase(text, mode));
+    },
+    exec,
+    wrapSelection: wrapSel,
+    applyColor: (kind, color) => {
+      if (kind === 'foreground') { lastFore.current = color; exec('foreColor', color); }
+      else if (kind === 'shade') styleBlocks((element) => { element.style.backgroundColor = color === 'transparent' ? '' : color; });
+      else { lastHi.current = color; exec('hiliteColor', color); }
+    },
+    insertEnclosed,
+    sortBlocks: (direction) => {
+      restoreSel();
+      const blocks = blocksInSel();
+      if (blocks.length < 2) { notify(t('请选择多个段落再排序')); return; }
+      const parent = blocks[0]!.parentNode;
+      [...blocks]
+        .sort((a, b) => (a.textContent ?? '').localeCompare(b.textContent ?? '', 'zh-Hans-CN') * direction)
+        .forEach((element) => parent?.appendChild(element));
+      persist();
+    },
+    setLineSpacing,
+    styleBlocks,
+    findNext,
+    findReplace,
+    clearSelection: () => window.getSelection()?.removeAllRanges(),
+    insertCover,
+    insertTable,
+    insertTablePrompt,
+    insertShape,
+    insertText,
+    insertHTML,
+    insertPageNumber: (position) => {
+      const header = position === 'header-right';
+      toggleHeaderFooter(header ? 'header' : 'footer');
+      const box = edRef.current?.querySelector(header ? '.rd-header' : '.rd-footer');
+      if (!box) return;
+      box.insertAdjacentHTML('beforeend', ' <span class="rd-pagenum">1</span>');
+      (box as HTMLElement).style.textAlign = position === 'footer-center' ? 'center' : 'right';
+      persist();
+    },
+    insertWordArt,
+    dropCap,
+    updatePage: (patch) => setPage((current) => ({ ...current, ...patch })),
+    setGridPaper: (mode) => {
+      const root = edRef.current;
+      if (!root) return;
+      if (mode === 'squares') {
+        root.style.backgroundImage = 'linear-gradient(#e3e4e7 1px,transparent 1px),linear-gradient(90deg,#e3e4e7 1px,transparent 1px)';
+        root.style.backgroundSize = '24px 24px';
+      } else if (mode === 'lines') {
+        root.style.backgroundImage = 'linear-gradient(#e3e4e7 1px,transparent 1px)';
+        root.style.backgroundSize = '100% 30px';
+      } else root.style.backgroundImage = '';
+    },
+    arrangeImage: arrangeImg,
+    ungroupSelection: () => {
+      restoreSel();
+      let element: Node | null = window.getSelection()?.anchorNode ?? null;
+      while (element && element !== edRef.current) {
+        if (element instanceof HTMLElement && element.classList.contains('rd-group')) {
+          const parent = element.parentNode;
+          if (parent) { while (element.firstChild) parent.insertBefore(element.firstChild, element); parent.removeChild(element); }
+          break;
+        }
+        element = element.parentNode;
       }
-      case '多级列表': return <div className="drop-list"><PopItem label="转为编号列表" onPick={() => exec('insertOrderedList')} /><PopItem label="增加一级(缩进)" onPick={() => exec('indent')} /><PopItem label="减少一级" onPick={() => exec('outdent')} /></div>;
-      case '中文版式': return <div className="drop-list">{CN_LAYOUTS.map(([lb, mode]) => <PopItem key={mode} label={lb} onPick={() => {
-        if (mode === 'enclose') insertEnclosed();
-        else if (mode === 'twolines') wrapSel((sp) => { sp.style.display = 'inline-block'; sp.style.lineHeight = '1'; sp.style.fontSize = '.6em'; sp.style.whiteSpace = 'pre-line'; });
-        else wrapSel((sp) => { sp.style.display = 'inline-block'; sp.style.transform = `scaleX(${mode === 'scale80' ? 0.8 : 1.5})`; });
-      }} />)}</div>;
-      case '排序': return <div className="drop-list">{[['升序', 1], ['降序', -1]].map(([lb, dir]) => <PopItem key={lb as string} label={lb as string} onPick={() => {
-        restoreSel();
-        const blocks = blocksInSel();
-        if (blocks.length < 2) { notify(t('请选择多个段落再排序')); return; }
-        const parent = blocks[0]!.parentNode;
-        const sorted = [...blocks].sort((a, b) => (a.textContent ?? '').localeCompare(b.textContent ?? '', 'zh-Hans-CN') * (dir as number));
-        sorted.forEach((el) => parent?.appendChild(el));
-        persist();
-      }} />)}</div>;
-      case '行距': return <div className="drop-list">{LINE_SPACINGS.map((v) => <PopItem key={v} label={v} onPick={() => setLineSpacing(v)} />)}<div className="drop-sec"><PopItem label="增加段前间距" onPick={() => styleBlocks((el) => { el.style.marginTop = (parseFloat(el.style.marginTop || '0') + 6) + 'pt'; })} /><PopItem label="增加段后间距" onPick={() => styleBlocks((el) => { el.style.marginBottom = (parseFloat(el.style.marginBottom || '0') + 6) + 'pt'; })} /></div></div>;
-      case '边框': return <div className="drop-list">{BORDERS.map(([lb, side]) => <PopItem key={lb} label={lb} onPick={() => styleBlocks((el) => {
-        el.style.border = ''; el.style.borderTop = el.style.borderBottom = el.style.borderLeft = el.style.borderRight = '';
-        const b = '1px solid #333';
-        if (side === 'all') el.style.border = b;
-        else if (side === 'top') el.style.borderTop = b;
-        else if (side === 'bottom') el.style.borderBottom = b;
-        else if (side === 'left') el.style.borderLeft = b;
-        else if (side === 'right') el.style.borderRight = b;
-        if (side !== 'none') el.style.padding = '2px 6px';
-      })} />)}</div>;
-      case '查找': return <div className="rd-find"><input className="rd-find-in" placeholder={t('查找内容')} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') findNext((e.target as HTMLInputElement).value); }} /><button className="rd-find-btn" onMouseDown={(e) => { e.preventDefault(); const inp = (e.currentTarget.previousSibling as HTMLInputElement); findNext(inp.value); }}>{t('查找下一个')}</button></div>;
-      case '替换': return <div className="drop-list"><PopItem label="打开查找和替换" onPick={findReplace} /></div>;
-      case '选择': return <div className="drop-list"><PopItem label="全选" onPick={() => exec('selectAll')} /><PopItem label="取消选择" onPick={() => window.getSelection()?.removeAllRanges()} /></div>;
-      case '封面': return <div className="drop-gallery"><div className="dg-title">{t('封面样式')}</div><div className="dg-cells" style={{ width: 300 }}>{['rd-cover--a', 'rd-cover--b', 'rd-cover--c'].map((v, i) => <button key={v} className="dgcell" style={{ height: 76 }} onMouseDown={(e) => { e.preventDefault(); closeAfter(() => insertCover(v)); }}>{t('封面')} {i + 1}</button>)}</div></div>;
-      case '表格': return <TableGrid onPick={(r, c) => closeAfter(() => insertTable(r, c))} onMore={() => closeAfter(insertTablePrompt)} />;
-      case '形状': return <div className="drop-gallery"><div className="dg-cells" style={{ gridTemplateColumns: 'repeat(3,1fr)', width: 180 }}>{SHAPES.map(([name, svg]) => <button key={name} className="dgcell" title={t(name)} style={{ padding: 6 }} onMouseDown={(e) => { e.preventDefault(); closeAfter(() => insertShape(svg)); }}><svg width="46" height="30" viewBox="0 0 120 80" fill="none" stroke="currentColor" strokeWidth="4">{/* preview */}</svg><span style={{ display: 'block', fontSize: 10 }}>{t(name)}</span></button>)}</div></div>;
-      case '图标': return <SymGrid sets={{ 图标: SYMBOLS.箭头 ?? [] }} onPick={(ch) => closeAfter(() => insertText(ch))} />;
-      case 'SmartArt': return <div className="drop-list">{['流程', '列表', '循环', '层次'].map((k) => <PopItem key={k} label={'SmartArt · ' + k} onPick={() => insertHTML(`<div class="rd-smartart" contenteditable="false"><span>${k}①</span><span>${k}②</span><span>${k}③</span></div>`)} />)}</div>;
-      case '图表': return <div className="drop-list">{['柱形图', '折线图', '饼图'].map((k) => <PopItem key={k} label={k} onPick={() => insertHTML(`<div class="rd-chart" contenteditable="false">${k === '饼图' ? '<svg width="120" height="90" viewBox="0 0 42 42"><circle r="16" cx="21" cy="21" fill="#2563eb"/><path d="M21 5 A16 16 0 0 1 37 21 L21 21 Z" fill="#8b5cf6"/></svg>' : '<svg width="140" height="90" viewBox="0 0 140 90"><rect x="16" y="40" width="18" height="42" fill="#2563eb"/><rect x="46" y="24" width="18" height="58" fill="#60a5fa"/><rect x="76" y="52" width="18" height="30" fill="#8b5cf6"/><rect x="106" y="14" width="18" height="68" fill="#2563eb"/></svg>'}<div class="rd-chart-cap">${k} · 示意</div></div><p><br></p>`)} />)}</div>;
-      case '页码': return <div className="drop-list">{['页脚居中', '页脚居右', '页眉居右'].map((k) => <PopItem key={k} label={k} onPick={() => { toggleHeaderFooter(k.startsWith('页眉') ? 'header' : 'footer'); const cls = k.startsWith('页眉') ? 'rd-header' : 'rd-footer'; const box = edRef.current?.querySelector('.' + cls); if (box) { box.insertAdjacentHTML('beforeend', ' <span class="rd-pagenum">1</span>'); (box as HTMLElement).style.textAlign = k.endsWith('居右') ? 'right' : 'center'; persist(); } }} />)}</div>;
-      case '文档部件': return <div className="drop-list">{[['作者', '作者姓名'], ['文档标题', document.title || '实训报告'], ['当前日期', DATE_FMTS()[1]?.[1] ?? '']].map(([lb, val]) => <PopItem key={lb} label={lb!} onPick={() => insertText(val!)} />)}</div>;
-      case '艺术字': return <div className="drop-gallery"><div className="dg-cells" style={{ gridTemplateColumns: 'repeat(2,1fr)', width: 220 }}>{WORDARTS.map((c, i) => <button key={c} className={'dgcell rd-wordart ' + c} style={{ fontSize: 18, padding: 10 }} onMouseDown={(e) => { e.preventDefault(); closeAfter(() => insertWordArt(c)); }}>A{i + 1}</button>)}</div></div>;
-      case '首字下沉': return <div className="drop-list">{['无', '下沉', '悬挂'].map((m) => <PopItem key={m} label={m} onPick={() => dropCap(m)} />)}</div>;
-      case '日期和时间': return <div className="drop-list">{DATE_FMTS().map(([lb, val]) => <PopItem key={lb} label={lb} onPick={() => insertText(val)} />)}</div>;
-      case '公式': return <div className="drop-list">{EQUATIONS.map((eq) => <button key={eq} className="drop-item" onMouseDown={(e) => { e.preventDefault(); closeAfter(() => insertHTML(`<span class="rd-eq">${eq}</span>`)); }}>{eq}</button>)}</div>;
-      case '符号': return <SymGrid sets={SYMBOLS} onPick={(ch) => closeAfter(() => insertText(ch))} />;
-      case '文字方向': return <div className="drop-list"><PopItem label="水平" check={page.writing !== 'v'} onPick={() => setPage((p) => ({ ...p, writing: undefined }))} /><PopItem label="垂直(从右向左)" check={page.writing === 'v'} onPick={() => setPage((p) => ({ ...p, writing: 'v' }))} /></div>;
-      case '页边距': return <div className="drop-list">{MARGINS.map(([lb, , sub]) => <PopItem key={lb} label={lb} sub={sub} check={page.margin === lb} onPick={() => setPage((p) => ({ ...p, margin: lb }))} />)}<div className="drop-sec"><PopItem label="恢复默认" onPick={() => setPage((p) => ({ ...p, margin: undefined }))} /></div></div>;
-      case '纸张方向': return <div className="drop-list"><PopItem label="纵向" check={page.orient !== 'landscape'} onPick={() => setPage((p) => ({ ...p, orient: 'portrait' }))} /><PopItem label="横向" check={page.orient === 'landscape'} onPick={() => setPage((p) => ({ ...p, orient: 'landscape' }))} /></div>;
-      case '纸张大小': return <div className="drop-list">{Object.keys(PAPERS).map((k) => <PopItem key={k} label={k} sub={`${PAPERS[k]![0]}×${PAPERS[k]![1]}`} check={(page.size ?? 'A4') === k} onPick={() => setPage((p) => ({ ...p, size: k }))} />)}</div>;
-      case '栏': return <div className="drop-list">{COLUMNS.map(([lb, n]) => <PopItem key={lb} label={lb} check={(page.columns ?? 1) === n} onPick={() => setPage((p) => ({ ...p, columns: n }))} />)}</div>;
-      case '分隔符': return <div className="drop-list"><PopItem label="分页符" onPick={() => insertHTML('<div class="rd-pagebreak" contenteditable="false"></div>')} /><PopItem label="分栏符" onPick={() => insertHTML('<span style="break-after:column"></span>')} /><PopItem label="自动换行符" onPick={() => insertHTML('<br>')} /></div>;
-      case '行号': return <div className="drop-list"><PopItem label="无" check={!page.lineNums} onPick={() => setPage((p) => ({ ...p, lineNums: false }))} /><PopItem label="连续" check={!!page.lineNums} onPick={() => setPage((p) => ({ ...p, lineNums: true }))} /></div>;
-      case '断字': return <div className="drop-list"><PopItem label="无" check={!page.hyphens} onPick={() => setPage((p) => ({ ...p, hyphens: false }))} /><PopItem label="自动" check={!!page.hyphens} onPick={() => setPage((p) => ({ ...p, hyphens: true }))} /></div>;
-      case '稿纸设置': return <div className="drop-list"><PopItem label="方格式稿纸" onPick={() => { if (edRef.current) { edRef.current.style.backgroundImage = 'linear-gradient(#e3e4e7 1px,transparent 1px),linear-gradient(90deg,#e3e4e7 1px,transparent 1px)'; edRef.current.style.backgroundSize = '24px 24px'; } }} /><PopItem label="行线式稿纸" onPick={() => { if (edRef.current) { edRef.current.style.backgroundImage = 'linear-gradient(#e3e4e7 1px,transparent 1px)'; edRef.current.style.backgroundSize = '100% 30px'; } }} /><PopItem label="非稿纸文档" onPick={() => { if (edRef.current) edRef.current.style.backgroundImage = ''; }} /></div>;
-      case '位置': return <div className="drop-list"><PopItem label="居左环绕" onPick={() => arrangeImg((el) => { el.style.cssText += ';float:left;margin:4px 12px 4px 0'; })} /><PopItem label="居中" onPick={() => arrangeImg((el) => { el.style.cssText += ';display:block;float:none;margin:8px auto'; })} /><PopItem label="居右环绕" onPick={() => arrangeImg((el) => { el.style.cssText += ';float:right;margin:4px 0 4px 12px'; })} /></div>;
-      case '环绕文字': return <div className="drop-list"><PopItem label="嵌入型" onPick={() => arrangeImg((el) => { el.style.float = 'none'; el.style.display = 'inline'; })} /><PopItem label="四周型" onPick={() => arrangeImg((el) => { el.style.float = 'left'; el.style.margin = '4px 12px'; })} /><PopItem label="上下型" onPick={() => arrangeImg((el) => { el.style.float = 'none'; el.style.display = 'block'; el.style.margin = '8px 0'; })} /></div>;
-      case '对齐': return <div className="drop-list"><PopItem label="左对齐" onPick={() => arrangeImg((el) => { el.style.display = 'block'; el.style.margin = '4px auto 4px 0'; })} /><PopItem label="水平居中" onPick={() => arrangeImg((el) => { el.style.display = 'block'; el.style.margin = '4px auto'; })} /><PopItem label="右对齐" onPick={() => arrangeImg((el) => { el.style.display = 'block'; el.style.margin = '4px 0 4px auto'; })} /></div>;
-      case '组合': return <div className="drop-list"><PopItem label="组合" onPick={() => wrapSel((sp) => { sp.style.display = 'inline-block'; }, 'rd-group')} /><PopItem label="取消组合" onPick={() => { restoreSel(); let e: Node | null = window.getSelection()?.anchorNode ?? null; while (e && e !== edRef.current) { if (e instanceof HTMLElement && e.classList.contains('rd-group')) { const p = e.parentNode; if (p) { while (e.firstChild) p.insertBefore(e.firstChild, e); p.removeChild(e); } break; } e = e.parentNode; } persist(); }} /></div>;
-      case '旋转': return <div className="drop-list"><PopItem label="向右旋转 90°" onPick={() => rotateImg('right')} /><PopItem label="向左旋转 90°" onPick={() => rotateImg('left')} /><PopItem label="水平翻转" onPick={() => rotateImg('flipH')} /><PopItem label="垂直翻转" onPick={() => rotateImg('flipV')} /></div>;
-      case '目录': return <div className="drop-gallery"><div className="dg-title">{t('自动目录')}</div><div className="drop-list"><PopItem label="插入自动目录" onPick={buildToc} /><PopItem label="更新目录" onPick={updateToc} /></div></div>;
-      case '添加文字': return <div className="drop-list">{[['级别 1', 'h1'], ['级别 2', 'h2'], ['级别 3', 'h3'], ['不在目录中显示', 'p']].map(([lb, tag]) => <PopItem key={lb} label={lb!} onPick={() => exec('formatBlock', tag!)} />)}</div>;
-      case '插入引文': return <div className="drop-list"><PopItem label="(作者, 2026)" onPick={insertCitation} /><PopItem label="添加新源…" onPick={() => notify(t('可在文档内直接编辑引文'))} /></div>;
-      case '样式': return <div className="drop-list">{['GB/T 7714', 'APA', 'MLA', 'Chicago', 'IEEE'].map((s) => <PopItem key={s} label={s} onPick={() => notify(t('引文样式') + ' · ' + s)} />)}</div>;
-      case '语言': return <div className="drop-list">{[['中文(简体)', 'zh-CN'], ['English', 'en-US'], ['日本語', 'ja-JP']].map(([lb, code]) => <PopItem key={code} label={lb!} check={(page.lang ?? 'zh-CN') === code} onPick={() => setPage((p) => ({ ...p, lang: code }))} />)}</div>;
-      case '缩放': return <div className="drop-list">{ZOOMS.map((z) => <PopItem key={z} label={z + '%'} check={Math.round((page.zoom ?? 1) * 100) === z} onPick={() => setPage((p) => ({ ...p, zoom: z / 100 }))} />)}<div className="drop-sec"><PopItem label="页宽" onPick={() => fitZoom('width')} /><PopItem label="整页" onPick={() => fitZoom('page')} /></div></div>;
-      default: return <div className="drop-list"><PopItem label={key} onPick={() => run(key)} /></div>;
-    }
+      persist();
+    },
+    rotateImage: rotateImg,
+    buildToc,
+    updateToc,
+    notify,
+    fitZoom,
+    run,
   };
 
   // ── 单元格渲染 ──
@@ -1197,7 +1178,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
       {pop ? (
         <>
           <div className="drop-backdrop" onMouseDown={() => setPop(null)} />
-          <div className="dropdown rd-pop" style={{ left: pop.x, top: pop.y }}>{renderPop(pop.key)}</div>
+          <div className="dropdown rd-pop" style={{ left: pop.x, top: pop.y }}><RichDocMenuPopup menuKey={pop.key} page={page} actions={menuActions} onClose={() => setPop(null)} /></div>
         </>
       ) : null}
 
