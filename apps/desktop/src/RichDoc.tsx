@@ -49,7 +49,12 @@ import {
 import type { RichDocSnapshot } from './richdoc-projection.js';
 import { dispatchRichDocCommand } from './richdoc-command-dispatch.js';
 import type { RichDocCommandContext } from './richdoc-command-dispatch.js';
-import { IconCheck } from './icons.js';
+import {
+  BORDERS, CASES, CN_LAYOUTS, COLORS, COLUMNS, DATE_FMTS, EFFECTS, EQUATIONS, FONTS, HILITES,
+  LINE_SPACINGS, MARGINS, PAPERS, RichDocMenuItem, RichDocSymbolGrid as SymGrid,
+  RichDocTableGrid as TableGrid, SHAPES, SIZES, SYMBOLS, WORDARTS, ZOOMS,
+} from './RichDocMenus.js';
+import type { RichDocMenuItemProps } from './RichDocMenus.js';
 
 export type { DocFmt, DocTable } from './richdoc-editing.js';
 
@@ -90,58 +95,6 @@ export interface RichDocProps {
   onChangeResolve?: (cid: string, verb: 'accept' | 'reject') => void; // 行内卡片 ✓/✕ → 走 rail 的接受/拒绝
 }
 
-const FONTS = ['宋体', '黑体', '微软雅黑', '楷体', '仿宋', '等线', 'Arial', 'Times New Roman', 'Calibri', 'Georgia'];
-const SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 22, 26, 28, 36, 48, 72];
-const LINE_SPACINGS = ['1.0', '1.15', '1.5', '2.0', '2.5', '3.0'];
-const HILITES = ['#ffe600', '#a6ff00', '#00ffff', '#ff66cc', '#63d2ff', '#ffaa00', '#ff5555', '#c9c9c9'];
-const COLORS = [
-  '#000000', '#404040', '#7f7f7f', '#bfbfbf', '#ffffff', '#c00000', '#ff0000', '#ffc000', '#ffff00', '#92d050', '#00b050',
-  '#00b0f0', '#0070c0', '#002060', '#7030a0', '#e7492e', '#f0a500', '#2563eb', '#1a7f37', '#8b5cf6', '#0891b2',
-];
-const CASES: [string, string][] = [['句首字母大写', 'sentence'], ['全部小写', 'lower'], ['全部大写', 'upper'], ['每个单词首字母大写', 'title'], ['切换大小写', 'toggle']];
-const EFFECTS: [string, Partial<CSSStyleDeclaration>][] = [
-  ['无', {}],
-  ['阴影', { textShadow: '1px 1px 2px rgba(0,0,0,.45)' }],
-  ['发光', { textShadow: '0 0 6px #2563eb' }],
-  ['描边', { WebkitTextStroke: '1px #2563eb', color: 'transparent' } as Partial<CSSStyleDeclaration>],
-  ['渐变填充', { background: 'linear-gradient(90deg,#2563eb,#8b5cf6)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' } as Partial<CSSStyleDeclaration>],
-];
-const BULLET_STYLES: [string, string][] = [['●  实心圆点', 'disc'], ['○  空心圆圈', 'circle'], ['■  实心方块', 'square'], ['▪  小方块', "'▪  '"]];
-const NUM_STYLES: [string, string][] = [['1. 2. 3.', 'decimal'], ['a. b. c.', 'lower-alpha'], ['i. ii. iii.', 'lower-roman'], ['一、二、三、', 'cjk-ideographic']];
-const CN_LAYOUTS: [string, string][] = [['带圈字符', 'enclose'], ['双行合一', 'twolines'], ['字符缩放 80%', 'scale80'], ['字符缩放 150%', 'scale150']];
-const BORDERS: [string, string][] = [['无框线', 'none'], ['所有框线', 'all'], ['外侧框线', 'all'], ['上框线', 'top'], ['下框线', 'bottom'], ['左框线', 'left'], ['右框线', 'right']];
-const MARGINS: [string, string, string][] = [['普通', '64px 72px', '上下 2.54 · 左右 3.18 cm'], ['窄', '24px 30px', '上下 1.27 · 左右 1.27 cm'], ['适中', '48px 60px', '上下 2.54 · 左右 1.91 cm'], ['宽', '96px 120px', '上下 2.54 · 左右 5.08 cm']];
-const PAPERS: Record<string, [number, number]> = { A4: [794, 1123], Letter: [816, 1056], Legal: [816, 1344], A5: [559, 794], A3: [1123, 1587] };
-const COLUMNS: [string, number][] = [['一栏', 1], ['两栏', 2], ['三栏', 3]];
-const ZOOMS = [50, 75, 100, 125, 150, 200];
-const DATE_FMTS = (): [string, string][] => {
-  const d = new Date();
-  const p = (n: number): string => String(n).padStart(2, '0');
-  const wk = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][d.getDay()] ?? '';
-  return [
-    [`${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())}`, `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())}`],
-    [`${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`, `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`],
-    [`${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${wk}`, `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${wk}`],
-    [`${p(d.getHours())}:${p(d.getMinutes())}`, `${p(d.getHours())}:${p(d.getMinutes())}`],
-  ];
-};
-const SYMBOLS: Record<string, string[]> = {
-  常用: ['—', '–', '·', '…', '、', '。', '“', '”', '‘', '’', '《', '》', '〈', '〉', '「', '」', '『', '』', '【', '】', '§', '¶', '№', '℃', '℉', '™', '©', '®'],
-  数学: ['±', '×', '÷', '≠', '≈', '≤', '≥', '∞', '∑', '∏', '∫', '√', '∂', '∆', '∇', 'π', '∈', '∉', '⊂', '⊃', '∪', '∩', '∀', '∃', '°', '′', '″', '‰'],
-  货币: ['¥', '$', '€', '£', '¢', '₩', '₫', '₽', '₹', '฿', '₺', '₴'],
-  希腊: ['α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'λ', 'μ', 'ξ', 'π', 'ρ', 'σ', 'τ', 'φ', 'χ', 'ψ', 'ω', 'Γ', 'Δ', 'Θ', 'Λ', 'Ξ', 'Π', 'Σ', 'Φ', 'Ω'],
-  箭头: ['←', '→', '↑', '↓', '↔', '↕', '⇐', '⇒', '⇑', '⇓', '⇔', '➜', '▶', '◀', '▲', '▼', '★', '☆', '✦', '✓', '✗', '●', '○', '◆', '◇', '■', '□', '♠'],
-};
-const EQUATIONS = ['a² + b² = c²', '(a + b)² = a² + 2ab + b²', 'E = mc²', 'x = (−b ± √(b² − 4ac)) / 2a', 'a/b', '√x', '∑ᵢ₌₁ⁿ xᵢ', '∫ f(x) dx', 'lim (x→∞)', 'π ≈ 3.14159'];
-const SHAPES: [string, string][] = [
-  ['矩形', '<rect x="4" y="10" width="112" height="60" rx="4"/>'],
-  ['圆角矩形', '<rect x="4" y="10" width="112" height="60" rx="16"/>'],
-  ['椭圆', '<ellipse cx="60" cy="40" rx="56" ry="30"/>'],
-  ['三角形', '<path d="M60 8 L114 72 L6 72 Z"/>'],
-  ['直线', '<path d="M6 40 L114 40"/>'],
-  ['箭头', '<path d="M6 40 L104 40 M88 26 L114 40 L88 54"/>'],
-];
-const WORDARTS = ['rd-wa-1', 'rd-wa-2', 'rd-wa-3', 'rd-wa-4'];
 const DEMO_HTML = `
 <h1>项目周报 · 2026 年第 26 周</h1>
 <p>本周核心进展:OtterPatch 完成了 Excel 透视图的内联渲染,并新增了"需求模糊时主动澄清"的能力,Agent 在意图不清时会先给用户一张引导选择表。整体进度符合预期。</p>
@@ -1081,11 +1034,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   const run = (label: string): void => dispatchRichDocCommand(label, commandContext);
 
   // ── 弹层内容 ──
-  const PopItem = ({ label, sub, onPick, check }: { label: string; sub?: string; onPick: () => void; check?: boolean }): ReactNode => (
-    <button className="drop-item" onMouseDown={(e) => { e.preventDefault(); onPick(); setPop(null); }}>
-      {check ? <IconCheck size={13} /> : null}<span>{t(label)}</span>{sub ? <em className="di-sub">{sub}</em> : null}
-    </button>
-  );
+  const PopItem = (props: Omit<RichDocMenuItemProps, 'onClose'>): ReactNode => <RichDocMenuItem {...props} onClose={() => setPop(null)} />;
   const closeAfter = (fn: () => void): void => { fn(); setPop(null); };
 
   const renderPop = (key: string): ReactNode => {
@@ -1264,38 +1213,5 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     </div>
   );
 });
-
-/** 表格网格选择器:悬停高亮 N×M。 */
-function TableGrid({ onPick, onMore }: { onPick: (r: number, c: number) => void; onMore: () => void }): ReactNode {
-  const t = useT();
-  const [hot, setHot] = useState<[number, number]>([0, 0]);
-  const ROWS = 8, COLS = 10;
-  return (
-    <div>
-      <div className="rd-tgrid" onMouseLeave={() => setHot([0, 0])}>
-        {Array.from({ length: ROWS * COLS }, (_, i) => {
-          const r = Math.floor(i / COLS) + 1, c = (i % COLS) + 1;
-          const on = r <= hot[0] && c <= hot[1];
-          return <i key={i} className={on ? 'hot' : ''} onMouseEnter={() => setHot([r, c])} onMouseDown={(e) => { e.preventDefault(); onPick(r, c); }} />;
-        })}
-      </div>
-      <div className="rd-tgrid-cap">{hot[0] ? `${hot[1]} × ${hot[0]} ${t('表格')}` : t('插入表格')}</div>
-      <div className="drop-list"><button className="drop-item drop-sec" onMouseDown={(e) => { e.preventDefault(); onMore(); }}>{t('插入表格…')}</button></div>
-    </div>
-  );
-}
-
-/** 符号网格,带分类页签。 */
-function SymGrid({ sets, onPick }: { sets: Record<string, string[]>; onPick: (ch: string) => void }): ReactNode {
-  const t = useT();
-  const keys = Object.keys(sets);
-  const [cat, setCat] = useState(keys[0] ?? '');
-  return (
-    <div>
-      <div className="rd-symtabs">{keys.map((k) => <button key={k} className={'rd-symtab' + (k === cat ? ' on' : '')} onMouseDown={(e) => { e.preventDefault(); setCat(k); }}>{t(k)}</button>)}</div>
-      <div className="rd-symgrid">{(sets[cat] ?? []).map((ch, i) => <button key={ch + i} onMouseDown={(e) => { e.preventDefault(); onPick(ch); }}>{ch}</button>)}</div>
-    </div>
-  );
-}
 
 export default RichDoc;
