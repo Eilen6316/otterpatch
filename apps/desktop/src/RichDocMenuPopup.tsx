@@ -24,18 +24,7 @@ import {
   ZOOMS,
 } from './RichDocMenus.js';
 import type { RichDocMenuItemProps } from './RichDocMenus.js';
-
-export interface RichDocMenuPageState {
-  writing?: 'v';
-  margin?: string;
-  orient?: 'portrait' | 'landscape';
-  size?: string;
-  columns?: number;
-  lineNums?: boolean;
-  hyphens?: boolean;
-  lang?: string;
-  zoom?: number;
-}
+import type { RichDocPageState } from './richdoc-page-state.js';
 
 export interface RichDocMenuActions {
   paste: (mode: 'rich' | 'merge' | 'text') => void | Promise<void>;
@@ -61,7 +50,7 @@ export interface RichDocMenuActions {
   insertPageNumber: (position: 'footer-center' | 'footer-right' | 'header-right') => void;
   insertWordArt: (className: string) => void;
   dropCap: (mode: string) => void;
-  updatePage: (patch: Partial<RichDocMenuPageState>) => void;
+  updatePage: (patch: Partial<RichDocPageState>) => void;
   setGridPaper: (mode: 'squares' | 'lines' | 'none') => void;
   arrangeImage: (mutate: (element: HTMLElement) => void) => void;
   ungroupSelection: () => void;
@@ -75,7 +64,7 @@ export interface RichDocMenuActions {
 
 export interface RichDocMenuPopupProps {
   menuKey: string;
-  page: RichDocMenuPageState;
+  page: RichDocPageState;
   actions: RichDocMenuActions;
   onClose: () => void;
 }
@@ -161,7 +150,11 @@ export function RichDocMenuPopup({ menuKey, page, actions, onClose }: RichDocMen
     case '添加文字': return <div className="drop-list">{[['级别 1', 'h1'], ['级别 2', 'h2'], ['级别 3', 'h3'], ['不在目录中显示', 'p']].map(([label, tag]) => <PopItem key={label} label={label!} onPick={() => actions.exec('formatBlock', tag!)} />)}</div>;
     case '插入引文': return <div className="drop-list"><PopItem label="(作者, 2026)" onPick={() => actions.insertHTML('<span class="rd-cite">(作者, 2026)</span>')} /><PopItem label="添加新源…" onPick={() => actions.notify(t('可在文档内直接编辑引文'))} /></div>;
     case '样式': return <div className="drop-list">{['GB/T 7714', 'APA', 'MLA', 'Chicago', 'IEEE'].map((style) => <PopItem key={style} label={style} onPick={() => actions.notify(t('引文样式') + ' · ' + style)} />)}</div>;
-    case '语言': return <div className="drop-list">{[['中文(简体)', 'zh-CN'], ['English', 'en-US'], ['日本語', 'ja-JP']].map(([label, code]) => <PopItem key={code} label={label!} check={(page.lang ?? 'zh-CN') === code} onPick={() => actions.updatePage({ lang: code })} />)}</div>;
+    case '语言': return <div className="drop-list">{([
+      ['中文(简体)', 'zh-CN'],
+      ['English', 'en-US'],
+      ['日本語', 'ja-JP'],
+    ] satisfies Array<[string, NonNullable<RichDocPageState['lang']>]>).map(([label, code]) => <PopItem key={code} label={label} check={(page.lang ?? 'zh-CN') === code} onPick={() => actions.updatePage({ lang: code })} />)}</div>;
     case '缩放': return <div className="drop-list">{ZOOMS.map((zoom) => <PopItem key={zoom} label={zoom + '%'} check={Math.round((page.zoom ?? 1) * 100) === zoom} onPick={() => actions.updatePage({ zoom: zoom / 100 })} />)}<div className="drop-sec"><PopItem label="页宽" onPick={() => actions.fitZoom('width')} /><PopItem label="整页" onPick={() => actions.fitZoom('page')} /></div></div>;
     default: return <div className="drop-list"><PopItem label={menuKey} onPick={() => actions.run(menuKey)} /></div>;
   }

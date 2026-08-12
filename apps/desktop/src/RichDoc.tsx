@@ -26,7 +26,6 @@ import type {
   DocFmt,
   DocTable,
   RichDocEditOptions,
-  RichDocRevisionPageState,
   RichDocUndoEntry,
 } from './richdoc-editing.js';
 import {
@@ -49,9 +48,11 @@ import {
 import type { RichDocSnapshot } from './richdoc-projection.js';
 import { dispatchRichDocCommand } from './richdoc-command-dispatch.js';
 import type { RichDocCommandContext } from './richdoc-command-dispatch.js';
-import { MARGINS, PAPERS, SIZES } from './RichDocMenus.js';
+import { SIZES } from './RichDocMenus.js';
 import { RichDocMenuPopup } from './RichDocMenuPopup.js';
 import type { RichDocMenuActions } from './RichDocMenuPopup.js';
+import { applyRichDocPageState, parseRichDocPageState } from './richdoc-page-state.js';
+import type { RichDocPageState } from './richdoc-page-state.js';
 
 export type { DocFmt, DocTable } from './richdoc-editing.js';
 
@@ -104,12 +105,6 @@ const STORAGE_KEY = 'oa.richdoc';
 const TAB_KEY = 'oa.richdoc.tab';
 const PAGE_KEY = 'oa.richdoc.page';
 
-interface PageState extends RichDocRevisionPageState {
-  size?: string;
-  writing?: 'v'; hyphens?: boolean; lineNums?: boolean; grid?: boolean; ruler?: boolean;
-  nav?: boolean; zoom?: number; view?: 'read' | 'web' | 'outline'; spell?: boolean;
-  hideComments?: boolean; track?: boolean; lang?: string;
-}
 interface CmdState { bold: boolean; italic: boolean; underline: boolean; strike: boolean; ul: boolean; ol: boolean; align: string; font: string; size: number }
 
 /** HTML 转义(用户输入拼进 innerHTML 前必转,避免破坏 DOM/注入)。 */
@@ -143,7 +138,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   const [tab, setTab] = useState<number>(() => { const v = parseInt(localStorage.getItem(TAB_KEY) ?? '0', 10); return Number.isFinite(v) && v >= 0 && v < 6 ? v : 0; });
   const [pop, setPop] = useState<{ key: string; x: number; y: number } | null>(null);
   const [st, setSt] = useState<CmdState>({ bold: false, italic: false, underline: false, strike: false, ul: false, ol: false, align: 'left', font: '', size: 0 });
-  const [page, setPage] = useState<PageState>(() => { try { return JSON.parse(localStorage.getItem(PAGE_KEY) ?? '{}') as PageState; } catch { return {}; } });
+  const [page, setPage] = useState<RichDocPageState>(() => parseRichDocPageState(localStorage.getItem(PAGE_KEY)));
   const pageRef = useRef(page); pageRef.current = page; // imperative handle 里读取当前页面态(闭包安全)
   const [toast, setToast] = useState<string | null>(null);
   const [wc, setWc] = useState<RichDocWordCount | null>(null);
@@ -211,28 +206,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     const el = edRef.current;
     if (!el) return;
     try { localStorage.setItem(PAGE_KEY, JSON.stringify(page)); } catch { /* 配额忽略 */ }
-    // 尺寸 / 方向
-    if (page.size || page.orient) {
-      const dim = PAPERS[page.size ?? 'A4'] ?? PAPERS.A4!;
-      const land = page.orient === 'landscape';
-      el.style.width = (land ? dim[1] : dim[0]) + 'px';
-      el.style.minHeight = (land ? dim[0] : dim[1]) + 'px';
-    } else { el.style.width = ''; el.style.minHeight = ''; }
-    el.style.padding = page.margin ? (MARGINS.find((m) => m[0] === page.margin)?.[1] ?? '') : '';
-    el.style.columnCount = page.columns && page.columns > 1 ? String(page.columns) : '';
-    el.style.columnGap = page.columns && page.columns > 1 ? '2.4em' : '';
-    el.style.writingMode = page.writing === 'v' ? 'vertical-rl' : '';
-    el.style.hyphens = page.hyphens ? 'auto' : '';
-    const lg = page.lang ?? (page.hyphens ? 'en' : ''); // 校对语言:用户所选优先,断字兜底 en
-    if (lg) el.setAttribute('lang', lg); else el.removeAttribute('lang');
-    el.spellcheck = !!page.spell;
-    el.classList.toggle('rd-grid', !!page.grid);
-    el.classList.toggle('rd-linenumbers', !!page.lineNums);
-    el.classList.toggle('rd-hide-comments', !!page.hideComments);
-    el.classList.toggle('rd-track', !!page.track);
-    // 缩放:用 CSS zoom(Chromium/Electron 原生),真实参与布局与滚动,避免 transform 的水平裁剪/滚动长度失真
-    const z = page.zoom && page.zoom > 0 ? page.zoom : 1;
-    el.style.zoom = z !== 1 ? String(z) : '';
+    applyRichDocPageState(el, page);
   }, [page]);
 
   useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 1800); return () => clearTimeout(id); }, [toast]);
@@ -904,7 +878,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   });
 
   // ── 视图 / 缩放 ──
-  const setView = (v: PageState['view'] | undefined): void => setPage((p) => ({ ...p, view: v }));
+  const setView = (v: RichDocPageState['view'] | undefined): void => setPage((p) => ({ ...p, view: v }));
   const fitZoom = (mode: 'page' | 'width' | number): void => {
     const el = edRef.current; const sc = el?.parentElement;
     if (!el || !sc) return;
