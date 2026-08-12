@@ -38,7 +38,6 @@ import {
   RICH_TEXT_BLOCK_SELECTOR as BLOCK_SEL,
   cleanBlockText,
   cleanClone,
-  fmtBrief,
   getRichDocContext,
   getRichDocSnapshot,
   getRichDocText,
@@ -53,6 +52,10 @@ import { RichDocMenuPopup } from './RichDocMenuPopup.js';
 import type { RichDocMenuActions } from './RichDocMenuPopup.js';
 import { applyRichDocPageState, parseRichDocPageState } from './richdoc-page-state.js';
 import type { RichDocPageState } from './richdoc-page-state.js';
+import { captureRichDocSelection } from './richdoc-selection.js';
+import type { RichDocCommandState as CmdState, WordSel } from './richdoc-selection.js';
+
+export type { WordSel } from './richdoc-selection.js';
 
 export type { DocFmt, DocTable } from './richdoc-editing.js';
 
@@ -81,10 +84,6 @@ export interface RichDocHandle {
   /** 载入外部 HTML(真实 docx 导入):替换正文、清空修订/撤销状态并持久化。 */
   loadHTML(html: string): void;
 }
-/** 上抛给 App 的 Word 选区(与 Excel 的 UniSel 对等,供输入区显示"已选"芯片 + 喂给 Agent 聚焦,含选区格式)。
- *  para:选中目标所在段号(1-based)——图片等非文字目标靠它告诉 Agent 位置。 */
-export interface WordSel { text: string; block: string; chars: number; font?: string; size?: number; bold?: boolean; italic?: boolean; align?: string; para?: number }
-
 /** props 全可选(避免 Record<string,never> 与 ref 冲突)。 */
 export interface RichDocProps {
   className?: string;
@@ -104,8 +103,6 @@ const DEMO_HTML = `
 const STORAGE_KEY = 'oa.richdoc';
 const TAB_KEY = 'oa.richdoc.tab';
 const PAGE_KEY = 'oa.richdoc.page';
-
-interface CmdState { bold: boolean; italic: boolean; underline: boolean; strike: boolean; ul: boolean; ol: boolean; align: string; font: string; size: number }
 
 /** HTML 转义(用户输入拼进 innerHTML 前必转,避免破坏 DOM/注入)。 */
 const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] ?? c));
@@ -164,38 +161,14 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     { const nx = edRef.current?.querySelectorAll('[data-cid]').length ?? 0; setChgCount(nx); setHasDiff(nx > 0); }
     try { document.execCommand('styleWithCSS', false, 'true'); } catch { /* 老浏览器忽略 */ }
     const onSel = (): void => {
-      const s = window.getSelection();
-      if (!(s && s.rangeCount && edRef.current && s.anchorNode && edRef.current.contains(s.anchorNode))) return;
-      savedRange.current = s.getRangeAt(0).cloneRange();
-      // 上抛选区芯片:选中文字→给 App(显示"已选"+喂 Agent);折叠→清空
-      const selTxt = s.toString();
-      if (selTxt && selTxt.trim()) {
-        let be: Node | null = s.anchorNode;
-        while (be && be !== edRef.current) { if (be instanceof HTMLElement && BLOCK_TAGS.test(be.tagName)) break; be = be.parentNode; }
-        const tag = be instanceof HTMLElement ? be.tagName : '';
-        const blockLabel = /^H[1-3]$/.test(tag) ? '标题' : tag === 'BLOCKQUOTE' ? '引用' : tag === 'LI' ? '列表项' : '正文';
-        let ae: Node | null = s.anchorNode; if (ae && ae.nodeType === 3) ae = ae.parentElement;
-        const fb = ae instanceof HTMLElement ? fmtBrief(ae) : null;
-        edRef.current.querySelectorAll('.rd-img-sel').forEach((el2) => el2.classList.remove('rd-img-sel')); // 文字选区替代图片选中
-        selCb.current?.({ text: selTxt.length > 400 ? selTxt.slice(0, 400) + '…' : selTxt, block: blockLabel, chars: selTxt.length, ...(fb ? { font: fb.font, size: fb.size, bold: fb.bold, italic: fb.italic, align: fb.align } : {}) });
-      } else selCb.current?.(null);
-      try {
-        let el: Node | null = s.anchorNode;
-        if (el && el.nodeType === 3) el = el.parentElement;
-        const ff = el instanceof HTMLElement ? getComputedStyle(el).fontFamily.split(',')[0]?.replace(/["']/g, '').trim() ?? '' : '';
-        const px = el instanceof HTMLElement ? parseFloat(getComputedStyle(el).fontSize) : 16;
-        setSt({
-          bold: document.queryCommandState('bold'),
-          italic: document.queryCommandState('italic'),
-          underline: document.queryCommandState('underline'),
-          strike: document.queryCommandState('strikeThrough'),
-          ul: document.queryCommandState('insertUnorderedList'),
-          ol: document.queryCommandState('insertOrderedList'),
-          align: document.queryCommandState('justifyCenter') ? 'center' : document.queryCommandState('justifyRight') ? 'right' : document.queryCommandState('justifyFull') ? 'justify' : 'left',
-          font: ff,
-          size: Math.round(px * 0.75 * 10) / 10,
-        });
-      } catch { /* queryCommandState 偶发异常忽略 */ }
+      const root = edRef.current;
+      if (!root) return;
+      const capture = captureRichDocSelection(root, window.getSelection());
+      if (!capture) return;
+      savedRange.current = capture.range;
+      if (capture.hasText) root.querySelectorAll('.rd-img-sel').forEach((element) => element.classList.remove('rd-img-sel'));
+      selCb.current?.(capture.wordSelection);
+      if (capture.commandState) setSt(capture.commandState);
     };
     document.addEventListener('selectionchange', onSel);
     return () => document.removeEventListener('selectionchange', onSel);
