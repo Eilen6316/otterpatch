@@ -19,7 +19,7 @@
     "test:real-writeback": "node test/real-writeback-regression.mjs",
     "test:serve-security": "node test/serve-security.mjs",
     "test:agent": "node test/excel-agent.mjs",
-    "bench": "node test/expert-bench.mjs"
+    "bench": "node test/expert-bench.mjs",
     "smoke": "node scripts/real-smoke.mjs",
     "eval:excel": "node test/eval-excel.mjs",
     "eval:excel:sanity": "node test/eval-excel-sanity.mjs",
