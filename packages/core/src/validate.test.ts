@@ -271,3 +271,36 @@ test('assertChangeSet seeded property corpus accepts valid values and rejects on
     assert.throws(() => assertChangeSet(invalid), `invalid generated sample ${sample}`);
   }
 });
+
+test('assertChangeSet accepts the rebase provenance field and rejects malformed hashes', () => {
+  const cs = validChangeSet();
+  const agent = {
+    ...cs,
+    id: uuidv7(),
+    origin: {
+      by: 'agent' as const,
+      sessionId: uuidv7(),
+      provenance: {
+        provider: 'openai',
+        model: 'provider-model',
+        modelRequestId: 'response-123',
+        skillVersions: [],
+        promptPolicyVersion: 'prompt-policy-v1',
+        sourceFileSha256: 'b'.repeat(64),
+        rebasedFromSourceSha256: 'a'.repeat(64),
+        parentProposalId: null,
+        repairAttempt: 0,
+        actor: { userId: 'local-user', hostId: 'h' },
+      },
+    },
+  };
+  assert.doesNotThrow(() => assertChangeSet(agent), 'a host-rebound proposal records what the model saw');
+  assert.throws(() => assertChangeSet({
+    ...agent,
+    origin: { ...agent.origin, provenance: { ...agent.origin.provenance, rebasedFromSourceSha256: 'not-a-hash' } },
+  }), /rebasedFromSourceSha256/);
+  assert.throws(() => assertChangeSet({
+    ...agent,
+    origin: { ...agent.origin, provenance: { ...agent.origin.provenance, unknownField: 'x' } },
+  }), /unsupported fields/);
+});

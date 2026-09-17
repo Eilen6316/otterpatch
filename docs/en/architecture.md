@@ -117,10 +117,16 @@ unchanged-outside-target ratio.
 | `semantic` | disjoint, complete lists of verified, unverifiable, and failed edit IDs |
 | `compatibility` | explicit backend limitations and application-compatibility warnings |
 
-OOXML and drawio can report meaningful locality. Excel and Word conservatively mark applied edits
-`unverifiable` until format-specific output read-back exists. Excel's pre-review grid simulation is
-useful proposal evidence, but it is not a read-back of the written file. The frozen opt-in PPTX
-adapter retains the same conservative semantic status but is outside the default product path.
+Excel and Word perform a deterministic post-commit semantic read-back and mark applied edits
+`verified` only when the written bytes show the intended effect: Word re-derives the accepted
+document (unwrap `<w:ins>`, drop `<w:del>`/paragraph-mark deletions, drop `<w:rPrChange>`/
+`<w:pPrChange>`) and compares it against a sequential text-level simulation of the ChangeSet, with
+per-edit attribution when the composed document mismatches; Excel re-opens the target sheet and
+checks each cell's value, formula, resolved number format, resolved style, or cleared state.
+Excel's pre-review grid simulation remains proposal evidence, not a read-back of the written file;
+formula cached results are not recalculated by the writer (the host application computes them on
+open), which the report states explicitly. The frozen opt-in PPTX adapter retains the conservative
+`unverifiable` semantic status and is outside the default product path.
 
 ## Adapter control plane
 
@@ -143,11 +149,15 @@ do not create a second format table inside runtime.
 Runtime is a process-local kernel. It returns verified bytes but does not atomically replace the
 user's file or persist a durable audit ledger. An embedding host must:
 
-- write to a new file or use an atomic replace strategy;
+- write to a new file or use an atomic replace strategy (`writeFileSafely` in this package is
+  the reference implementation);
 - retain backups appropriate to the document's value;
 - persist audit records if process restarts or multi-node replay protection matter;
-- regenerate a proposal after any source change. OtterPatch rejects stale anchors rather than
-  automatically rebasing them.
+- when the source changed after a proposal was signed, either regenerate a proposal from the
+  model, or call `runtime.rebaseProposal(...)` — an explicit host action that rebinds the
+  ChangeSet's revision to the new bytes and re-signs without another model call. Rebasing is
+  never automatic (a stale proposal still fails closed), and the rebased proposal still
+  requires a fresh diff and a fresh human review against the new source.
 
 See [security.md](./security.md) for the threat model and [testing.md](./testing.md) for regression
 coverage.

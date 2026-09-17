@@ -25,12 +25,13 @@ import {
 } from './RichDocMenus.js';
 import type { RichDocMenuItemProps } from './RichDocMenus.js';
 import type { RichDocPageState } from './richdoc-page-state.js';
+import type { TextCaseMode } from './richdoc-text-case.js';
 
 export interface RichDocMenuActions {
   paste: (mode: 'rich' | 'merge' | 'text') => void | Promise<void>;
   setFont: (font: string) => void;
   setSize: (size: string) => void;
-  changeCase: (mode: string) => void;
+  changeCase: (mode: TextCaseMode) => void;
   exec: (command: string, value?: string) => void;
   wrapSelection: (mutate: (element: HTMLElement) => void, className?: string) => void;
   applyColor: (kind: 'foreground' | 'highlight' | 'shade', color: string) => void;

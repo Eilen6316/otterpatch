@@ -23,6 +23,13 @@ const MARGINS: Record<string, { top: number; right: number; bottom: number; left
   wide: { top: 1440, right: 2880, bottom: 1440, left: 2880 }, // 2.54 / 5.08 cm
 };
 
+/** The twip values a margin preset writes, for post-write-back verification. */
+export function marginPreset(name: 'narrow' | 'normal' | 'moderate' | 'wide'): { top: number; right: number; bottom: number; left: number } {
+  const preset = MARGINS[name];
+  if (!preset) throw new Error(`unknown margin preset: ${name}`);
+  return preset;
+}
+
 const setAttr = (tag: string, name: string, value: string): string => {
   const re = new RegExp(`${name}="[^"]*"`);
   if (re.test(tag)) return tag.replace(re, `${name}="${value}"`);

@@ -84,8 +84,10 @@ Proposal 签名还会将 provenance 与可信宿主身份及源 hash 交叉校�
 审阅策略版本、源 hash 和过期时间。`ReviewReceipt` 签名 accepted edit ID、proposal/hash/source
 绑定、reviewer session、过期时间和 nonce。
 
-默认 commit 必须同时提供两者。Receipt 在单个 runtime 进程内只能使用一次；成功 commit 后，
-精确源文件也会被记录，防止旧源再次提交。缺失、过期、篡改、不匹配或重放都会失败关闭。
+默认 commit 必须同时提供两者。Receipt 只能使用一次；成功 commit 后，精确源文件也会被记录，
+防止旧源再次提交。缺失、过期、篡改、不匹配或重放都会失败关闭。密钥与重放账本存放在
+`ReviewAuthorityStore` 中：默认进程本地；使用 `FileReviewAuthorityStore`（`OtterPatch_REVIEW_STATE_DIR`）
+可跨进程共享，多进程部署由此保持同样的单次使用保证。
 
 ### Commit
 
@@ -109,10 +111,13 @@ Commit 后，runtime 调用 `backend.verify(before, after, acceptedChangeSet)`�
 | `semantic` | 互斥且完整的 verified、unverifiable、failed edit ID 列表 |
 | `compatibility` | 明确的后端限制与应用兼容性警告 |
 
-OOXML 和 drawio 可以给出有意义的局部性。在格式专用输出回读实现之前，Excel 与 Word 会
-保守地把已应用 edit 标为 `unverifiable`。Excel 的审阅前 grid simulation 是有价值的提案证据，
-但不是对写后文件的回读。冻结的 opt-in PPTX Adapter 保留同样的保守语义状态，但不在默认
-产品路径中。
+OOXML 和 drawio 可以给出有意义的局部性。Excel 与 Word 现在会做确定性的写后语义回读，只有在
+写入的字节里能看到预期效果时，才把已应用 edit 标为 `verified`：Word 重新推导接受全部修订后的文档
+（解开 `<w:ins>`、丢弃 `<w:del>`/段落标记删除、丢弃 `<w:rPrChange>`/`<w:pPrChange>`），与 ChangeSet
+的顺序文本级模拟对比，组合不匹配时逐条归因；Excel 重新打开目标工作表，逐个单元格核对值、公式、
+解析出的数字格式、解析出的样式或清空状态。Excel 的审阅前 grid simulation 仍是提案证据，不是对
+写后文件的回读；公式缓存结果不由写入器重算（宿主应用打开时计算），报告会明确说明。冻结的
+opt-in PPTX Adapter 保留保守的 `unverifiable` 语义状态，但不在默认产品路径中。
 
 ## Adapter 控制面
 
@@ -134,9 +139,12 @@ OOXML 和 drawio 可以给出有意义的局部性。在格式专用输出回读
 Runtime 是进程内核。它返回已验证字节，但不负责原子替换用户文件，也不持久化长期审计账本。
 嵌入宿主必须：
 
-- 写入新文件，或采用原子替换策略；
+- 写入新文件，或采用原子替换策略（本包的 `writeFileSafely` 是参考实现）；
 - 按文档价值保留备份；
 - 在需要跨进程重启或多节点防重放时持久化审计记录；
-- 源文件发生任何变化后重新生成 proposal。OtterPatch 会拒绝陈旧锚点，不自动 rebase。
+- 源文件在提案签发后发生变化时，要么让模型重新生成提案，要么调用 `runtime.rebaseProposal(...)`
+  ——宿主显式发起的操作：把 ChangeSet 的版本绑定重绑到新字节并重新签名，无需再调模型。
+  rebase 永远不会自动发生（陈旧提案仍失败关闭），rebase 后的提案仍需要针对新源重新出 diff、
+  重新人工审阅。
 
 威胁模型见 [security.md](./security.md)，回归覆盖见 [testing.md](./testing.md)。

@@ -170,7 +170,7 @@ function assertAgentProvenance(value: unknown): void {
   if (!isRecord(value)) throw new Error('invalid ChangeSet: agent provenance required');
   assertOnlyKeys(value, new Set([
     'provider', 'model', 'modelRequestId', 'skillVersions', 'promptPolicyVersion',
-    'sourceFileSha256', 'parentProposalId', 'repairAttempt', 'actor',
+    'sourceFileSha256', 'rebasedFromSourceSha256', 'parentProposalId', 'repairAttempt', 'actor',
   ]), 'origin.provenance');
   assertBoundedText(value.provider, 'origin.provenance.provider');
   assertBoundedText(value.model, 'origin.provenance.model');
@@ -178,6 +178,11 @@ function assertAgentProvenance(value: unknown): void {
   assertBoundedText(value.promptPolicyVersion, 'origin.provenance.promptPolicyVersion');
   if (value.sourceFileSha256 !== null && !isSha256(value.sourceFileSha256)) {
     throw new Error('invalid ChangeSet: origin.provenance.sourceFileSha256 must be SHA-256 or null');
+  }
+  // Set by the host when a proposal was rebound to a changed source (rebaseProposal):
+  // the model never saw this file, so the hash it actually saw is recorded for audit.
+  if (value.rebasedFromSourceSha256 !== null && value.rebasedFromSourceSha256 !== undefined && !isSha256(value.rebasedFromSourceSha256)) {
+    throw new Error('invalid ChangeSet: origin.provenance.rebasedFromSourceSha256 must be SHA-256 or null');
   }
   if (value.parentProposalId !== null) assertBoundedText(value.parentProposalId, 'origin.provenance.parentProposalId');
   if (!isSafeNonNegativeInt(value.repairAttempt)) {

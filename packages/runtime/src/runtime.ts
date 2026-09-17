@@ -31,6 +31,7 @@ import {
   assertChangeSet,
   assertJsonBudget,
   decideApproval,
+  docRevFromSha256,
   isResourceLimitError,
 } from '@otterpatch/core';
 import { defaultLibrary } from '@otterpatch/skills';
@@ -39,6 +40,7 @@ import { buildDiff, type OtterPatchDiff } from './diff.js';
 import { createBuiltinAdapterRegistry, decorateAdapter } from './adapters.js';
 import type { OtterPatchEvent, OtterPatchEventListener } from './events.js';
 import { ReviewAuthority, sha256Bytes, type ProposalEnvelope, type ReviewedProposal, type ReviewReceipt } from './review.js';
+import { InMemoryReviewAuthorityStore, type ReviewAuthorityStore } from './review-store.js';
 
 export interface CommitInput {
   format: string;
@@ -75,6 +77,12 @@ export interface OtterPatchRuntimeOptions {
   approvalPolicy?: ApprovalPolicy;
   maxConcurrentModelRequests?: number;
   adapterRegistry?: AdapterRegistry;
+  /**
+   * Durable review authority state (secret, consumed nonces, committed sources). The default
+   * is process-local; a shared store (e.g. FileReviewAuthorityStore) enables multi-process
+   * deployments. An explicit reviewSecret overrides the store's secret for this process.
+   */
+  reviewStore?: ReviewAuthorityStore;
 }
 
 export class OtterPatchRuntime {
@@ -82,18 +90,18 @@ export class OtterPatchRuntime {
   private readonly skills: SkillLibrary;
   private readonly adapters: AdapterRegistry;
   private readonly reviewAuthority: ReviewAuthority;
+  private readonly reviewStore: ReviewAuthorityStore;
   private readonly allowUnreviewedCommit: boolean;
   private readonly approvalPolicy: ApprovalPolicy;
   private readonly maxConcurrentModelRequests: number;
   private activeModelRequests = 0;
-  private readonly usedReviewNonces = new Map<string, number>();
-  private readonly committedSources = new Map<string, number>();
   private readonly commitTails = new Map<string, Promise<void>>();
 
   constructor(opts: OtterPatchRuntimeOptions = {}) {
     this.skills = opts.skills ?? defaultLibrary();
     this.adapters = opts.adapterRegistry ?? createBuiltinAdapterRegistry();
-    this.reviewAuthority = new ReviewAuthority(opts.reviewSecret, opts.reviewTtlMs);
+    this.reviewStore = opts.reviewStore ?? new InMemoryReviewAuthorityStore();
+    this.reviewAuthority = new ReviewAuthority(opts.reviewSecret ?? this.reviewStore.secret, opts.reviewTtlMs);
     this.allowUnreviewedCommit = opts.allowUnreviewedCommit ?? false;
     this.approvalPolicy = opts.approvalPolicy ?? DEFAULT_POLICY;
     this.maxConcurrentModelRequests = opts.maxConcurrentModelRequests ?? RESOURCE_LIMITS.concurrentModelRequests;
@@ -304,6 +312,62 @@ export class OtterPatchRuntime {
     return this.reviewAuthority.review(proposal, cs, acceptedEditIds, sourceBytes, reviewerSessionId);
   }
 
+  /**
+   * Re-derive a proposal for a changed source without another model call.
+   *
+   * A ChangeSet is format-level (anchors + ops); only its base revision binds it to a
+   * source file. When the file changed after the proposal was signed, commit fails closed —
+   * and this method is the actionable recovery: it rebinds the revision to the new source
+   * bytes and re-signs, so the host can show a fresh diff and re-review instead of
+   * re-running the model. It does NOT bypass review: the new receipt still binds the new
+   * source hash, and unresolvable anchors are dropped honestly at write-back.
+   */
+  rebaseProposal(
+    changeSet: ChangeSet,
+    format: string,
+    newSourceBytes: Uint8Array,
+    documentId = changeSet.hostId,
+  ): { changeSet: ChangeSet; proposal: ProposalEnvelope } {
+    assertChangeSet(changeSet);
+    const adapter = this.adapters.create(format, changeSet.hostId);
+    try {
+      if (!adapter.writebacks().length) throw new Error(`OtterPatchRuntime: no writeback backend for format "${format}"`);
+      const newSourceSha256 = sha256Bytes(newSourceBytes);
+      const newBaseRev = docRevFromSha256(newSourceSha256);
+      if (changeSet.baseRev === newBaseRev) {
+        // Nothing to rebase; the source is exactly the one the ChangeSet was built for.
+        return { changeSet, proposal: this.createProposal(changeSet, format, documentId, newSourceSha256) };
+      }
+      const rebased: ChangeSet = {
+        ...changeSet,
+        baseRev: newBaseRev,
+        anchors: Object.fromEntries(
+          Object.entries(changeSet.anchors).map(([anchorId, anchor]) => [anchorId, { ...anchor, baseRev: newBaseRev }]),
+        ),
+        // The model saw the OLD source; rebinding is a host action, so provenance records
+        // what the model actually saw and the human must re-review the diff before commit.
+        origin: changeSet.origin.by === 'agent'
+          ? {
+              ...changeSet.origin,
+              provenance: {
+                ...changeSet.origin.provenance,
+                sourceFileSha256: newSourceSha256,
+                rebasedFromSourceSha256: changeSet.origin.provenance.sourceFileSha256,
+              },
+            }
+          : changeSet.origin,
+      };
+      assertChangeSet(rebased);
+      assertAdapterValid(adapter, rebased, 'propose');
+      return {
+        changeSet: rebased,
+        proposal: this.reviewAuthority.createProposal(rebased, format, documentId, newSourceSha256),
+      };
+    } finally {
+      adapter.dispose();
+    }
+  }
+
   /** Accepted subset → surgical writeback → new bytes + fidelity report. */
   async commit(input: CommitInput): Promise<WritebackResult> {
     assertChangeSet(input.changeSet);
@@ -360,15 +424,11 @@ export class OtterPatchRuntime {
     const sourceKey = JSON.stringify([documentId, input.format, sourceHash]);
     try {
       return await this.withDocumentLock(documentKey, async () => {
-        if (receiptNonce && this.usedReviewNonces.has(receiptNonce)) throw new Error('review receipt has already been used');
-        if (this.committedSources.has(sourceKey)) throw new Error('source file has already been committed; regenerate the proposal from the latest file');
-        if (this.committedSources.size >= 10_000) {
-          throw new ResourceLimitError('committed_source_cache_entries', 10_000, this.committedSources.size + 1, 'Restart the short-lived runtime before accepting more documents.');
-        }
-        if (receiptNonce) this.consumeReviewNonce(receiptNonce, receiptExpiresAt!);
+        if (receiptNonce && this.reviewStore.consumeNonce(receiptNonce, receiptExpiresAt!)) throw new Error('review receipt has already been used');
+        if (this.reviewStore.isCommittedSource(sourceKey)) throw new Error('source file has already been committed; regenerate the proposal from the latest file');
         const before: DocHandle = { hostId: cs.hostId, bytes: input.bytes, rev: cs.baseRev };
         const res = await this.commitWithFallback(backends, input.format, cs, before);
-        if (res.ok) this.rememberCommittedSource(sourceKey);
+        if (res.ok) this.reviewStore.rememberCommittedSource(sourceKey);
         this.emit({ type: 'commit:done', ok: res.ok, touchedParts: res.touchedParts, fidelity: res.fidelity.score, bytes: res.bytes.length });
         return res;
       });
@@ -433,10 +493,6 @@ export class OtterPatchRuntime {
     }
   }
 
-  private rememberCommittedSource(key: string): void {
-    this.committedSources.set(key, Date.now());
-  }
-
   private acquireModelSlot(): () => void {
     if (this.activeModelRequests >= this.maxConcurrentModelRequests) {
       throw new ResourceLimitError(
@@ -453,20 +509,6 @@ export class OtterPatchRuntime {
       released = true;
       this.activeModelRequests--;
     };
-  }
-
-  private consumeReviewNonce(nonce: string, expiresAt: number): void {
-    const limit = 10_000;
-    if (this.usedReviewNonces.size >= limit) {
-      const now = Date.now();
-      for (const [usedNonce, expiry] of this.usedReviewNonces) {
-        if (expiry < now) this.usedReviewNonces.delete(usedNonce);
-      }
-    }
-    if (this.usedReviewNonces.size >= limit) {
-      throw new ResourceLimitError('review_nonce_cache_entries', limit, this.usedReviewNonces.size + 1, 'Wait for expired review receipts to be pruned.');
-    }
-    this.usedReviewNonces.set(nonce, expiresAt);
   }
 }
 

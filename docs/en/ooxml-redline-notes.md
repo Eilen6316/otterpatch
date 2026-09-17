@@ -45,10 +45,15 @@ implementations; the text is original to this project.
 ## Current verification boundary
 
 Runtime reopens the result, verifies the OOXML package, checks that only intended package parts
-changed, and requires every edit to be classified. Word currently classifies successfully written
-edits as `unverifiable` because it does not yet accept all revisions and compare the resulting
-document semantics. The report says so explicitly instead of treating locality as semantic proof.
+changed, and requires every edit to be classified. Word now performs the deterministic variant of
+the stronger criterion in TypeScript: `packages/adapter-word/src/accept.ts` unwraps `<w:ins>`, drops
+`<w:del>` (including `<w:delText>`) and paragraphs whose paragraph mark carries a deletion revision,
+drops the original-property `<w:rPrChange>`/`<w:pPrChange>` snapshots, and `readback.ts` compares the
+accepted document against a sequential text-level simulation of the ChangeSet. Edits whose combined
+effect does not match are attributed per edit; if every edit is individually visible yet the composed
+document still differs, the whole accepted subset fails (interaction failure). Page-level edits are
+checked against the body-level `sectPr`; image edits against the accepted drawing state.
 
-A stronger future criterion remains: unzip → accept all revisions (for example with LibreOffice
-headless) → compare against the directly edited text and assert no residual empty paragraphs. That
-would turn currently unverifiable edits into verified ones.
+The LibreOffice-headless variant remains the strongest external criterion (a real renderer accepting
+the revisions); the in-process read-back is deterministic and dependency-free, but it verifies
+document semantics, not visual rendering.

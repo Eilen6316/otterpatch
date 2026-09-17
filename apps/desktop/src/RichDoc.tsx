@@ -54,6 +54,8 @@ import { applyRichDocPageState, parseRichDocPageState } from './richdoc-page-sta
 import type { RichDocPageState } from './richdoc-page-state.js';
 import { captureRichDocSelection } from './richdoc-selection.js';
 import type { RichDocCommandState as CmdState, WordSel } from './richdoc-selection.js';
+import { esc, transformCase } from './richdoc-text-case.js';
+import { buildHoverCardState, HOVER_CARD_CLOSE_DELAY_MS, HOVER_CARD_OPEN_DELAY_MS, wrapCursor } from './richdoc-hover-card.js';
 
 export type { WordSel } from './richdoc-selection.js';
 
@@ -103,20 +105,6 @@ const DEMO_HTML = `
 const STORAGE_KEY = 'oa.richdoc';
 const TAB_KEY = 'oa.richdoc.tab';
 const PAGE_KEY = 'oa.richdoc.page';
-
-/** HTML 转义(用户输入拼进 innerHTML 前必转,避免破坏 DOM/注入)。 */
-const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] ?? c));
-
-const transformCase = (txt: string, mode: string): string => {
-  switch (mode) {
-    case 'upper': return txt.toUpperCase();
-    case 'lower': return txt.toLowerCase();
-    case 'title': return txt.replace(/\b\w/g, (c) => c.toUpperCase());
-    case 'sentence': return txt.charAt(0).toUpperCase() + txt.slice(1).toLowerCase();
-    case 'toggle': return txt.split('').map((c) => (c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase())).join('');
-    default: return txt;
-  }
-};
 
 const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSelection, onChangeHover, onChangeResolve }, ref) {
   const t = useT();
@@ -238,21 +226,16 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   // 逐条改动的悬浮卡(复用 .rd-tip 心智):悬停一处改动 → 卡片显示 类型·旧→新·✓/✕
   const openCardFor = (g: HTMLElement): void => {
     if (!g.isConnected) return; // 120ms 延迟里改动可能已被还原,别在脱离节点上开卡(rect 会落到左上角)
-    const cid = g.getAttribute('data-cid'); if (!cid) return;
-    const kind = g.getAttribute('data-kind') ?? 'replace';
-    const del = g.querySelector('del'); const ins = g.querySelector('ins');
-    const r = g.getBoundingClientRect();
-    const cut = (s: string): string => (s.length > 48 ? s.slice(0, 48) + '…' : s);
-    const below = r.top < 150; // 视口顶端放不下 → 卡片翻到改动下方
-    const newText = kind === 'format' ? (g.textContent ?? '') : kind === 'insert' ? cleanBlockText(g) : (ins?.textContent ?? '');
-    setHoverCard({ cid, kind, oldText: cut(del?.textContent ?? ''), newText: cut(newText), glyph: g.getAttribute('data-glyph') ?? '', x: Math.round(r.left + r.width / 2), y: Math.round(below ? r.bottom : r.top), below });
-    hoverCb.current?.(cid);
+    const state = buildHoverCardState(g, { insertText: () => cleanBlockText(g) });
+    if (!state) return;
+    setHoverCard(state);
+    hoverCb.current?.(state.cid);
   };
   const onDocOver = (e: React.MouseEvent): void => {
     const g = (e.target as HTMLElement).closest?.('.rd-chg, [data-edit-block]') as HTMLElement | null; // 块级改动同样有卡片
     if (!g) return;
     if (cardTimer.current) window.clearTimeout(cardTimer.current);
-    cardTimer.current = window.setTimeout(() => openCardFor(g), 120);
+    cardTimer.current = window.setTimeout(() => openCardFor(g), HOVER_CARD_OPEN_DELAY_MS);
   };
   const onEdKey = (e: React.KeyboardEvent): void => { // 键盘可达:Tab 到改动壳(contenteditable=false 可聚焦)后 Enter/空格开卡
     const g = (e.target as HTMLElement).closest?.('.rd-chg, [data-edit-block]') as HTMLElement | null;
@@ -264,7 +247,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     if (from && to && from.contains(to)) return;
     if (to instanceof HTMLElement && to.closest?.('.rd-cardwrap')) return; // 移到卡片上,别关
     if (cardTimer.current) window.clearTimeout(cardTimer.current);
-    cardTimer.current = window.setTimeout(() => { setHoverCard(null); hoverCb.current?.(null); }, 90);
+    cardTimer.current = window.setTimeout(() => { setHoverCard(null); hoverCb.current?.(null); }, HOVER_CARD_CLOSE_DELAY_MS);
   };
   const keepCard = (): void => { if (cardTimer.current) window.clearTimeout(cardTimer.current); };
   const closeCard = (): void => { if (cardTimer.current) window.clearTimeout(cardTimer.current); setHoverCard(null); hoverCb.current?.(null); };
@@ -273,7 +256,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
     const root = edRef.current; if (!root) return;
     const list = Array.from(root.querySelectorAll('[data-cid]')) as HTMLElement[];
     if (!list.length) return;
-    const next = (stepPos + dir + list.length) % list.length;
+    const next = wrapCursor(stepPos, dir, list.length);
     setStepPos(next);
     root.querySelectorAll('.is-active').forEach((e) => e.classList.remove('is-active'));
     const el = list[next]!;
@@ -813,7 +796,7 @@ const RichDoc = forwardRef<RichDocHandle, RichDocProps>(function RichDoc({ onSel
   const navComment = (dir: number): void => {
     const list = Array.from(edRef.current?.querySelectorAll('.rd-comment') ?? []) as HTMLElement[];
     if (!list.length) { notify(t('文档中暂无批注')); return; }
-    cmtCursor.current = (cmtCursor.current + dir + list.length) % list.length;
+    cmtCursor.current = wrapCursor(cmtCursor.current, dir, list.length);
     const el = list[cmtCursor.current]!;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.classList.add('rd-flash'); setTimeout(() => el.classList.remove('rd-flash'), 1200);

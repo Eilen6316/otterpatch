@@ -25,7 +25,7 @@ import {
   type ValidationReport,
   type WritebackBackend,
 } from '@otterpatch/core';
-import { SurgicalOoxmlWriteback } from '@otterpatch/writeback-surgical';
+import { XlsxSurgicalWriteback } from './xlsx-writeback.js';
 import { buildXlsxCompiler } from './xlsx-patch.js';
 import { GridChangeSetEngine } from './grid-engine.js';
 import { buildGridVerifier } from './grid-verify.js';
@@ -74,8 +74,9 @@ export class UniverAdapter implements HostAdapter {
     return buildExcelAdapterPreview(cs, input);
   }
   writebacks(): readonly WritebackBackend[] {
-    // Real write-back: surgical OOXML patch + the xlsx ChangeSet→part compiler.
-    return [new SurgicalOoxmlWriteback(buildXlsxCompiler())];
+    // Real write-back: surgical OOXML patch + the xlsx ChangeSet→part compiler, with a
+    // deterministic post-commit semantic read-back (values / formulas / formats / clears).
+    return [new XlsxSurgicalWriteback()];
   }
   dispose(): void {
     /* no-op */

@@ -25,6 +25,13 @@ export interface AgentProvenance {
   readonly skillVersions: readonly AgentSkillVersion[];
   readonly promptPolicyVersion: string;
   readonly sourceFileSha256: string | null;
+  /**
+   * Set by the host when a proposal was rebound to a changed source (runtime.rebaseProposal):
+   * records the source hash the model actually saw. The current `sourceFileSha256` is then
+   * the rebound one; `null` means the model saw no file. Anchors are re-resolved (or
+   * honestly dropped) at write-back, and the review receipt binds the new source hash.
+   */
+  readonly rebasedFromSourceSha256?: string | null;
   readonly parentProposalId: string | null;
   readonly repairAttempt: number;
   readonly actor: {

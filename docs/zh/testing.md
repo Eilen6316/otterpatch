@@ -28,7 +28,7 @@ npm run test:ui
 | `agent` | 可信/不可信 prompt 边界、Provider 响应身份、dialect/能力一致、类型化只读工具、独立修复预算、重试/熔断/取消、reasoning 抑制、Word/drawio 提案验证 |
 | `skills` | 生成目录、namespace/trust/version/checksum 规则、外部技能隔离、locale/匹配、能力交集、陈旧操作声明回归 |
 | `runtime` | Adapter conformance、签名 proposal/review 绑定、源/revision 检查、单次 receipt、风险执行、文档锁、fallback 规则、listener 隔离、结构化 Fidelity 校验 |
-| 各格式 Adapter | Excel/Word/drawio 精确写回、dropped-edit 诚实性、锚点歧义、公式重算、XML tokenizer 与 drawio 拓扑；冻结保留的 PPTX 路径单独测试 run 边界和显式 opt-in 注册 |
+| 各格式 Adapter | Excel/Word/drawio 精确写回、dropped-edit 诚实性、锚点歧义、公式重算、XML tokenizer 与 drawio 拓扑；写回后语义读回（Word 接受修订对比、Excel 单元格/样式读回）；冻结保留的 PPTX 路径单独测试 run 边界和显式 opt-in 注册 |
 | desktop | 审阅状态代数、snapshot 绑定、浏览器令牌接线、IPC schema/大小边界、干净 Word 投影、Excel/drawio 回放、commit receipt 流程 |
 | MCP/HTTP | 文档解码限制、客户端断连传播、token/origin/rate/concurrency 安全 helper |
 

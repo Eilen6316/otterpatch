@@ -41,8 +41,8 @@ write-back gates.
 
 | Format | Availability | Current write-back operations | Proposal preview/check | Important boundary |
 |---|---|---|---|---|
-| Excel (`xlsx`) | mainline, default | value, formula, style, number format, clear range | headless grid shadow and deterministic simulation | supported formula subset only; unknown functions, cycles, missing observations, and oversized ranges fail closed; output edit-level read-back is `unverifiable` |
-| Word (`docx`) | mainline, default | anchored text replacement/deletion, scoped character and paragraph style, page columns/margins/orientation, image remove/resize, table insertion | unique quote/paragraph anchor checks; rich preview is rendered by the desktop host | writes native revisions in `word/document.xml`; generic edit-level output read-back is reported as `unverifiable` |
+| Excel (`xlsx`) | mainline, default | value, formula, style, number format, clear range | headless grid shadow and deterministic simulation | supported formula subset only; unknown functions, cycles, missing observations, and oversized ranges fail closed; post-commit read-back verifies each edit's effect (values, formulas, formats, cleared cells) |
+| Word (`docx`) | mainline, default | anchored text replacement/deletion, scoped character and paragraph style, page columns/margins/orientation, image remove/resize, table insertion | unique quote/paragraph anchor checks; rich preview is rendered by the desktop host | writes native revisions in `word/document.xml`; post-commit read-back accepts every revision and verifies each edit's observable effect |
 | drawio | secondary compatibility, default | label/property updates, move, add, delete | headless board replay and topology verification | only uncompressed diagrams; identity/topology fields are constrained; no planned feature expansion |
 | PowerPoint (`pptx`) | frozen, opt-in | unique single-run text replacement | exact slide/paragraph/run boundary check | retained for explicit host registration only; absent from every stock product surface |
 
@@ -88,7 +88,14 @@ OtterPatch_TOKEN
 OtterPatch_REVIEW_TOKEN
 OtterPatch_ALLOWED_ORIGINS
 OtterPatch_PORT
+OtterPatch_REVIEW_STATE_DIR   # shared review-authority store (multi-process deployments)
 ```
+
+`OtterPatch_REVIEW_STATE_DIR` points the service at a shared `ReviewAuthorityStore`
+(`FileReviewAuthorityStore`): the HMAC secret, consumed receipt nonces, and committed-source
+ledger live in that directory, so receipts minted by one service instance verify and
+replay-block in another. Without it the review authority stays process-local. Keep the
+directory private to the service user — it contains the signing secret.
 
 `OtterPatch_ALLOWED_ORIGINS` accepts only exact loopback HTTP(S) origins or `null`, separated by
 commas. The service always binds to `127.0.0.1`.
@@ -149,6 +156,10 @@ npm run run --workspace @otterpatch/mcp-server -- \
 ```
 
 Without `--yes`, the CLI emits the proposal and diff but refuses to write a file.
+
+When `--out` points at an existing file, the CLI backs it up to `--out.bak` first (disable with
+`--no-backup`) and then replaces it atomically: the bytes land in a temp file that is renamed
+over the target, so a crash mid-write can never leave a half-written document.
 
 ## Verification output
 

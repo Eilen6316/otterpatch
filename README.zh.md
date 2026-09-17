@@ -35,8 +35,8 @@ Agent 不会获得一个通用的文件修改工具。它只能回答、请求�
 
 | 格式 | 可用性 | 当前写回操作 | 提案预览/检查 | 关键边界 |
 |---|---|---|---|---|
-| Excel（`xlsx`） | 主线、默认启用 | 值、公式、样式、数字格式、清空范围 | 无头网格 shadow + 确定性模拟 | 只支持已实现的公式子集；未知函数、循环、缺失观测和超大范围均失败关闭；写后逐 edit 回读为 `unverifiable` |
-| Word（`docx`） | 主线、默认启用 | 锚定文本替换/删除、局部字符与段落样式、页面分栏/边距/方向、图片删除/缩放、插表 | 唯一引文/段号锚点检查；富预览由桌面宿主渲染 | 在 `word/document.xml` 中写原生修订；通用逐编辑输出回读会如实标为 `unverifiable` |
+| Excel（`xlsx`） | 主线、默认启用 | 值、公式、样式、数字格式、清空范围 | 无头网格 shadow + 确定性模拟 | 只支持已实现的公式子集；未知函数、循环、缺失观测和超大范围均失败关闭；写后逐 edit 回读校验实际效果（值、公式、格式、清空） |
+| Word（`docx`） | 主线、默认启用 | 锚定文本替换/删除、局部字符与段落样式、页面分栏/边距/方向、图片删除/缩放、插表 | 唯一引文/段号锚点检查；富预览由桌面宿主渲染 | 在 `word/document.xml` 中写原生修订；写后回读会接受全部修订并校验每条 edit 的可观测效果 |
 | drawio | 次要兼容、默认启用 | 标签/属性更新、移动、新增、删除 | 无头画板重放 + 拓扑验证 | 仅支持未压缩 diagram；身份与拓扑字段受约束；不计划扩展功能 |
 | PowerPoint（`pptx`） | 冻结、显式 opt-in | 唯一单 run 文本替换 | 精确到 slide/paragraph/run 的边界检查 | 只为显式注册的宿主保留；所有 stock 产品入口均不可用 |
 
@@ -81,7 +81,13 @@ OtterPatch_TOKEN
 OtterPatch_REVIEW_TOKEN
 OtterPatch_ALLOWED_ORIGINS
 OtterPatch_PORT
+OtterPatch_REVIEW_STATE_DIR   # 共享审阅权威存储(多进程部署)
 ```
+
+`OtterPatch_REVIEW_STATE_DIR` 把服务指向共享的 `ReviewAuthorityStore`
+(`FileReviewAuthorityStore`):HMAC 密钥、已消费的 receipt nonce 和已提交源账本都放在该目录中,
+于是一个服务实例签发的 receipt 在另一个实例里也能验证并拦截重放。不设置时审阅权威保持进程本地。
+该目录只对服务用户可读——它包含签名密钥。
 
 `OtterPatch_ALLOWED_ORIGINS` 只接受精确的 loopback HTTP(S) Origin 或 `null`，用逗号分隔。
 服务始终绑定 `127.0.0.1`。
@@ -140,6 +146,9 @@ npm run run --workspace @otterpatch/mcp-server -- \
 ```
 
 不带 `--yes` 时，CLI 会输出 proposal 和 diff，但拒绝写文件。
+
+当 `--out` 指向已存在的文件时，CLI 会先把旧文件备份为 `--out.bak`（用 `--no-backup` 关闭），
+随后原子替换：字节先写入临时文件再重命名到目标，写一半崩溃也不会留下残缺文档。
 
 ## 验证结果
 

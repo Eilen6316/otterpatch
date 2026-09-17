@@ -33,8 +33,11 @@
 ## 当前验证边界
 
 Runtime 会重新打开结果，验证 OOXML 包，检查只有预期 package part 变化，并要求每个 edit 都被
-分类。Word 当前会把成功写入的 edit 标为 `unverifiable`，因为还没有自动接受全部修订并比较最终
-文档语义；报告会明确表达这一点，不把局部性误当成语义证明。
+分类。Word 现在用 TypeScript 实现了那个更强判据的确定性变体：`packages/adapter-word/src/accept.ts`
+解开 `<w:ins>`、丢弃 `<w:del>`（含 `<w:delText>`）以及段落标记带删除修订的段落、丢弃原始属性的
+`<w:rPrChange>`/`<w:pPrChange>` 快照；`readback.ts` 把接受修订后的文档与 ChangeSet 的顺序文本级
+模拟对比。组合效果不符的 edit 逐条归因；若每条 edit 单独可见但组合文档仍不符，则整个接受的子集
+失败（交互失败）。页面级 edit 对照 body 级 `sectPr` 检查；图片 edit 对照接受后的 drawing 状态检查。
 
-未来更强的判据仍是：解包 → 接受全部修订（例如 LibreOffice headless）→ 与“直接改后文本”
-一致，并断言无残留空段。实现后才能把这些 edit 从 unverifiable 提升为 verified。
+LibreOffice-headless 变体仍是最强的外部判据（真实渲染器接受修订）；进程内回读是确定性的、无依赖的，
+但它验证的是文档语义，不是视觉渲染。

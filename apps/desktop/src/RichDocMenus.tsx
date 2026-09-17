@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { IconCheck } from './icons.js';
 import { useT } from './i18n.js';
+import type { TextCaseMode } from './richdoc-text-case.js';
 
 export const FONTS = ['宋体', '黑体', '微软雅黑', '楷体', '仿宋', '等线', 'Arial', 'Times New Roman', 'Calibri', 'Georgia'];
 export const SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 22, 26, 28, 36, 48, 72];
@@ -11,7 +12,7 @@ export const COLORS = [
   '#000000', '#404040', '#7f7f7f', '#bfbfbf', '#ffffff', '#c00000', '#ff0000', '#ffc000', '#ffff00', '#92d050', '#00b050',
   '#00b0f0', '#0070c0', '#002060', '#7030a0', '#e7492e', '#f0a500', '#2563eb', '#1a7f37', '#8b5cf6', '#0891b2',
 ];
-export const CASES: [string, string][] = [['句首字母大写', 'sentence'], ['全部小写', 'lower'], ['全部大写', 'upper'], ['每个单词首字母大写', 'title'], ['切换大小写', 'toggle']];
+export const CASES: [string, TextCaseMode][] = [['句首字母大写', 'sentence'], ['全部小写', 'lower'], ['全部大写', 'upper'], ['每个单词首字母大写', 'title'], ['切换大小写', 'toggle']];
 export const EFFECTS: [string, Partial<CSSStyleDeclaration>][] = [
   ['无', {}],
   ['阴影', { textShadow: '1px 1px 2px rgba(0,0,0,.45)' }],

@@ -87,14 +87,23 @@ the embedding host's review authority.
 
 ## Current limitations
 
-- Review secrets, nonce replay state, and committed-source state are process-local. A production
-  multi-process deployment needs a shared authority and durable replay/audit store.
+- Review authority state (HMAC secret, consumed nonces, committed sources) defaults to
+  process-local. Multi-process deployments pass a shared `ReviewAuthorityStore`
+  (`FileReviewAuthorityStore`, or an implementation against Redis/DB): the service exposes it
+  via `OtterPatch_REVIEW_STATE_DIR`. Durable audit retention of *what was reviewed* still
+  belongs to the host — the store covers replay and signing, not an audit log.
 - Runtime returns bytes. The host owns atomic file replacement, backups, access control, and durable
-  audit retention.
-- OtterPatch rejects stale proposals; it does not automatically rebase edits onto a changed file.
-- Excel and Word currently provide package/locality verification but conservatively report applied
-  edits as semantically unverifiable after write-back. The frozen opt-in PPTX adapter has the same
-  limitation but is absent from stock product surfaces. PDF support has been removed entirely.
+  audit retention — `writeFileSafely` (exported from `@otterpatch/runtime`) is the reference
+  implementation (backup first, temp + fsync + rename) and the CLI uses it by default.
+- OtterPatch rejects stale proposals and never rebases automatically. `runtime.rebaseProposal`
+  is an explicit host action for the changed-source case; it records the hash the model actually
+  saw (`provenance.rebasedFromSourceSha256`) and the new receipt binds the new source, so the
+  edit set must still be re-reviewed against the new file.
+- Excel and Word now perform deterministic edit-level semantic read-back after write-back (see
+  architecture.md); remaining honest gaps are formula cached results (recalculated by the host
+  application on open) and rendering-level equivalence. The frozen opt-in PPTX adapter still reports
+  applied edits as semantically unverifiable but is absent from stock product surfaces. PDF support
+  has been removed entirely.
 - The stock MCP stdio server has no review-receipt minting tool. The default reviewed commit needs
   an in-process embedding that shares the runtime's review authority; the built-in end-to-end
   reviewed path is HTTP/Electron. `OTTERPATCH_ALLOW_UNREVIEWED_COMMIT=1` weakens that boundary.

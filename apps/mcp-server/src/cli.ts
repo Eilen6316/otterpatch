@@ -7,12 +7,13 @@
  *   otterpatch-run --yes --format excel --intent "把 B1 改成 99" --in in.xlsx --out out.xlsx
  *   otterpatch-run --yes --mock --in in.xlsx --out out.xlsx  # 无需 API key,固定演示 edit
  * BYOK:export OtterPatch_API_KEY=...(非 --mock 时必需);--provider/--model 可选。
+ * 落盘:`--out` 存在时默认先把旧文件备份为 `--out.bak`(--no-backup 可关闭),
+ * 随后以"临时文件 + 原子重命名"写入,崩溃不会留下半个文件。
  */
-import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { docRevFromSha256, isResourceLimitError, type DocRev } from '@otterpatch/core';
 import { createModelClient, MockModelClient, type ModelClient, type Provider, type ProposeRequest } from '@otterpatch/agent';
-import { OtterPatchRuntime, sha256Bytes } from '@otterpatch/runtime';
+import { OtterPatchRuntime, sha256Bytes, writeFileSafely } from '@otterpatch/runtime';
 import { readDocumentFile } from './document-input.js';
 
 function arg(name: string): string | undefined {
@@ -31,6 +32,7 @@ const provider = (arg('provider') ?? 'claude') as Provider;
 const model = arg('model');
 const mock = has('mock');
 const confirmed = has('yes');
+const backup = !has('no-backup');
 
 const rt = new OtterPatchRuntime();
 rt.on(emit);
@@ -71,8 +73,8 @@ try {
     const reviewed = rt.reviewProposal(proposal, cs, cs.edits.map((edit) => edit.id), bytes, reviewerSessionId);
     const res = await rt.commit({ format, bytes, changeSet: cs, currentRev: baseRev, ...reviewed });
     if (outPath && res.ok) {
-      writeFileSync(outPath, res.bytes);
-      emit({ type: 'wrote', path: outPath, bytes: res.bytes.length });
+      const written = writeFileSafely(outPath, res.bytes, { backup });
+      emit({ type: 'wrote', path: outPath, bytes: written.bytes, ...(written.backupPath ? { backupPath: written.backupPath } : {}) });
     }
   }
 } catch (e) {

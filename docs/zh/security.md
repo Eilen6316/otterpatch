@@ -76,12 +76,20 @@ OtterPatch 保护源文档字节、审阅决定、Provider 凭据和写入修改
 
 ## 当前限制
 
-- Review secret、nonce 防重放状态和已提交源状态都是进程内状态。生产级多进程部署需要共享
-  authority 与持久化 replay/audit store。
-- Runtime 只返回字节；宿主负责原子文件替换、备份、访问控制和长期审计保存。
-- OtterPatch 会拒绝陈旧 proposal，不会自动把 edit rebase 到已变化的文件。
-- Excel 和 Word 当前能做包和局部性验证，但写回后会保守地把已应用 edit 标为语义不可验证。
-  冻结的 opt-in PPTX Adapter 也有同样限制，但不在 stock 产品入口中；PDF 支持已完全删除。
+- 审阅权威状态（HMAC secret、已消费 nonce、已提交源）默认是进程内的。多进程部署可传入共享的
+  `ReviewAuthorityStore`（`FileReviewAuthorityStore`，或对接 Redis/DB 的实现）：服务通过
+  `OtterPatch_REVIEW_STATE_DIR` 暴露该选项。"审阅了什么"的持久审计留痕仍归宿主——存储覆盖重放
+  与签名，不是审计日志。
+- Runtime 只返回字节；宿主负责原子文件替换、备份、访问控制和长期审计保存——
+  `@otterpatch/runtime` 导出的 `writeFileSafely` 是参考实现（先备份，再临时文件 + fsync + 重命名），
+  CLI 默认使用它。
+- OtterPatch 拒绝陈旧 proposal，且永远不会自动 rebase。`runtime.rebaseProposal` 是宿主针对
+  源已变化场景的显式操作；它会记录模型当时真正看到的源哈希
+  （`provenance.rebasedFromSourceSha256`），新 receipt 绑定新源，因此编辑集仍必须针对新文件
+  重新审阅。
+- Excel 和 Word 现在在写回后做确定性的逐 edit 语义回读（见 architecture.md）；仍诚实的缺口是公式
+  缓存结果（由宿主应用打开时重算）与渲染级等价性。冻结的 opt-in PPTX Adapter 仍把已应用 edit 报为语义
+  不可验证，但不在 stock 产品入口中；PDF 支持已完全删除。
 - Stock MCP stdio server 没有签发 review receipt 的工具。默认已审阅 commit 需要共享 runtime
   review authority 的进程内嵌入；当前内置完整审阅路径是 HTTP/Electron。
   `OTTERPATCH_ALLOW_UNREVIEWED_COMMIT=1` 会削弱该边界。

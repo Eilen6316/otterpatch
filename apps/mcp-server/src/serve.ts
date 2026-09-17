@@ -4,7 +4,7 @@ import type { ChangeSet, DocRev } from '@otterpatch/core';
 import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, docRevFromSha256, isResourceLimitError, isSha256 } from '@otterpatch/core';
 import { ProviderCallError, createModelClient, sanitizeStreamStatus, type AgentResponse, type ProposeRequest, type Provider } from '@otterpatch/agent';
 import { BUILTIN_SKILLS } from '@otterpatch/skills';
-import { OtterPatchRuntime, sha256Bytes, type DiffInput, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
+import { OtterPatchRuntime, sha256Bytes, FileReviewAuthorityStore, type DiffInput, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
 import { decodeDocumentBase64 } from './document-input.js';
 import { observeClientAbort } from './client-abort.js';
 import {
@@ -15,7 +15,12 @@ import {
   redactSecrets,
 } from './http-security.js';
 
-const rt = new OtterPatchRuntime();
+// A shared review-authority store (secret + replay ledger) turns this service into a
+// multi-process deployable: receipts minted by one instance verify and replay-block in
+// another. Default stays process-local. The directory must not be shared with untrusted users.
+const reviewStateDir = process.env.OtterPatch_REVIEW_STATE_DIR?.trim();
+const reviewStore = reviewStateDir ? new FileReviewAuthorityStore(reviewStateDir) : undefined;
+const rt = new OtterPatchRuntime({ ...(reviewStore ? { reviewStore } : {}) });
 type SheetInput = NonNullable<ProposeRequest['sheet']>;
 type BoardInput = NonNullable<ProposeRequest['board']>;
 type DocInput = NonNullable<ProposeRequest['doc']>;

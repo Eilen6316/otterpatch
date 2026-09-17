@@ -29,7 +29,7 @@ and generates the static playbook manifest before compiling the skills package.
 | `agent` | trusted/untrusted prompt boundary, provider response identity, dialect/capability alignment, typed read tools, independent repair budgets, retries/circuit/cancellation, reasoning suppression, Word/drawio proposal verification |
 | `skills` | generated catalog, namespace/trust/version/checksum rules, external-skill isolation, locale/matching, capability intersection, obsolete-operation regression checks |
 | `runtime` | adapter conformance, signed proposal/review binding, source/revision checks, single-use receipts, risk enforcement, document locking, fallback rules, listener isolation, structured fidelity validation |
-| format adapters | exact Excel/Word/drawio write-back, dropped-edit honesty, anchor ambiguity, formula recalculation, XML tokenization, and drawio topology; the retained frozen PPTX path is separately tested for run boundaries and explicit opt-in registration |
+| format adapters | exact Excel/Word/drawio write-back, dropped-edit honesty, anchor ambiguity, formula recalculation, XML tokenization, and drawio topology; post-commit semantic read-back (Word accept-revisions comparison, Excel cell/style read-back); the retained frozen PPTX path is separately tested for run boundaries and explicit opt-in registration |
 | desktop | review-state algebra, snapshot binding, browser token plumbing, IPC schema/size bounds, clean Word projection, Excel/drawio replay, commit receipt flow |
 | MCP/HTTP | document decoding limits, client abort propagation, token/origin/rate/concurrency security helpers |
 

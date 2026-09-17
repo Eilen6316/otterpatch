@@ -76,7 +76,6 @@ test('Word 红线写回:replaceText → w:ins,保留 w:pPr,仅 document.xml 变'
   assert.deepEqual(res.fidelity.verification.semantic, {
     verifiedEdits: [], unverifiableEdits: ['e0'], failedEdits: [],
   });
-  assert.match(res.fidelity.verification.compatibility.warnings[0] ?? '', /semantic readback/);
   const docXml = dec.decode(unzipSync(res.bytes)['word/document.xml']!);
   assert.match(docXml, /<w:ins\b/);
   assert.match(docXml, /<w:pPr>/);
@@ -89,7 +88,10 @@ test('Word 红线写回:replaceText → w:ins,保留 w:pPr,仅 document.xml 变'
     { hostId: 'h', bytes: res.bytes, rev: 1 as DocRev },
     cs,
   );
-  assert.deepEqual(verification.verification.semantic.unverifiableEdits, ['e0']);
+  // Post-commit read-back: accept every revision and compare against the simulated intent.
+  assert.deepEqual(verification.verification.semantic.verifiedEdits, ['e0']);
+  assert.deepEqual(verification.verification.semantic.unverifiableEdits, []);
+  assert.deepEqual(verification.verification.semantic.failedEdits, []);
 });
 
 test('Word writeback drops an ambiguous quote without changing document.xml', async () => {

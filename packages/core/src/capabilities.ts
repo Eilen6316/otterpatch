@@ -69,6 +69,7 @@ const manifests = [
     aliases: ['excel', 'xlsx'],
     availability: 'default',
     lifecycle: 'active',
+    features: { semanticReadback: 'supported', formulaResultRecalculation: 'not-guaranteed' },
     operations: [
       verified({ op: 'setValue', maxScope: 'range', risk: 'safe', backend: ['surgical-ooxml'] }),
       verified({ op: 'setFormula', maxScope: 'range', risk: 'safe', backend: ['surgical-ooxml'], maturity: 'preview' }),
@@ -83,6 +84,7 @@ const manifests = [
     aliases: ['word', 'docx'],
     availability: 'default',
     lifecycle: 'active',
+    features: { semanticReadback: 'supported' },
     operations: [
       writebackOnly({ op: 'replaceText', maxScope: 'range', risk: 'safe', backend: ['word-redline'] }),
       writebackOnly({ op: 'setStyle', maxScope: 'document', risk: 'safe', backend: ['word-redline'] }),
