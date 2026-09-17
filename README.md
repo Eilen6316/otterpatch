@@ -89,7 +89,15 @@ OtterPatch_REVIEW_TOKEN
 OtterPatch_ALLOWED_ORIGINS
 OtterPatch_PORT
 OtterPatch_REVIEW_STATE_DIR   # shared review-authority store (multi-process deployments)
+OtterPatch_AUDIT_DIR          # durable commit audit ledger ("merged PR" records)
 ```
+
+`OtterPatch_AUDIT_DIR` turns on the append-only commit audit ledger: every commit
+(reviewed or the explicitly-enabled unreviewed kind) appends one JSONL record per
+document — reviewer session, accepted edit ids, source→output SHA-256, backend, and
+the verification outcome. The runtime never reads it back for control flow; it is
+evidence for after-the-fact audit and a Git-like commit history for hosts to display.
+Keep the directory private to the service user.
 
 `OtterPatch_REVIEW_STATE_DIR` points the service at a shared `ReviewAuthorityStore`
 (`FileReviewAuthorityStore`): the HMAC secret, consumed receipt nonces, and committed-source

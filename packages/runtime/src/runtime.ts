@@ -41,6 +41,7 @@ import { createBuiltinAdapterRegistry, decorateAdapter } from './adapters.js';
 import type { OtterPatchEvent, OtterPatchEventListener } from './events.js';
 import { ReviewAuthority, sha256Bytes, type ProposalEnvelope, type ReviewedProposal, type ReviewReceipt } from './review.js';
 import { InMemoryReviewAuthorityStore, type ReviewAuthorityStore } from './review-store.js';
+import type { AuditLedger } from './audit.js';
 
 export interface CommitInput {
   format: string;
@@ -78,11 +79,16 @@ export interface OtterPatchRuntimeOptions {
   maxConcurrentModelRequests?: number;
   adapterRegistry?: AdapterRegistry;
   /**
-   * Durable review authority state (secret, consumed nonces, committed sources). The default
+   * Durable review-authority state (secret, consumed nonces, committed sources). The default
    * is process-local; a shared store (e.g. FileReviewAuthorityStore) enables multi-process
    * deployments. An explicit reviewSecret overrides the store's secret for this process.
    */
   reviewStore?: ReviewAuthorityStore;
+  /**
+   * Append-only commit audit ledger ("merged PR" records). Off by default: the runtime
+   * never reads it back for control flow — it is evidence, not a gate.
+   */
+  auditLedger?: AuditLedger;
 }
 
 export class OtterPatchRuntime {
@@ -91,6 +97,7 @@ export class OtterPatchRuntime {
   private readonly adapters: AdapterRegistry;
   private readonly reviewAuthority: ReviewAuthority;
   private readonly reviewStore: ReviewAuthorityStore;
+  private readonly auditLedger?: AuditLedger;
   private readonly allowUnreviewedCommit: boolean;
   private readonly approvalPolicy: ApprovalPolicy;
   private readonly maxConcurrentModelRequests: number;
@@ -102,6 +109,7 @@ export class OtterPatchRuntime {
     this.adapters = opts.adapterRegistry ?? createBuiltinAdapterRegistry();
     this.reviewStore = opts.reviewStore ?? new InMemoryReviewAuthorityStore();
     this.reviewAuthority = new ReviewAuthority(opts.reviewSecret ?? this.reviewStore.secret, opts.reviewTtlMs);
+    this.auditLedger = opts.auditLedger;
     this.allowUnreviewedCommit = opts.allowUnreviewedCommit ?? false;
     this.approvalPolicy = opts.approvalPolicy ?? DEFAULT_POLICY;
     this.maxConcurrentModelRequests = opts.maxConcurrentModelRequests ?? RESOURCE_LIMITS.concurrentModelRequests;
@@ -427,8 +435,9 @@ export class OtterPatchRuntime {
         if (receiptNonce && this.reviewStore.consumeNonce(receiptNonce, receiptExpiresAt!)) throw new Error('review receipt has already been used');
         if (this.reviewStore.isCommittedSource(sourceKey)) throw new Error('source file has already been committed; regenerate the proposal from the latest file');
         const before: DocHandle = { hostId: cs.hostId, bytes: input.bytes, rev: cs.baseRev };
-        const res = await this.commitWithFallback(backends, input.format, cs, before);
+        const { result: res, backendId } = await this.commitWithFallback(backends, input.format, cs, before);
         if (res.ok) this.reviewStore.rememberCommittedSource(sourceKey);
+        this.recordCommitAudit(input, cs, sourceHash, res, hasVerifiedReview, backendId);
         this.emit({ type: 'commit:done', ok: res.ok, touchedParts: res.touchedParts, fidelity: res.fidelity.score, bytes: res.bytes.length });
         return res;
       });
@@ -438,12 +447,55 @@ export class OtterPatchRuntime {
     }
   }
 
+  /** Append the durable "merged PR" record when a ledger is configured; never on the control path. */
+  private recordCommitAudit(
+    input: CommitInput,
+    cs: ChangeSet,
+    sourceHash: string,
+    res: WritebackResult,
+    hasVerifiedReview: boolean,
+    backendId: string,
+  ): void {
+    if (!this.auditLedger) return;
+    try {
+      const verification = res.fidelity.verification;
+      this.auditLedger.append({
+        ts: new Date().toISOString(),
+        documentId: input.proposal?.documentId ?? input.changeSet.hostId,
+        format: input.format,
+        ...(input.proposal ? { proposalId: input.proposal.proposalId } : {}),
+        ...(input.reviewReceipt ? { reviewerSessionId: input.reviewReceipt.reviewerSessionId } : {}),
+        reviewKind: hasVerifiedReview ? 'receipt' : 'unreviewed',
+        changeSetId: cs.id,
+        ...(input.proposal ? { changeSetSha256: input.proposal.changeSetSha256 } : {}),
+        intent: cs.meta.intent,
+        editCount: cs.edits.length,
+        acceptedEditIds: cs.edits.map((edit) => edit.id),
+        sourceSha256: sourceHash,
+        ...(res.ok ? { outputSha256: sha256Bytes(res.bytes) } : {}),
+        backendId,
+        ok: res.ok,
+        touchedParts: res.touchedParts,
+        fidelity: res.fidelity.score,
+        verification: {
+          packageValid: verification.packageValid,
+          verifiedEdits: [...verification.semantic.verifiedEdits],
+          unverifiableEdits: [...verification.semantic.unverifiableEdits],
+          failedEdits: verification.semantic.failedEdits.map((failure) => ({ editId: failure.editId, reason: failure.reason })),
+        },
+        ...(res.droppedEdits?.length ? { droppedEdits: res.droppedEdits.map((drop) => ({ editId: drop.editId, reason: drop.reason })) } : {}),
+      });
+    } catch {
+      // Telemetry-grade side effect: a ledger failure must never fail the commit itself.
+    }
+  }
+
   private async commitWithFallback(
     backends: WritebackBackend[],
     format: string,
     cs: ChangeSet,
     before: DocHandle,
-  ): Promise<WritebackResult> {
+  ): Promise<{ result: WritebackResult; backendId: string }> {
     const failures: string[] = [];
     for (let index = 0; index < backends.length; index++) {
       const backend = backends[index]!;
@@ -469,7 +521,7 @@ export class OtterPatchRuntime {
         }
         const verifiedResult = { ...result, fidelity: verification };
         const withFallback = index > 0 ? { ...verifiedResult, fallbackUsed: backend.strategy } : verifiedResult;
-        return withFallback;
+        return { result: withFallback, backendId: backend.id };
       } catch (error) {
         if (isResourceLimitError(error)) throw error;
         throw new Error(`writeback backend ${backend.id} failed after execution started: ${errMsg(error)}`, { cause: error });

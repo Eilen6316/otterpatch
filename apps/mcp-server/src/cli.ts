@@ -13,7 +13,7 @@
 import { resolve } from 'node:path';
 import { docRevFromSha256, isResourceLimitError, type DocRev } from '@otterpatch/core';
 import { createModelClient, MockModelClient, type ModelClient, type Provider, type ProposeRequest } from '@otterpatch/agent';
-import { OtterPatchRuntime, sha256Bytes, writeFileSafely } from '@otterpatch/runtime';
+import { OtterPatchRuntime, sha256Bytes, writeFileSafely, auditLedgerFromEnv } from '@otterpatch/runtime';
 import { readDocumentFile } from './document-input.js';
 
 function arg(name: string): string | undefined {
@@ -34,7 +34,8 @@ const mock = has('mock');
 const confirmed = has('yes');
 const backup = !has('no-backup');
 
-const rt = new OtterPatchRuntime();
+const auditLedger = auditLedgerFromEnv();
+const rt = new OtterPatchRuntime({ ...(auditLedger ? { auditLedger } : {}) });
 rt.on(emit);
 
 const isWord = format === 'word' || format === 'docx';

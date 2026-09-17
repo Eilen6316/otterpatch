@@ -90,8 +90,10 @@ the embedding host's review authority.
 - Review authority state (HMAC secret, consumed nonces, committed sources) defaults to
   process-local. Multi-process deployments pass a shared `ReviewAuthorityStore`
   (`FileReviewAuthorityStore`, or an implementation against Redis/DB): the service exposes it
-  via `OtterPatch_REVIEW_STATE_DIR`. Durable audit retention of *what was reviewed* still
-  belongs to the host — the store covers replay and signing, not an audit log.
+  via `OtterPatch_REVIEW_STATE_DIR`. Audit retention of *what was reviewed and merged* has a
+  built-in option — the append-only `AuditLedger` (`OtterPatch_AUDIT_DIR`); it is evidence
+  only, never a control-flow gate, and hosts with stricter retention requirements can
+  implement the same interface against their own store.
 - Runtime returns bytes. The host owns atomic file replacement, backups, access control, and durable
   audit retention — `writeFileSafely` (exported from `@otterpatch/runtime`) is the reference
   implementation (backup first, temp + fsync + rename) and the CLI uses it by default.

@@ -152,7 +152,10 @@ user's file or persist a durable audit ledger. An embedding host must:
 - write to a new file or use an atomic replace strategy (`writeFileSafely` in this package is
   the reference implementation);
 - retain backups appropriate to the document's value;
-- persist audit records if process restarts or multi-node replay protection matter;
+- persist audit records if process restarts or multi-node replay protection matter — the
+  built-in `AuditLedger` (`OtterPatch_AUDIT_DIR`, or a custom implementation) records every
+  commit: reviewer session, accepted edits, source→output hashes, backend, verification
+  outcome;
 - when the source changed after a proposal was signed, either regenerate a proposal from the
   model, or call `runtime.rebaseProposal(...)` — an explicit host action that rebinds the
   ChangeSet's revision to the new bytes and re-signs without another model call. Rebasing is

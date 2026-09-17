@@ -82,7 +82,13 @@ OtterPatch_REVIEW_TOKEN
 OtterPatch_ALLOWED_ORIGINS
 OtterPatch_PORT
 OtterPatch_REVIEW_STATE_DIR   # 共享审阅权威存储(多进程部署)
+OtterPatch_AUDIT_DIR          # 持久提交审计留痕(“已合并 PR”记录)
 ```
+
+`OtterPatch_AUDIT_DIR` 打开 append-only 的提交审计账本：每次提交（已审阅或显式启用的
+未审阅类型）都会按文档追加一条 JSONL 记录——审阅会话、接受的 edit ID、源→输出
+SHA-256、后端与验证结果。runtime 不会把它读回用于控制流；它是事后审计的证据，也是
+宿主展示 Git 式提交历史的数据源。该目录只对服务用户可读。
 
 `OtterPatch_REVIEW_STATE_DIR` 把服务指向共享的 `ReviewAuthorityStore`
 (`FileReviewAuthorityStore`):HMAC 密钥、已消费的 receipt nonce 和已提交源账本都放在该目录中,

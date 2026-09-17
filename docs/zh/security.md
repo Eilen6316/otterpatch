@@ -78,8 +78,9 @@ OtterPatch 保护源文档字节、审阅决定、Provider 凭据和写入修改
 
 - 审阅权威状态（HMAC secret、已消费 nonce、已提交源）默认是进程内的。多进程部署可传入共享的
   `ReviewAuthorityStore`（`FileReviewAuthorityStore`，或对接 Redis/DB 的实现）：服务通过
-  `OtterPatch_REVIEW_STATE_DIR` 暴露该选项。"审阅了什么"的持久审计留痕仍归宿主——存储覆盖重放
-  与签名，不是审计日志。
+  `OtterPatch_REVIEW_STATE_DIR` 暴露该选项。"审阅并合并了什么"的留痕有内置选项——append-only
+  的 `AuditLedger`（`OtterPatch_AUDIT_DIR`）；它只是证据、不参与控制流，留痕要求更严格的宿主
+  可以用同一接口对接自己的存储。
 - Runtime 只返回字节；宿主负责原子文件替换、备份、访问控制和长期审计保存——
   `@otterpatch/runtime` 导出的 `writeFileSafely` 是参考实现（先备份，再临时文件 + fsync + 重命名），
   CLI 默认使用它。
