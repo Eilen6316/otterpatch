@@ -33,6 +33,15 @@ and generates the static playbook manifest before compiling the skills package.
 | desktop | review-state algebra, snapshot binding, browser token plumbing, IPC schema/size bounds, clean Word projection, Excel/drawio replay, commit receipt flow |
 | MCP/HTTP | document decoding limits, client abort propagation, token/origin/rate/concurrency security helpers |
 
+## Real-model calibration (optional, key-gated)
+
+`npm run bench` (test/expert-bench.mjs) scores the Excel/Word agent with a real model
+(16 tasks, objective invariants + LLM judge); results append to test/bench-results.jsonl
+for trend comparison. Without `OTTERPATCH_BENCH_KEY` it prints SKIP and exits 0 — CI-safe,
+so it never runs unattended. See [bench.md](./bench.md) for the reproduce commands and the
+R1–R6 calibration history. Live UI evals (`npm run eval:excel*`, `eval:word*`) likewise
+require `OA_EVAL_KEY` plus a running local service.
+
 The runner is `node --import tsx --test`; package-specific commands use workspace names, for
 example:
 

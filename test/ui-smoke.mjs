@@ -6,7 +6,7 @@
 import { openApp, sleep, createReporter } from './harness.mjs';
 
 const rep = createReporter();
-const { page, errors, teardown } = await openApp();
+const { page, errors, teardown } = await openApp({ dismissSetup: false });
 
 try {
   // 首次运行向导:无 API Key 的新会话会弹出(Key 只驻留内存,不落盘)。

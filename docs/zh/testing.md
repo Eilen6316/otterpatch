@@ -32,6 +32,14 @@ npm run test:ui
 | desktop | 审阅状态代数、snapshot 绑定、浏览器令牌接线、IPC schema/大小边界、干净 Word 投影、Excel/drawio 回放、commit receipt 流程 |
 | MCP/HTTP | 文档解码限制、客户端断连传播、token/origin/rate/concurrency 安全 helper |
 
+## 真实模型校准（可选，需 Key）
+
+`npm run bench`（test/expert-bench.mjs）用真实模型给 Excel/Word Agent 打分
+（16 个任务，客观不变量 + LLM 评审）；结果追加到 test/bench-results.jsonl 看趋势。
+未设 `OTTERPATCH_BENCH_KEY` 时打印 SKIP 并 exit 0——CI 安全，不会无人值守地跑。
+复现命令与 R1–R6 校准历史见 [bench.md](./bench.md)。Live UI eval
+（`npm run eval:excel*`、`eval:word*`）同样需要 `OA_EVAL_KEY` 和运行中的本机服务。
+
 运行器是 `node --import tsx --test`。包级命令使用 workspace 名称，例如：
 
 ```bash

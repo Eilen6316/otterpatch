@@ -35,8 +35,10 @@ export async function serveDist(root = 'apps/desktop/dist') {
   return { url: `http://localhost:${srv.address().port}`, close: () => srv.close() };
 }
 
-/** 打开已构建的应用。storage:预置 localStorage(用于配置 Agent)。 */
-export async function openApp({ storage } = {}) {
+/** 打开已构建的应用。storage:预置 localStorage(用于配置 Agent)。
+ *  dismissSetup: 默认 true——首次运行向导会遮住界面,先关掉它;
+ *  传 false 可保留向导(用于断言向导本身的测试)。 */
+export async function openApp({ storage, dismissSetup = true } = {}) {
   const { url, close } = await serveDist();
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1480, height: 860 }, deviceScaleFactor: 1.5 });
@@ -52,6 +54,12 @@ export async function openApp({ storage } = {}) {
     }, persistedStorage);
   }
   await page.goto(url + '/index.html', { waitUntil: 'networkidle' });
+  // 首次运行向导会遮住模型设置;先关掉它(Key 仍走下面 Composer 设置注入,不落盘)。
+  const setupSkip = page.locator('.setup-skip');
+  if (dismissSetup && await setupSkip.count()) {
+    await setupSkip.click();
+    await page.waitForSelector('.setup-overlay', { state: 'detached' });
+  }
   const apiKey = storage?.['oa.apiKey'];
   if (apiKey) {
     await page.locator('.composer .model').click();
