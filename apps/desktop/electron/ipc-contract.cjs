@@ -264,6 +264,36 @@ function validateAuditHistoryResult(value) {
   return value.map((entry, index) => validateAuditRecord(entry, index));
 }
 
+// ── skill save (distill a committed demonstration) ───────────────────────────
+
+const SAVE_SKILL_KEYS = new Set(['intent', 'format', 'changeSet', 'name']);
+
+function validateSaveSkillInput(value) {
+  const input = record(value, 'save skill input');
+  exactKeys(input, SAVE_SKILL_KEYS, 'save skill input');
+  const intent = boundedString(input.intent, 'intent', 4096);
+  if (!intent.trim()) throw new Error('intent must not be blank');
+  const format = formatOf(input.format);
+  const changeSet = record(input.changeSet, 'changeSet');
+  boundedJson(changeSet, 'changeSet');
+  if (input.name !== undefined) {
+    const name = boundedString(input.name, 'name', 64);
+    if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(name)) throw new Error('name must be a lowercase safe identifier');
+  }
+  return { intent, format, changeSet, ...(input.name !== undefined ? { name: input.name } : {}) };
+}
+
+function validateSaveSkillResult(value) {
+  const result = record(value, 'save skill result');
+  exactKeys(result, new Set(['ok', 'skillId', 'name', 'path']), 'save skill result');
+  if (typeof result.ok !== 'boolean') throw new Error('save skill result ok must be boolean');
+  if (!result.ok) return { ok: false };
+  boundedString(result.skillId, 'skillId', 128);
+  boundedString(result.name, 'name', 64);
+  boundedString(result.path, 'path', 1024);
+  return result;
+}
+
 module.exports = {
   MAX_IPC_BODY_BYTES,
   validateCommitInvocation,
@@ -274,4 +304,6 @@ module.exports = {
   validateStreamEventEnvelope,
   validateAuditHistoryInput,
   validateAuditHistoryResult,
+  validateSaveSkillInput,
+  validateSaveSkillResult,
 };

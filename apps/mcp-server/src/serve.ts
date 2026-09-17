@@ -3,7 +3,16 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { ChangeSet, DocRev } from '@otterpatch/core';
 import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, docRevFromSha256, isResourceLimitError, isSha256 } from '@otterpatch/core';
 import { ProviderCallError, createModelClient, sanitizeStreamStatus, type AgentResponse, type ProposeRequest, type Provider } from '@otterpatch/agent';
-import { BUILTIN_SKILLS } from '@otterpatch/skills';
+import {
+  BUILTIN_SKILLS,
+  defaultLibrary,
+  distillSkillDraft,
+  loadSkillDirectory,
+  renderSkillMd,
+  writeSkillFile,
+  type SkillCard,
+  type SkillLibrary,
+} from '@otterpatch/skills';
 import { OtterPatchRuntime, sha256Bytes, FileReviewAuthorityStore, auditLedgerFromEnv, type DiffInput, type ProposalEnvelope, type ReviewReceipt } from '@otterpatch/runtime';
 import { decodeDocumentBase64 } from './document-input.js';
 import { observeClientAbort } from './client-abort.js';
@@ -23,9 +32,24 @@ const reviewStore = reviewStateDir ? new FileReviewAuthorityStore(reviewStateDir
 // Durable commit audit ledger ("merged PR" records), one JSONL per document. Off by default;
 // point OtterPatch_AUDIT_DIR at a private directory to keep a history of what was reviewed.
 const auditLedger = auditLedgerFromEnv();
+// 示范即技能:外部技能目录(OtterPatch_SKILLS_DIR)启动时加载,运行时与 /skills/save
+// 共用同一个可变 SkillLibrary——新蒸馏的技能对随后的 propose 立即生效。
+const skillsDir = process.env.OtterPatch_SKILLS_DIR?.trim();
+const skillLibrary: SkillLibrary = defaultLibrary();
+if (skillsDir) {
+  const loaded = loadSkillDirectory(skillsDir);
+  for (const card of loaded.cards) {
+    try {
+      skillLibrary.add(card);
+    } catch {
+      // 冲突的技能跳过(reject 策略);坏文件在 loadSkillDirectory 已记录。
+    }
+  }
+}
 const rt = new OtterPatchRuntime({
   ...(reviewStore ? { reviewStore } : {}),
   ...(auditLedger ? { auditLedger } : {}),
+  skills: skillLibrary,
 });
 type SheetInput = NonNullable<ProposeRequest['sheet']>;
 type BoardInput = NonNullable<ProposeRequest['board']>;
@@ -389,6 +413,45 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
           reviewReceipt: a.reviewReceipt as ReviewReceipt,
         });
         send(req, res, 200, { ok: r.ok, ...(r.ok ? { fileBase64: Buffer.from(r.bytes).toString('base64') } : { partialFileBase64: Buffer.from(r.bytes).toString('base64') }), touchedParts: r.touchedParts, fidelity: r.fidelity, ...(r.appliedEditIds ? { appliedEditIds: r.appliedEditIds } : {}), ...(r.droppedEdits ? { droppedEdits: r.droppedEdits } : {}) });
+        return;
+      }
+      if (req.method === 'POST' && url === '/skills/save') {
+        if (!skillsDir) throw new HttpError(409, 'skill directory is not configured; set OtterPatch_SKILLS_DIR');
+        const a = await readBody(req);
+        assertChangeSet(a.changeSet);
+        const intent = String(a.intent ?? '').trim();
+        const format = readDefaultFormat(a.format);
+        if (!intent) throw new HttpError(400, 'intent is required');
+        const draft = distillSkillDraft({
+          intent,
+          format,
+          changeSet: a.changeSet as ChangeSet,
+          ...(typeof a.name === 'string' && a.name.trim() ? { name: a.name.trim() } : {}),
+        });
+        const md = renderSkillMd(draft);
+        const path = writeSkillFile(skillsDir, draft.name, md);
+        let card: SkillCard;
+        try {
+          // 安装即校验:非法产物被 parseSkillMd 拒绝,不会污染库。
+          card = skillLibrary.install(md, path);
+        } catch (error) {
+          throw new HttpError(400, `distilled skill failed validation: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        send(req, res, 200, { ok: true, skillId: `${card.namespace}/${card.name}`, name: card.name, path });
+        return;
+      }
+      if (req.method === 'POST' && url === '/skills/list') {
+        const skills = skillLibrary
+          .all()
+          .filter((card) => card.trust === 'external')
+          .map((card) => ({
+            id: `${card.namespace}/${card.name}`,
+            name: card.name,
+            description: card.description,
+            formats: [...card.formats],
+            allowedOps: [...card.allowedOps],
+          }));
+        send(req, res, 200, { ok: true, skills, directory: skillsDir ?? null });
         return;
       }
       send(req, res, 404, { error: 'not found' });

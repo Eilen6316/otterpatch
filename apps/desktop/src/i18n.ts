@@ -56,6 +56,12 @@ const STATUS_DICT: Record<string, string> = {
   '正在测试连接…': 'Testing connection…',
   '连接成功,可以开始圈选区域、说出你想怎么改了。': 'Connected. Circle a region and describe how you want it changed.',
   '开始使用': 'Start using OtterPatch',
+  // 示范即技能
+  '保存为技能': 'Save as Skill',
+  '技能标识(可留空自动生成,仅小写字母/数字/.-_)': 'Skill identifier (leave empty to auto-generate; lowercase letters, digits, dot, hyphen, underscore)',
+  '技能标识只能是小写字母、数字、点、连字符': 'The skill identifier must be lowercase letters, digits, dot, hyphen, or underscore',
+  '已保存为技能': 'Saved as skill',
+  '保存技能失败': 'Failed to save skill',
 };
 
 export type Lang = 'zh' | 'en';

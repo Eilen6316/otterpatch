@@ -9,6 +9,8 @@ const {
   validateProposeInvocation,
   validateProposeResult,
   validateRequestId,
+  validateSaveSkillInput,
+  validateSaveSkillResult,
   validateStreamEventEnvelope,
 } = require('./ipc-contract.cjs');
 
@@ -18,6 +20,7 @@ const CHANNELS = Object.freeze({
   proposeEvent: 'otterpatch:propose-event',
   commit: 'otterpatch:commit-writeback',
   auditHistory: 'otterpatch:audit-history',
+  saveSkill: 'otterpatch:save-skill',
 });
 const proposeListeners = new WeakMap();
 
@@ -63,5 +66,10 @@ contextBridge.exposeInMainWorld('otterpatch', {
     const validated = validateAuditHistoryInput(input ?? {});
     const result = await ipcRenderer.invoke(CHANNELS.auditHistory, validated);
     return validateAuditHistoryResult(result);
+  },
+  async saveSkill(input) {
+    const validated = validateSaveSkillInput(input);
+    const result = await ipcRenderer.invoke(CHANNELS.saveSkill, validated);
+    return validateSaveSkillResult(result);
   },
 });

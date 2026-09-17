@@ -117,6 +117,7 @@ test('streamPropose uses narrow Electron IPC without exposing a local service to
     offProposeEvent(next) { if (listener === next) listener = undefined; },
     async commitWriteback() { return {}; },
     async readAuditHistory() { return []; },
+    async saveSkill() { return { ok: true, skillId: 'user/demo', name: 'demo', path: '/tmp/demo.md' }; },
   };
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { otterpatch: bridge } });
   Object.defineProperty(globalThis, 'localStorage', {
@@ -163,6 +164,7 @@ test('streamPropose forwards renderer cancellation through the request-scoped IP
     offProposeEvent() {},
     async commitWriteback() { return {}; },
     async readAuditHistory() { return []; },
+    async saveSkill() { return { ok: true, skillId: "user/demo", name: "demo", path: "/tmp/demo.md" }; },
   };
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { otterpatch: bridge } });
   const controller = new AbortController();

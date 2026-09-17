@@ -90,3 +90,31 @@ test('validateAuditHistoryResult: accepts well-formed records and rejects tamper
   assert.throws(() => validateAuditHistoryResult([{ ...record(), verification: { packageValid: 'true', verifiedEdits: [], unverifiableEdits: [], failedEdits: [] } }]), /packageValid must be boolean/);
   assert.throws(() => validateAuditHistoryResult([record(), record(), ...Array(500).fill(record())]), /exceeds 500/);
 });
+
+// ── save-skill IPC contract ──────────────────────────────────────────────────
+
+const { validateSaveSkillInput, validateSaveSkillResult } = require('./ipc-contract.cjs');
+
+test('validateSaveSkillInput: bounded intent/format/changeSet, optional slug name', () => {
+  const ok = validateSaveSkillInput({
+    intent: '统一日期格式',
+    format: 'excel',
+    changeSet: { id: 'cs1', edits: [{ id: 'e1', target: 'a1', op: { kind: 'setValue', value: 1 } }] },
+  });
+  assert.equal(ok.intent, '统一日期格式');
+  assert.equal(ok.name, undefined);
+  assert.deepEqual(validateSaveSkillInput({ ...ok, name: 'sales-fix' }).name, 'sales-fix');
+  assert.throws(() => validateSaveSkillInput({ intent: '  ', format: 'excel', changeSet: {} }), /must not be blank/);
+  assert.throws(() => validateSaveSkillInput({ intent: 'x', format: 'exe', changeSet: {} }), /unsupported document format/);
+  assert.throws(() => validateSaveSkillInput({ intent: 'x', format: 'excel', changeSet: 'nope' }), /must be an object/);
+  assert.throws(() => validateSaveSkillInput({ intent: 'x', format: 'excel', changeSet: {}, name: 'Bad-Name' }), /lowercase safe identifier/);
+  assert.throws(() => validateSaveSkillInput({ intent: 'x', format: 'excel', changeSet: {}, url: 'https://evil.test' }), /unsupported fields/);
+});
+
+test('validateSaveSkillResult: success shape only', () => {
+  assert.deepEqual(validateSaveSkillResult({ ok: true, skillId: 'user/demo', name: 'demo', path: 'C:\skills\demo.md' }), { ok: true, skillId: 'user/demo', name: 'demo', path: 'C:\skills\demo.md' });
+  assert.deepEqual(validateSaveSkillResult({ ok: false }), { ok: false });
+  assert.throws(() => validateSaveSkillResult({ ok: true, skillId: 'x' }), /name must be a string/);
+  assert.throws(() => validateSaveSkillResult({ ok: true, skillId: 'x', name: 'd', path: 'p', extra: 1 }), /unsupported fields/);
+  assert.throws(() => validateSaveSkillResult({ ok: 'yes' }), /ok must be boolean/);
+});

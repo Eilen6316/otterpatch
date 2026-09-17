@@ -83,6 +83,7 @@ OtterPatch_ALLOWED_ORIGINS
 OtterPatch_PORT
 OtterPatch_REVIEW_STATE_DIR   # 共享审阅权威存储(多进程部署)
 OtterPatch_AUDIT_DIR          # 持久提交审计留痕(“已合并 PR”记录)
+OtterPatch_SKILLS_DIR         # 外部技能目录(示范蒸馏出的技能)
 ```
 
 `OtterPatch_AUDIT_DIR` 打开 append-only 的提交审计账本：每次提交（已审阅或显式启用的
@@ -169,6 +170,13 @@ verification.compatibility  明确的格式与后端警告
 
 Runtime 会拒绝旧式或编辑覆盖不完整的报告、无效包和意外漂移；返回的是最终回读报告，
 不是后端在 commit 时给出的乐观估计。
+
+## 技能
+
+内置技能是不可变能力卡；飞轮（design.md 创新点②）闭环在此：一次审阅通过的提交后，桌面端提供
+**保存为技能**——这次演示（意图 + 接受的 ChangeSet）被确定性地蒸馏（零模型调用）成外部
+`SKILL.md` 写入 `OtterPatch_SKILLS_DIR` 并装入运行中的技能库，以后相似的请求会自动命中。
+蒸馏产物先经 SKILL.md 解析器校验才安装；外部技能始终是不可信的工具结果数据。
 
 ## 仓库结构
 

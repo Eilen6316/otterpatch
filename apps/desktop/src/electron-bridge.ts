@@ -52,6 +52,15 @@ export interface DesktopLocalServiceBridge {
   commitWriteback(input: DesktopCommitInput): Promise<Record<string, unknown>>;
   /** Read-only commit history; empty when no audit ledger directory is configured. */
   readAuditHistory(input?: { documentId?: string }): Promise<DesktopAuditRecord[]>;
+  /** 示范即技能:把一次已提交的演示蒸馏成外部技能(经本机服务落盘)。 */
+  saveSkill(input: DesktopSaveSkillInput): Promise<{ ok: true; skillId: string; name: string; path: string } | { ok: false }>;
+}
+
+export interface DesktopSaveSkillInput {
+  intent: string;
+  format: string;
+  changeSet: unknown;
+  name?: string;
 }
 
 export type BrowserLocalCredentialKey = 'oa.serveToken' | 'oa.reviewToken';
@@ -65,7 +74,8 @@ export function desktopLocalServiceBridge(): DesktopLocalServiceBridge | undefin
     || typeof candidate.onProposeEvent !== 'function'
     || typeof candidate.offProposeEvent !== 'function'
     || typeof candidate.commitWriteback !== 'function'
-    || typeof candidate.readAuditHistory !== 'function') return undefined;
+    || typeof candidate.readAuditHistory !== 'function'
+    || typeof candidate.saveSkill !== 'function') return undefined;
   return candidate as DesktopLocalServiceBridge;
 }
 

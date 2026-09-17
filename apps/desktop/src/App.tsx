@@ -4,11 +4,11 @@ import { asLang, LANGS, makeT, TContext, type Lang } from './i18n.js';
 import type { UniSel, SheetHandle } from './UniverSheet.js';
 import type { RichDocHandle, WordSel } from './RichDoc.js';
 import { akey } from './review-shared.js';
-import {
+import { desktopLocalServiceBridge,
   browserLocalCredential,
   browserLocalCredentialsAvailable,
   setBrowserLocalCredential,
-} from './electron-bridge.js';
+ } from './electron-bridge.js';
 import { wordEditOpts } from './proposal-materializers.js';
 import { applyBoardPatchView, revertBoardPatch } from './drawio-review-adapter.js';
 import type { AgentDiffItem, WordEdit } from './proposal-materializers.js';
@@ -183,6 +183,35 @@ export function App() {
   // 向导负责引导;"稍后再说"会记住跳过(oa.setupDone),老手照旧在 Composer 设置里配。
   const [setupDone, setSetupDone] = useState(() => lsGet('oa.setupDone', '') === '1');
   const dismissSetup = (): void => { setSetupDone(true); lsSet('oa.setupDone', '1'); };
+  /** 示范即技能:把一次已提交的演示蒸馏成外部技能(经 IPC → 本机服务落盘)。 */
+  const saveAsSkill = async (turn: { format: string; changeSet?: unknown; diff?: { intent?: string }; text?: string }): Promise<void> => {
+    const bridge = desktopLocalServiceBridge();
+    if (!bridge || !turn.changeSet) {
+      notify(t('请先用 otterpatch-serve 生成提案'));
+      return;
+    }
+    const name = window.prompt(t('技能标识(可留空自动生成,仅小写字母/数字/.-_)'), '') ?? undefined;
+    if (name !== undefined && name.trim() && !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(name.trim())) {
+      notify(t('技能标识只能是小写字母、数字、点、连字符'));
+      return;
+    }
+    try {
+      const result = await bridge.saveSkill({
+        intent: turn.diff?.intent ?? turn.text ?? '',
+        format: turn.format,
+        changeSet: turn.changeSet,
+        ...(name?.trim() ? { name: name.trim() } : {}),
+      });
+      if (!result.ok) {
+        notify(t('保存技能失败'));
+        return;
+      }
+      notify(`${t('已保存为技能')}: ${result.skillId}`);
+    } catch (err) {
+      notify(t('保存技能失败') + ': ' + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
   /** 连接测试:一次最小的 propose 调用(意图"连接测试",模型只会回答、不改文档)。 */
   const testModelConnection = async (providerId: string, model: string, key: string): Promise<string | null> => {
     const endpoint = normalizeLocalEndpoint(server);
@@ -614,6 +643,7 @@ export function App() {
                             onRevertTurn={() => revertTurn(i)}
                             onSend={(s) => { void send(s); }}
                             onSetAutoBatch={setAutoBatch}
+                            onSaveAsSkill={() => { void saveAsSkill(turn); }}
                           />
                         </div>
                       </div>

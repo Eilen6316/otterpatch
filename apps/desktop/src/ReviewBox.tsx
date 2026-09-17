@@ -34,9 +34,11 @@ export interface ReviewBoxProps {
   onRevertTurn(): void;
   onSend(text: string): void;
   onSetAutoBatch(v: boolean): void;
+  /** 示范即技能:把这次已采纳的演示蒸馏成可复用技能(已提交且带 ChangeSet 时才可点)。 */
+  onSaveAsSkill?(): void;
 }
 
-export function ReviewBox({ turn, active, reviewIdx, accepted, rejected, hoverCid, autoBatch, lockedEdits, wordRef, onSetReviewIdx, onHoverCid, onAccept, onReject, onAcceptAll, onCommitAccepted, onRevertTurn, onSend, onSetAutoBatch }: ReviewBoxProps): ReactNode {
+export function ReviewBox({ turn, active, reviewIdx, accepted, rejected, hoverCid, autoBatch, lockedEdits, wordRef, onSetReviewIdx, onHoverCid, onAccept, onReject, onAcceptAll, onCommitAccepted, onRevertTurn, onSend, onSetAutoBatch, onSaveAsSkill }: ReviewBoxProps): ReactNode {
   const t = useT();
   const d = turn.diff;
   const total = d.items.length;
@@ -145,6 +147,7 @@ export function ReviewBox({ turn, active, reviewIdx, accepted, rejected, hoverCi
               <button className="btn solid rv-next" onClick={() => onSend('下一批')}>{t('继续下一批')} ›</button>
             </>
           ) : null}
+          {onSaveAsSkill && turn.changeSet ? <button className="link-btn" onClick={onSaveAsSkill}>{t('保存为技能')}</button> : null}
           <button className="link-btn" onClick={onRevertTurn}>{t('撤销')}</button></div>
       ) : turn.reverted ? (
         <div className="rv-final dim">↩ {t('已撤销')}</div>

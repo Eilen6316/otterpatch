@@ -81,7 +81,7 @@ try {
       && !document.querySelector('.rd-page [data-cid]');
   }, noteQuote));
 
-  await page.locator('.reviewbox .rv-final .link-btn').click();
+  await page.locator('.reviewbox .rv-final .link-btn', { hasText: '撤销' }).click();
   await sleep(450);
   ok('turn undo restores accepted text and removed paragraph', await page.evaluate((note) => {
     const text = document.querySelector('.rd-page')?.textContent ?? '';

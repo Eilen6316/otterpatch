@@ -18,6 +18,8 @@ const {
   validateCommitResult,
   validateProposeInvocation,
   validateRequestId,
+  validateSaveSkillInput,
+  validateSaveSkillResult,
   validateStreamEventEnvelope,
 } = require('./ipc-contract.cjs');
 const { readAuditLedger } = require('./audit-ledger.cjs');
@@ -37,6 +39,7 @@ const CHANNELS = Object.freeze({
   proposeEvent: 'otterpatch:propose-event',
   commit: 'otterpatch:commit-writeback',
   auditHistory: 'otterpatch:audit-history',
+  saveSkill: 'otterpatch:save-skill',
 });
 const activeProposals = new Map();
 const MAX_SSE_BUFFER_BYTES = 2 * 1024 * 1024;
@@ -195,6 +198,19 @@ function abortProposalsForSender(senderId) {
   }
 }
 
+/** 示范即技能:把一次已提交的演示蒸馏成外部技能(经本机服务落盘并安装)。 */
+async function saveDemonstrationSkill(event, invocation) {
+  assertTrustedSender(event);
+  const input = validateSaveSkillInput(invocation);
+  const result = await localJson('/skills/save', {
+    intent: input.intent,
+    format: input.format,
+    changeSet: input.changeSet,
+    ...(input.name !== undefined ? { name: input.name } : {}),
+  });
+  return validateSaveSkillResult(result);
+}
+
 /** Read-only commit history from the audit ledger directory (same env the serve child gets). */
 function readCommitHistory(event, invocation) {
   assertTrustedSender(event);
@@ -216,6 +232,7 @@ ipcMain.on(CHANNELS.proposeCancel, (event, requestId) => {
 });
 ipcMain.handle(CHANNELS.commit, reviewAndCommit);
 ipcMain.handle(CHANNELS.auditHistory, readCommitHistory);
+ipcMain.handle(CHANNELS.saveSkill, saveDemonstrationSkill);
 
 // 自动启动本机 Agent 服务(otterpatch-serve),让非技术用户开箱即用、无需手动跑命令。
 let serveProc = null;

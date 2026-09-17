@@ -10,7 +10,7 @@
     "prebuild": "npm run generate:playbooks",
     "build": "tsc -b",
     "pretest": "npm run generate:playbooks",
-    "test": "node --import tsx --test src/skills.test.ts src/playbooks.test.ts"
+    "test": "node --import tsx --test src/skills.test.ts src/playbooks.test.ts src/distill.test.ts src/directory.test.ts"
   },
   "dependencies": {
     "@noble/hashes": "2.2.0"

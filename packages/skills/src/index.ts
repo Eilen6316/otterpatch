@@ -6,5 +6,7 @@
 export { MAX_SKILL_MD_BYTES, assertSkillCard, parseSkillMd, skillId } from './parse.js';
 export type { SkillCard } from './parse.js';
 export * from './library.js';
+export * from './distill.js';
+export * from './directory.js';
 export * from './catalog.js';
 export * from './playbooks.js';

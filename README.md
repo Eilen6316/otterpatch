@@ -90,6 +90,7 @@ OtterPatch_ALLOWED_ORIGINS
 OtterPatch_PORT
 OtterPatch_REVIEW_STATE_DIR   # shared review-authority store (multi-process deployments)
 OtterPatch_AUDIT_DIR          # durable commit audit ledger ("merged PR" records)
+OtterPatch_SKILLS_DIR         # external skill directory (demonstration-distilled skills)
 ```
 
 `OtterPatch_AUDIT_DIR` turns on the append-only commit audit ledger: every commit
@@ -183,6 +184,15 @@ verification.compatibility  explicit format/backend warnings
 
 Runtime rejects legacy or edit-incomplete reports, invalid packages, and unexpected drift. It
 returns the final read-back report, not the backend's optimistic commit-time estimate.
+
+## Skills
+
+Built-in skills are immutable capability cards; the flywheel (design.md 创新点②) closes the
+loop: after a reviewed commit, the desktop offers **保存为技能** — the demonstration
+(intent + accepted ChangeSet) is distilled deterministically (no model call) into an external
+`SKILL.md` under `OtterPatch_SKILLS_DIR` and installed into the live library, so similar
+future requests match it automatically. Distillation output is validated by the SKILL.md
+parser before install; external skills stay untrusted tool-result data.
 
 ## Repository map
 
