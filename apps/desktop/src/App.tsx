@@ -16,6 +16,11 @@ import type { DiffTurn, Turn, WorkspaceFormat as Fmt } from './app-thread-types.
 import { useFileImport } from './use-file-import.js';
 import { useCommitWriteback } from './use-commit-writeback.js';
 import { useCommitHistory } from './use-commit-history.js';
+import { FirstRunSetup, type FirstRunProvider } from './FirstRunSetup.js';
+import { providerErrorMessage } from './provider-errors.js';
+import type { StreamEvent } from './use-proposal-stream.js';
+import { streamPropose } from './agent-client.js';
+import type { DocRev } from '@otterpatch/core';
 import { fileSnapshotDocumentId } from './file-snapshot.js';
 import { CommitHistory } from './CommitHistory.js';
 import { useReviewState } from './use-review-state.js';
@@ -174,6 +179,41 @@ export function App() {
   const [sendErr, setSendErr] = useState<string | null>(null);
   const lsJson = <T,>(k: string, fb: T): T => { try { const v = JSON.parse(localStorage.getItem(k) ?? 'null'); return v == null ? fb : (v as T); } catch { return fb; } };
   const [localUserId] = useState(() => persistedLocalId('oa.auditUserId'));
+  // 首次运行向导:Key 只驻留内存(不落盘),所以每个新会话都需要重新配置——
+  // 向导负责引导;"稍后再说"会记住跳过(oa.setupDone),老手照旧在 Composer 设置里配。
+  const [setupDone, setSetupDone] = useState(() => lsGet('oa.setupDone', '') === '1');
+  const dismissSetup = (): void => { setSetupDone(true); lsSet('oa.setupDone', '1'); };
+  /** 连接测试:一次最小的 propose 调用(意图"连接测试",模型只会回答、不改文档)。 */
+  const testModelConnection = async (providerId: string, model: string, key: string): Promise<string | null> => {
+    const endpoint = normalizeLocalEndpoint(server);
+    if (!endpoint) return t('Agent 服务地址必须是本机地址');
+    let failure: string | null = null;
+    try {
+      await streamPropose(
+        endpoint,
+        {
+          format: 'excel',
+          intent: '连接测试',
+          context: '',
+          baseRev: 0 as DocRev,
+          provider: providerId,
+          model,
+          apiKey: key,
+          documentId: 'setup-test',
+          sessionId: `setup_${Date.now()}`,
+          userId: localUserId,
+        },
+        () => {},
+        (event: StreamEvent) => {
+          if (event.type === 'error') failure = providerErrorMessage(t, event.error?.kind, event.message);
+        },
+        AbortSignal.timeout(60_000),
+      );
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err);
+    }
+    return failure;
+  };
   const [conversationSessionId, setConversationSessionId] = useState(() => persistedLocalId('oa.auditSessionId'));
   // Cursor 式连续对话流 + 模型历史,持久化到当前工作区(localStorage)
   const [thread, setThread] = useState<Turn[]>(() => sanitizeAppThread(lsJson<Turn[]>('oa.thread', []))
@@ -414,6 +454,19 @@ export function App() {
   return (
     <TContext.Provider value={t}>
       <div className="app">
+        {!setupDone && !apiKey && (
+          <FirstRunSetup
+            providers={MODEL_PROVIDERS as FirstRunProvider[]}
+            providerId={provider}
+            onPickProvider={pickProvider}
+            model={model}
+            onModel={(v) => { setModel(v); lsSet('oa.model', v); }}
+            apiKey={apiKey}
+            onApiKey={setApiKey}
+            onTest={testModelConnection}
+            onSkip={dismissSetup}
+          />
+        )}
         <TopBar
           formats={FORMATS}
           fmt={fmt}

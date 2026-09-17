@@ -9,6 +9,18 @@ const rep = createReporter();
 const { page, errors, teardown } = await openApp();
 
 try {
+  // 首次运行向导:无 API Key 的新会话会弹出(Key 只驻留内存,不落盘)。
+  // 冒烟不配 Key,先断言向导出现,再按"稍后再说"关掉它验核心交互。
+  const setupOverlay = page.locator('.setup-overlay');
+  rep.ok('first-run setup wizard appears without a key', (await setupOverlay.count()) === 1);
+  rep.ok('wizard explains BYOK and lists providers', /BYOK/.test((await setupOverlay.textContent()) || '') && (await page.locator('.setup-provider').count()) >= 2);
+  const setupSkip = page.locator('.setup-skip');
+  if (await setupSkip.count()) {
+    await setupSkip.click();
+    await sleep(300);
+  }
+  rep.ok('wizard dismisses on skip', (await setupOverlay.count()) === 0);
+
   // Excel(默认格式):Univer 渲染
   await page.waitForSelector('.univer-host canvas', { timeout: 15000 }).catch(() => {});
   await sleep(2500);

@@ -43,6 +43,19 @@ const STATUS_DICT: Record<string, string> = {
   '源哈希': 'Source hash',
   '后端': 'Backend',
   '审阅会话': 'Reviewer session',
+  // 首次运行向导
+  '模型配置向导': 'Model Setup',
+  '稍后再说': 'Skip for now',
+  'OtterPatch 用你自己的模型 Key(BYOK),Key 只存在当前会话内存,绝不上传、绝不落盘。': 'OtterPatch uses your own model key (BYOK). The key lives only in this session memory — never uploaded, never stored on disk.',
+  '下一步': 'Next',
+  '上一步': 'Back',
+  'API Key': 'API Key',
+  '模型': 'Model',
+  '在所选 Provider 的控制台创建 API Key,粘贴到下面。Key 只发给本机服务和你选的 Provider。': 'Create an API Key in the chosen provider console and paste it below. The key goes only to the local service and the provider you picked.',
+  '测试连接': 'Test connection',
+  '正在测试连接…': 'Testing connection…',
+  '连接成功,可以开始圈选区域、说出你想怎么改了。': 'Connected. Circle a region and describe how you want it changed.',
+  '开始使用': 'Start using OtterPatch',
 };
 
 export type Lang = 'zh' | 'en';

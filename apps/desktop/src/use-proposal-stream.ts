@@ -29,10 +29,11 @@ import {
   wordEditOpts,
 } from './proposal-materializers.js';
 import type { AgentDiff, BoardPatch } from './proposal-materializers.js';
+import { providerErrorMessage } from './provider-errors.js';
 import type { RichDocHandle, WordSel } from './RichDoc.js';
 import type { SheetHandle, UniSel } from './UniverSheet.js';
 
-interface StreamEvent {
+export interface StreamEvent {
   type: string;
   status?: unknown;
   delta?: string;
@@ -285,18 +286,7 @@ export function useProposalStream({
             }
             drawnOperationsRef.current = operations.length;
           } else if (event.type === 'error') {
-            const providerMessage: Record<string, string> = {
-              authentication: t('API Key 未通过 Provider 验证'),
-              permission: t('当前 API Key 无权使用该模型'),
-              invalid_request: t('Provider 拒绝了模型请求'),
-              rate_limit: t('Provider 限流,请稍后重试'),
-              timeout: t('Provider 请求超时'),
-              unavailable: t('Provider 暂时不可用'),
-              network: t('无法连接 Provider'),
-              circuit_open: t('Provider 暂时熔断,请稍后重试'),
-              unknown: t('Provider 请求失败'),
-            };
-            throw new Error(providerMessage[event.error?.kind ?? ''] ?? event.message ?? 'stream error');
+            throw new Error(providerErrorMessage(t, event.error?.kind, event.message));
           } else if (event.type === 'done') {
             if (event.kind === 'changeset' && event.diff) {
               const diff = event.diff;

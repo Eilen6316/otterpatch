@@ -901,3 +901,25 @@ svg { display: block; }
 .commit-history-detail { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; padding: 7px 10px 9px; border-top: 1px solid var(--line); font-size: 11px; }
 .commit-history-detail dt { color: var(--faint); }
 .commit-history-detail dd { margin: 0; color: var(--text-soft); word-break: break-all; }
+
+/* 首次运行模型配置向导(全屏覆盖层) */
+.setup-overlay { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.42); backdrop-filter: blur(2px); }
+.setup-card { width: min(560px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow-y: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--panel, #fff); box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18); }
+.setup-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px 10px; border-bottom: 1px solid var(--line); }
+.setup-head h2 { margin: 0; font-size: 15px; font-weight: 700; color: var(--text); }
+.setup-skip { border: none; background: transparent; font-size: 12px; color: var(--muted); cursor: pointer; }
+.setup-skip:hover { color: var(--text-soft); }
+.setup-body { padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 12px; }
+.setup-lead { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--text-soft); }
+.setup-providers { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.setup-provider { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: transparent; text-align: left; cursor: pointer; }
+.setup-provider.on { border-color: var(--accent); background: #eef3ff; }
+.setup-provider:hover { border-color: var(--accent); }
+.setup-provider-label { font-size: 12.5px; font-weight: 650; color: var(--text); }
+.setup-provider-model { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+.setup-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.setup-field input { border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; color: var(--text); background: transparent; outline: none; }
+.setup-field input:focus { border-color: var(--accent); }
+.setup-error { margin: 0; font-size: 12px; color: #dc2626; }
+.setup-done { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--add); }
+.setup-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
