@@ -12,12 +12,15 @@ const { spawn } = require('node:child_process');
 const { randomBytes, randomUUID } = require('node:crypto');
 const {
   MAX_IPC_BODY_BYTES,
+  validateAuditHistoryInput,
+  validateAuditHistoryResult,
   validateCommitInvocation,
   validateCommitResult,
   validateProposeInvocation,
   validateRequestId,
   validateStreamEventEnvelope,
 } = require('./ipc-contract.cjs');
+const { readAuditLedger } = require('./audit-ledger.cjs');
 
 const isDev = !!process.env.OTTERPATCH_DEV;
 const isPackagedSmoke = process.env.OTTERPATCH_PACKAGED_SMOKE === '1' && process.argv.includes('--ci-smoke-test');
@@ -33,6 +36,7 @@ const CHANNELS = Object.freeze({
   proposeCancel: 'otterpatch:propose-cancel',
   proposeEvent: 'otterpatch:propose-event',
   commit: 'otterpatch:commit-writeback',
+  auditHistory: 'otterpatch:audit-history',
 });
 const activeProposals = new Map();
 const MAX_SSE_BUFFER_BYTES = 2 * 1024 * 1024;
@@ -191,6 +195,15 @@ function abortProposalsForSender(senderId) {
   }
 }
 
+/** Read-only commit history from the audit ledger directory (same env the serve child gets). */
+function readCommitHistory(event, invocation) {
+  assertTrustedSender(event);
+  const { documentId } = validateAuditHistoryInput(invocation);
+  const directory = process.env.OtterPatch_AUDIT_DIR?.trim();
+  if (!directory) return validateAuditHistoryResult([]);
+  return validateAuditHistoryResult(readAuditLedger(directory, documentId));
+}
+
 ipcMain.handle(CHANNELS.propose, forwardProposalStream);
 ipcMain.on(CHANNELS.proposeCancel, (event, requestId) => {
   try {
@@ -202,6 +215,7 @@ ipcMain.on(CHANNELS.proposeCancel, (event, requestId) => {
   }
 });
 ipcMain.handle(CHANNELS.commit, reviewAndCommit);
+ipcMain.handle(CHANNELS.auditHistory, readCommitHistory);
 
 // 自动启动本机 Agent 服务(otterpatch-serve),让非技术用户开箱即用、无需手动跑命令。
 let serveProc = null;

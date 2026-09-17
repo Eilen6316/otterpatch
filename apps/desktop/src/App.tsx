@@ -15,6 +15,9 @@ import type { AgentDiffItem, WordEdit } from './proposal-materializers.js';
 import type { DiffTurn, Turn, WorkspaceFormat as Fmt } from './app-thread-types.js';
 import { useFileImport } from './use-file-import.js';
 import { useCommitWriteback } from './use-commit-writeback.js';
+import { useCommitHistory } from './use-commit-history.js';
+import { fileSnapshotDocumentId } from './file-snapshot.js';
+import { CommitHistory } from './CommitHistory.js';
 import { useReviewState } from './use-review-state.js';
 import { useReviewActions } from './use-review-actions.js';
 import { useProposalStream } from './use-proposal-stream.js';
@@ -202,6 +205,13 @@ export function App() {
     setBusy,
     normalizeLocalEndpoint,
   });
+  const commitHistory = useCommitHistory(fileSnapshot ? fileSnapshotDocumentId(fileSnapshot) : undefined);
+  // 提交成功后刷新留痕(thread 里出现已提交的 diff turn 即一次合并落地)。
+  useEffect(() => {
+    if (thread.some((turn) => turn.role === 'assistant' && turn.kind === 'diff' && turn.committed)) {
+      void commitHistory.refresh();
+    }
+  }, [thread, commitHistory]);
   const curProvider = MODEL_PROVIDERS.find((p) => p.id === provider) ?? MODEL_PROVIDERS[0]!;
   const pickProvider = (id: string): void => {
     const p = MODEL_PROVIDERS.find((x) => x.id === id) ?? MODEL_PROVIDERS[0]!;
@@ -620,6 +630,7 @@ export function App() {
               fileName={fileName}
               onFile={onFile}
             />
+            <CommitHistory records={commitHistory.ordered} available={commitHistory.available} />
           </aside>
         </main>
         {drop && DROPDOWNS[drop.key] && (

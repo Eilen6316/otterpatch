@@ -14,6 +14,34 @@ export interface DesktopCommitInput {
   acceptedEditIds: string[];
 }
 
+/** One durable commit record from the audit ledger (mirrors packages/runtime audit.ts). */
+export interface DesktopAuditRecord {
+  ts: string;
+  documentId: string;
+  format: string;
+  proposalId?: string;
+  reviewerSessionId?: string;
+  reviewKind: 'receipt' | 'unreviewed';
+  changeSetId: string;
+  changeSetSha256?: string;
+  intent: string;
+  editCount: number;
+  acceptedEditIds: string[];
+  sourceSha256: string;
+  outputSha256?: string;
+  backendId: string;
+  ok: boolean;
+  touchedParts: string[];
+  fidelity: number;
+  verification: {
+    packageValid: boolean;
+    verifiedEdits: string[];
+    unverifiableEdits: string[];
+    failedEdits: Array<{ editId: string; reason: string }>;
+  };
+  droppedEdits?: Array<{ editId: string; reason: string }>;
+}
+
 export interface DesktopLocalServiceBridge {
   version: string;
   platform: string;
@@ -22,6 +50,8 @@ export interface DesktopLocalServiceBridge {
   onProposeEvent(listener: (event: DesktopProposeEnvelope) => void): void;
   offProposeEvent(listener: (event: DesktopProposeEnvelope) => void): void;
   commitWriteback(input: DesktopCommitInput): Promise<Record<string, unknown>>;
+  /** Read-only commit history; empty when no audit ledger directory is configured. */
+  readAuditHistory(input?: { documentId?: string }): Promise<DesktopAuditRecord[]>;
 }
 
 export type BrowserLocalCredentialKey = 'oa.serveToken' | 'oa.reviewToken';
@@ -34,7 +64,8 @@ export function desktopLocalServiceBridge(): DesktopLocalServiceBridge | undefin
     || typeof candidate.cancelPropose !== 'function'
     || typeof candidate.onProposeEvent !== 'function'
     || typeof candidate.offProposeEvent !== 'function'
-    || typeof candidate.commitWriteback !== 'function') return undefined;
+    || typeof candidate.commitWriteback !== 'function'
+    || typeof candidate.readAuditHistory !== 'function') return undefined;
   return candidate as DesktopLocalServiceBridge;
 }
 

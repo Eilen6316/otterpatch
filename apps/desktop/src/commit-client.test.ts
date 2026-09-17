@@ -86,6 +86,7 @@ test('commit client delegates review and commit to Electron main without rendere
       invocation = input;
       return { ok: true, fileBase64: 'b3V0', touchedParts: [] };
     },
+    async readAuditHistory() { return []; },
   };
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { otterpatch: bridge } });
   globalThis.fetch = (async () => { throw new Error('HTTP fallback must not run in Electron'); }) as typeof fetch;

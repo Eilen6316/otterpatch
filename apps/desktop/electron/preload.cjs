@@ -2,6 +2,8 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 const {
+  validateAuditHistoryInput,
+  validateAuditHistoryResult,
   validateCommitInvocation,
   validateCommitResult,
   validateProposeInvocation,
@@ -15,6 +17,7 @@ const CHANNELS = Object.freeze({
   proposeCancel: 'otterpatch:propose-cancel',
   proposeEvent: 'otterpatch:propose-event',
   commit: 'otterpatch:commit-writeback',
+  auditHistory: 'otterpatch:audit-history',
 });
 const proposeListeners = new WeakMap();
 
@@ -55,5 +58,10 @@ contextBridge.exposeInMainWorld('otterpatch', {
     const validated = validateCommitInvocation(input);
     const result = await ipcRenderer.invoke(CHANNELS.commit, validated);
     return validateCommitResult(result);
+  },
+  async readAuditHistory(input) {
+    const validated = validateAuditHistoryInput(input ?? {});
+    const result = await ipcRenderer.invoke(CHANNELS.auditHistory, validated);
+    return validateAuditHistoryResult(result);
   },
 });

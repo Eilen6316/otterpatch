@@ -193,6 +193,77 @@ function exactKeys(value, allowed, label) {
   if (unknown.length) throw new Error(`${label} contains unsupported fields`);
 }
 
+// ── commit audit history (read-only ledger projection) ──────────────────────
+
+const AUDIT_RECORD_KEYS = new Set([
+  'ts', 'documentId', 'format', 'proposalId', 'reviewerSessionId', 'reviewKind',
+  'changeSetId', 'changeSetSha256', 'intent', 'editCount', 'acceptedEditIds',
+  'sourceSha256', 'outputSha256', 'backendId', 'ok', 'touchedParts', 'fidelity',
+  'verification', 'droppedEdits',
+]);
+const AUDIT_HISTORY_LIMIT = 500;
+
+function validateAuditHistoryInput(value) {
+  const input = record(value, 'audit history input');
+  exactKeys(input, new Set(['documentId']), 'audit history input');
+  if (input.documentId === undefined) return {};
+  const documentId = boundedString(input.documentId, 'documentId', 512);
+  if (!documentId.trim()) throw new Error('documentId must not be blank');
+  return { documentId };
+}
+
+function validateAuditRecord(value, index) {
+  const entry = record(value, `audit record ${index}`);
+  exactKeys(entry, AUDIT_RECORD_KEYS, `audit record ${index}`);
+  if (typeof entry.ts !== 'string' || !entry.ts.trim()) throw new Error(`audit record ${index} ts must be a non-empty string`);
+  boundedString(entry.documentId, `audit record ${index} documentId`, 512);
+  boundedString(entry.format, `audit record ${index} format`, 16);
+  optionalString(entry.proposalId, `audit record ${index} proposalId`, 128);
+  optionalString(entry.reviewerSessionId, `audit record ${index} reviewerSessionId`, 128);
+  if (entry.reviewKind !== 'receipt' && entry.reviewKind !== 'unreviewed') throw new Error(`audit record ${index} reviewKind invalid`);
+  boundedString(entry.changeSetId, `audit record ${index} changeSetId`, 128);
+  optionalString(entry.changeSetSha256, `audit record ${index} changeSetSha256`, 128);
+  boundedString(entry.intent, `audit record ${index} intent`, 2048);
+  if (!Number.isSafeInteger(entry.editCount) || entry.editCount < 0) throw new Error(`audit record ${index} editCount invalid`);
+  optionalStringArray(entry.acceptedEditIds, `audit record ${index} acceptedEditIds`, 500, 128);
+  boundedString(entry.sourceSha256, `audit record ${index} sourceSha256`, 128);
+  optionalString(entry.outputSha256, `audit record ${index} outputSha256`, 128);
+  boundedString(entry.backendId, `audit record ${index} backendId`, 64);
+  if (typeof entry.ok !== 'boolean') throw new Error(`audit record ${index} ok must be boolean`);
+  optionalStringArray(entry.touchedParts, `audit record ${index} touchedParts`, 200, 256);
+  if (typeof entry.fidelity !== 'number' || !Number.isFinite(entry.fidelity)) throw new Error(`audit record ${index} fidelity invalid`);
+  const verification = record(entry.verification, `audit record ${index} verification`);
+  exactKeys(verification, new Set(['packageValid', 'verifiedEdits', 'unverifiableEdits', 'failedEdits']), `audit record ${index} verification`);
+  if (typeof verification.packageValid !== 'boolean') throw new Error(`audit record ${index} verification.packageValid must be boolean`);
+  optionalStringArray(verification.verifiedEdits, `audit record ${index} verifiedEdits`, 500, 128);
+  optionalStringArray(verification.unverifiableEdits, `audit record ${index} unverifiableEdits`, 500, 128);
+  if (verification.failedEdits !== undefined) {
+    if (!Array.isArray(verification.failedEdits) || verification.failedEdits.length > 500) throw new Error(`audit record ${index} failedEdits must be a bounded array`);
+    for (const [failureIndex, failure] of verification.failedEdits.entries()) {
+      const item = record(failure, `audit record ${index} failedEdits[${failureIndex}]`);
+      exactKeys(item, new Set(['editId', 'reason']), `audit record ${index} failedEdits[${failureIndex}]`);
+      boundedString(item.editId, `audit record ${index} failedEdits[${failureIndex}].editId`, 128);
+      boundedString(item.reason, `audit record ${index} failedEdits[${failureIndex}].reason`, 2048);
+    }
+  }
+  if (entry.droppedEdits !== undefined) {
+    if (!Array.isArray(entry.droppedEdits) || entry.droppedEdits.length > 500) throw new Error(`audit record ${index} droppedEdits must be a bounded array`);
+    for (const [dropIndex, drop] of entry.droppedEdits.entries()) {
+      const item = record(drop, `audit record ${index} droppedEdits[${dropIndex}]`);
+      exactKeys(item, new Set(['editId', 'reason']), `audit record ${index} droppedEdits[${dropIndex}]`);
+      boundedString(item.editId, `audit record ${index} droppedEdits[${dropIndex}].editId`, 128);
+      boundedString(item.reason, `audit record ${index} droppedEdits[${dropIndex}].reason`, 2048);
+    }
+  }
+  return entry;
+}
+
+function validateAuditHistoryResult(value) {
+  if (!Array.isArray(value)) throw new Error('audit history result must be an array');
+  if (value.length > AUDIT_HISTORY_LIMIT) throw new Error(`audit history exceeds ${AUDIT_HISTORY_LIMIT} records`);
+  return value.map((entry, index) => validateAuditRecord(entry, index));
+}
+
 module.exports = {
   MAX_IPC_BODY_BYTES,
   validateCommitInvocation,
@@ -201,4 +272,6 @@ module.exports = {
   validateProposeResult,
   validateRequestId: requestIdOf,
   validateStreamEventEnvelope,
+  validateAuditHistoryInput,
+  validateAuditHistoryResult,
 };

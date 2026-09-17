@@ -29,6 +29,20 @@ const STATUS_DICT: Record<string, string> = {
   '未填写本机服务令牌。请在模型设置中粘贴服务启动时显示的 POST token。': 'Enter the POST token shown when the local service started.',
   '本机服务令牌无效。请更新模型设置中的 POST token。': 'The local service token is invalid. Update the POST token in model settings.',
   'API Key 仅发送给本机服务和所选模型提供方;本机令牌仅发送给本机服务。': 'The API key is sent only to the local service and selected model provider; local tokens are sent only to the local service.',
+  // 提交记录(审计留痕面板)
+  '提交记录': 'Commit History',
+  '提交记录(审阅留痕)': 'Commit History (audit ledger)',
+  '暂无提交记录。配置 OtterPatch_AUDIT_DIR 后,每次审阅通过的提交都会留痕。': 'No commits yet. Set OtterPatch_AUDIT_DIR to keep a durable record of every reviewed commit.',
+  '已审阅': 'Reviewed',
+  '未审阅(显式例外)': 'Unreviewed (explicit exception)',
+  '处改动': 'edits',
+  '处验证通过': 'verified',
+  '处未通过验证': 'failed',
+  '处不可验证': 'unverifiable',
+  '输出哈希': 'Output hash',
+  '源哈希': 'Source hash',
+  '后端': 'Backend',
+  '审阅会话': 'Reviewer session',
 };
 
 export type Lang = 'zh' | 'en';
