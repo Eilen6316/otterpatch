@@ -139,6 +139,24 @@ and still serve a production Vite bundle outside Electron; migrate them to an au
 development or Electron bridge before treating their result as authoritative. Their model keys
 (`OA_EVAL_KEY` or `OTTERPATCH_TEST_KEY`) must never be committed.
 
+## Shared review-state security regressions
+
+After `npm run typecheck`, run `npm test --workspace @otterpatch/runtime`.
+`review-store.test.ts` forks independent Node processes behind IPC barriers: 12 consumers compete
+for one nonce or preserve distinct nonces, and 8 runtimes compete for one source with different
+receipts. A parent-held SQLite write transaction forces actual contention before release. Fresh
+processes check replay state. Initializers race for one key/identity; alias guards and unrelated
+document progress are tested as well.
+
+Workers are killed at initialization publication, SQLite lock acquisition, uncommitted mutation,
+completed COMMIT and durable source reservation. Tests verify journal recovery and retained
+uncertain claims without deleting locks. Other cases cover corruption/missing files, key mismatch,
+unknown schema, lock timeout, injected save/completion failure, restored replay history and explicit
+v1 migration. Permission checks explicitly skip root/Windows; these tests do not simulate power loss,
+network filesystems or rollback to stale backups. See [security.md](./security.md) for deployment,
+Node version and recovery limits. Run the normal writeback, service-security, workspace and browser
+regressions alongside this suite.
+
 ## Test hygiene
 
 - Keep deterministic fixtures and test scripts under `test/` or their owning package.

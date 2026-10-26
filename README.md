@@ -104,7 +104,12 @@ Keep the directory private to the service user.
 (`FileReviewAuthorityStore`): the HMAC secret, consumed receipt nonces, and committed-source
 ledger live in that directory, so receipts minted by one service instance verify and
 replay-block in another. Without it the review authority stays process-local. Keep the
-directory private to the service user — it contains the signing secret.
+directory private to the service user — it contains the signing secret. The shared store requires
+Node.js 22.16+ and a local filesystem with SQLite locking; nonce consumption and source reservation
+are atomic transactions. Interrupted attempts remain reserved; corrupted state fails closed.
+Existing JSON stores require explicit offline migration. See
+[deployment and recovery](./docs/en/security.md#shared-review-state-deployment-and-transaction-boundaries)
+before upgrading or restoring state.
 
 `OtterPatch_ALLOWED_ORIGINS` accepts only exact loopback HTTP(S) origins or `null`, separated by
 commas. The service always binds to `127.0.0.1`.

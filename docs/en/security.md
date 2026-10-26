@@ -43,7 +43,7 @@ the embedding host's review authority.
 - Proposal and receipt TTL defaults to 30 minutes.
 - A receipt binds the exact proposal, ChangeSet hash, source SHA-256, accepted edit IDs, reviewer
   session, policy version, and nonce.
-- Runtime rejects receipt replay, source replay after successful commit, stale policy/capability
+- Runtime rejects receipt replay, source replay after reservation or successful commit, stale policy/capability
   versions, changed files, changed ChangeSets, and changed accepted subsets.
 - Unreviewed commit is disabled by default. The MCP opt-in
   `OTTERPATCH_ALLOW_UNREVIEWED_COMMIT=1` is intentionally hazardous and still requires explicit
@@ -56,7 +56,9 @@ the embedding host's review authority.
   formats.
 - Capability and semantic validation run before review and again before write-back.
 - Scope-aware risk policy is enforced by runtime, not just displayed by the UI.
-- Commits for one `[documentId, format]` are serialized.
+- The Promise queue serializes `[documentId, canonical format]` within one process. Shared-store
+  transactions separately enforce single admission per `[documentId, canonical format, source SHA-256]`
+  across processes; the queue is not a cross-process lock.
 - A fallback backend may be selected only before execution begins.
 - Output verification is mandatory and reports package validity, locality, per-edit semantic status,
   and compatibility warnings. Unknown semantic state is `unverifiable`, never silently `verified`.
@@ -84,6 +86,106 @@ the embedding host's review authority.
 - In Electron, tokens stay in the main process. The renderer has `contextIsolation`, sandboxing,
   and no Node integration; preload exposes narrow schema/size-checked IPC, not credentials or a
   generic authenticated fetch primitive.
+
+## Shared review state: deployment and transaction boundaries
+
+`OtterPatch_REVIEW_STATE_DIR` selects `FileReviewAuthorityStore`. All participating services must
+use the same private directory on a **local filesystem with working SQLite locking and sync**.
+NFS/SMB, object storage, multiple hosts and untrusted directory writers are unsupported. This store
+requires Node.js **22.16+** with `node:sqlite` (still experimental in Node 22); no third-party or native
+addon dependency was introduced. SQLite is loaded only when this store is constructed. The default
+in-memory authority and Electron's default process-local flow do not load SQLite. Using a shared
+store inside an older Electron Node runtime requires upgrading that runtime or using a Node 22.16+
+service; it must not fall back to empty in-memory state.
+
+The published `authority-v2/` directory contains `review-secret.key`, `review-state.json` (identity,
+schema and secret fingerprint), and `review-state.sqlite`. A private staging directory is fully
+written and synced before publication. Concurrent initializers publish one complete, nonempty
+directory; losers load the winner's identity/key. An interrupted unpublished staging directory has
+never issued authority and is ignored. A sibling `review-initialized/` witness is synced before a
+constructor returns; if the published directory subsequently disappears, initialization is refused.
+Never delete the published directory or its witness to troubleshoot it.
+
+Each operation validates metadata, key fingerprint, database identity/schema, SQLite `quick_check`,
+entry types and resource limits. Missing, truncated, unreadable, malformed, unknown-version or
+mismatched state rejects operations, including signing through Runtime. Errors distinguish
+`REVIEW_STORE_CORRUPT`, `REVIEW_STORE_IO` (including filesystem error/cause), `REVIEW_STORE_BUSY`
+(5-second bounded lock wait), and `REVIEW_STORE_CAPACITY`. `REVIEW_STORE_EXPIRED` rejects receipts
+that expire while waiting for admission. There is no automatic reset or key repair.
+
+Admission uses `BEGIN IMMEDIATE` to consume the verified receipt nonce and insert a **pending source
+claim in the same transaction**. SQLite unique keys and OS-managed locks prevent lost updates;
+`synchronous=FULL` and the rollback journal persist the transaction before writeback starts. Writer
+transactions briefly serialize all documents during validation/admission/completion; none spans
+the async backend or verification. A different document can proceed while a backend is stalled.
+Do not delete journals or lock-related files; SQLite recovers interrupted writers on the next open.
+
+Only after writeback and structured read-back verification does another durable transaction mark
+the source `committed`. A failure to persist completion throws, and Runtime does not return success
+or output bytes. A thrown/unsuccessful backend, process crash, or uncertain completion **retains the
+pending claim and consumed nonce**. No lease expires and no automatic retry releases that claim.
+The `isCommittedSource` compatibility method returns true for pending as well as committed sources.
+These semantics favor at-most-once admission over automatic recovery of abandoned work. Custom
+`ReviewAuthorityStore` implementations must implement the new atomic `beginCommit` operation;
+the former separate check/remember calls cannot express that guarantee. A supplied Runtime
+`reviewSecret` must match a supplied store's key.
+
+Consumed nonces may be pruned only after receipt expiry; HMAC and expiry verification still reject
+the original receipt. Pending/committed sources are never pruned. Each table is capped at 10,000
+entries; capacity exhaustion refuses new work, never evicts replay protection. Format aliases
+(`xlsx`/`excel`, `docx`/`word`) share the same source guard.
+
+Runtime returns bytes, not a host filesystem transaction. A crash after completion persistence but
+before response delivery can leave a committed source with no delivered output; host replacement,
+backup and audit are outside this transaction. This prevents duplicate admission but does not promise
+exactly-once delivery or atomicity with arbitrary backend side effects.
+
+### Offline migration and recovery
+
+1. Stop **all** instances using this authority, including old-version services. Back up the entire
+   directory (including any SQLite journal) before inspection. For example, on a POSIX shell:
+
+   ```bash
+   state_dir=/absolute/private/review-state
+   cp -a -- "$state_dir" "${state_dir}.backup-$(date -u +%Y%m%dT%H%M%SZ)"
+   ```
+
+2. For a healthy v1 pair, build the repository and perform explicit offline migration from its root:
+
+   ```bash
+   node --input-type=module - "$state_dir" <<'JS'
+   import { FileReviewAuthorityStore } from './packages/runtime/dist/index.js';
+   new FileReviewAuthorityStore(process.argv[2], undefined, { migrateLegacy: true });
+   console.log('Review authority validated/migrated; no key material printed.');
+   JS
+   ```
+
+   Both v1 files must be present and strictly valid. Migration copies every nonce/source and the
+   existing key, adds canonical alias guards, and leaves original files untouched as evidence.
+   It cannot diagnose key/state mismatch that the old format never recorded: use a trusted matched
+   pair. Do not run old writers after migration or roll back to their stale JSON files.
+
+3. For corruption, restore a **complete matched authority** from a trusted, sufficiently current
+   backup into a separate private directory, then validate it with the constructor before switching
+   configuration. A stale snapshot loses later replay records; reconcile all subsequent consumed
+   receipts and pending/committed sources from trusted records before resuming. A valid SQLite
+   `quick_check` alone does not prove backup freshness. Never restore only the key or one state file.
+
+4. Reconcile pending claims against host output, source hashes and audit evidence. Keep them blocked
+   if the outcome is uncertain; do not delete them to retry. Use a verified latest output/new source
+   and fresh human review for subsequent work. A process crash does not require manual lock removal.
+
+5. If trustworthy history cannot be restored, keep old-document commits disabled. A separately
+   created directory generates a new authority/key and invalidates old receipts/proposals, but
+   **does not reconstruct source replay history**. Before resuming protected sources, recover their
+   full denylist or explicitly retire those sources; re-review alone is insufficient to recover the
+   lost at-most-once guarantee. Preserve damaged files and backups for investigation.
+
+POSIX initialization syncs files and directories. Node cannot fsync directories on Windows; SQLite
+still uses its native FULL-sync journal, but initial directory publication has a power-loss durability
+limitation. Process-crash recovery is tested; hardware failure, dishonest filesystem sync, hostile
+local modification, deletion of the entire authority, and rollback to an old consistent snapshot
+are outside the guarantee. Windows/macOS-specific execution must be validated on those platforms.
 
 ## Current limitations
 

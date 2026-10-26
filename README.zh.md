@@ -94,6 +94,9 @@ SHA-256、后端与验证结果。runtime 不会把它读回用于控制流；�
 `OtterPatch_REVIEW_STATE_DIR` 把服务指向共享的 `ReviewAuthorityStore`
 (`FileReviewAuthorityStore`):HMAC 密钥、已消费的 receipt nonce 和已提交源账本都放在该目录中,
 于是一个服务实例签发的 receipt 在另一个实例里也能验证并拦截重放。不设置时审阅权威保持进程本地。
+共享存储要求 Node.js 22.16+ 以及支持 SQLite 锁的本机文件系统；nonce 消费与源预占通过原子事务完成。
+中断的尝试保留预占，状态损坏时失败关闭。旧 JSON 状态须显式离线迁移，升级和恢复前请阅读
+[共享状态部署与恢复](./docs/zh/security.md#共享审阅状态部署与事务边界)。
 该目录只对服务用户可读——它包含签名密钥。
 
 `OtterPatch_ALLOWED_ORIGINS` 只接受精确的 loopback HTTP(S) Origin 或 `null`，用逗号分隔。

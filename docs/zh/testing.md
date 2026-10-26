@@ -131,6 +131,35 @@ BENCH_ONLY=w-gongwen OTTERPATCH_BENCH_KEY=... node test/expert-bench.mjs
 在把它们迁移到已鉴权的浏览器开发或 Electron bridge 前，不应把结果当成权威信号。其模型 Key
 （`OA_EVAL_KEY` 或 `OTTERPATCH_TEST_KEY`）绝不能提交。
 
+## 共享审阅状态安全回归
+
+```bash
+npm run typecheck
+npm test --workspace @otterpatch/runtime
+```
+
+`packages/runtime/src/review-store.test.ts` 使用 `child_process.fork` 和独立 worker，而非用同进程
+`Promise.all` 代替多进程。IPC 屏障同步开始，父进程实际持有 SQLite 写事务，所有子进程进入竞争
+窗口后才释放；不通过固定 sleep 碰运气。覆盖并发初始化共享密钥、12 进程消费同一/不同 nonce、
+8 个独立 Runtime 用不同 receipt 提交同源、重启进程后的 nonce/源重放保护，以及格式别名防绕过。
+
+崩溃测试在 IPC 报告的精确阶段强制终止子进程：初始化发布前/后，SQLite 获锁后、修改但未提交、
+COMMIT 完成后，以及源预占落盘后。测试检查 OS 锁释放、未提交事务回滚、已提交状态保留和
+不确定源继续阻止重试。另测有界锁超时、数据库触发器注入的保存/完成失败，以及后端等待时
+另一文档仍可完成提交。没有使用删除锁文件或后台自动解除 pending 的办法让测试通过。
+
+损坏测试覆盖空/截断/非法 JSON、缺字段、未知版本、缺失状态/密钥、SQLite 截断/非法记录、短密钥
+及密钥不匹配，检查已有 Runtime 同样拒绝签发和提交；恢复完整文件后重放历史仍在。
+权限测试在非 root POSIX 上执行，root/Windows 因权限模型不同显式 skip。离线 v1 迁移验证原密钥、
+nonce 和源历史保留，损坏/不完整配对拒绝迁移。
+
+这些测试验证本机文件系统上的进程终止恢复，不模拟硬件断电、网络文件系统、恶意目录写入者或
+旧快照回滚。Linux 通过不代表已在 Windows/macOS 实跑。共享存储的版本、部署和恢复限制见
+[安全文档](./security.md#共享审阅状态部署与事务边界)。
+
+完整回归还应执行 `npm run test:serve-security`、`npm run test:real-writeback`、`npm test`、
+`npm run build` 及本文件列出的 CI 浏览器脚本；真实模型评测仍是单独的密钥门控可选项。
+
 ## 测试卫生
 
 - 确定性 fixture 与脚本放在 `test/` 或所属 package。

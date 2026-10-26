@@ -81,7 +81,7 @@ export interface OtterPatchRuntimeOptions {
   /**
    * Durable review-authority state (secret, consumed nonces, committed sources). The default
    * is process-local; a shared store (e.g. FileReviewAuthorityStore) enables multi-process
-   * deployments. An explicit reviewSecret overrides the store's secret for this process.
+   * deployments. With a supplied store, reviewSecret must match the store's secret.
    */
   reviewStore?: ReviewAuthorityStore;
   /**
@@ -108,6 +108,10 @@ export class OtterPatchRuntime {
     this.skills = opts.skills ?? defaultLibrary();
     this.adapters = opts.adapterRegistry ?? createBuiltinAdapterRegistry();
     this.reviewStore = opts.reviewStore ?? new InMemoryReviewAuthorityStore();
+    if (opts.reviewStore && opts.reviewSecret !== undefined) {
+      const secret = typeof opts.reviewSecret === 'string' ? new TextEncoder().encode(opts.reviewSecret) : opts.reviewSecret;
+      if (sha256Bytes(secret) !== sha256Bytes(this.reviewStore.secret)) throw new Error('reviewSecret must match the supplied review store');
+    }
     this.reviewAuthority = new ReviewAuthority(opts.reviewSecret ?? this.reviewStore.secret, opts.reviewTtlMs);
     this.auditLedger = opts.auditLedger;
     this.allowUnreviewedCommit = opts.allowUnreviewedCommit ?? false;
@@ -297,6 +301,7 @@ export class OtterPatchRuntime {
 
   /** Sign a model proposal before it is shown for review, optionally binding exact source bytes by hash. */
   createProposal(cs: ChangeSet, format: string, documentId = cs.hostId, sourceFileSha256?: string): ProposalEnvelope {
+    this.reviewStore.prune(Date.now()); // Read-through health check before issuing signed authority.
     const adapter = this.adapters.create(format, cs.hostId);
     try {
       if (!adapter.writebacks().length) throw new Error(`OtterPatchRuntime: no writeback backend for format "${format}"`);
@@ -317,6 +322,7 @@ export class OtterPatchRuntime {
     sourceBytes: Uint8Array,
     reviewerSessionId: string,
   ): ReviewedProposal {
+    this.reviewStore.prune(Date.now());
     return this.reviewAuthority.review(proposal, cs, acceptedEditIds, sourceBytes, reviewerSessionId);
   }
 
@@ -428,12 +434,18 @@ export class OtterPatchRuntime {
     }
     const sourceHash = input.proposal?.sourceFileSha256 ?? sha256Bytes(input.bytes);
     const documentId = input.proposal?.documentId ?? input.changeSet.hostId;
-    const documentKey = JSON.stringify([documentId, input.format]);
-    const sourceKey = JSON.stringify([documentId, input.format, sourceHash]);
+    const canonicalFormat = adapter.meta.format;
+    const documentKey = JSON.stringify([documentId, canonicalFormat]);
+    const sourceKey = JSON.stringify([documentId, canonicalFormat, sourceHash]);
     try {
       return await this.withDocumentLock(documentKey, async () => {
-        if (receiptNonce && this.reviewStore.consumeNonce(receiptNonce, receiptExpiresAt!)) throw new Error('review receipt has already been used');
-        if (this.reviewStore.isCommittedSource(sourceKey)) throw new Error('source file has already been committed; regenerate the proposal from the latest file');
+        if (receiptExpiresAt !== undefined && receiptExpiresAt < Date.now()) throw new Error('review receipt expired');
+        // The Promise queue orders this process only. The store transaction is the
+        // cross-process gate, durably reserving the source BEFORE async writeback.
+        // Never release an uncertain claim after a backend error or process crash.
+        const admission = this.reviewStore.beginCommit(sourceKey, receiptNonce, receiptExpiresAt);
+        if (admission === 'nonce-used') throw new Error('review receipt has already been used');
+        if (admission === 'source-used') throw new Error('source file has already been committed or reserved; reconcile interrupted attempts before retrying');
         const before: DocHandle = { hostId: cs.hostId, bytes: input.bytes, rev: cs.baseRev };
         const { result: res, backendId } = await this.commitWithFallback(backends, input.format, cs, before);
         if (res.ok) this.reviewStore.rememberCommittedSource(sourceKey);

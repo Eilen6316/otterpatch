@@ -49,7 +49,8 @@ OtterPatch 保护源文档字节、审阅决定、Provider 凭据和写入修改
   宿主 schema、`/health`、桌面格式选择器和默认技能库只暴露 default 格式。
 - 能力和语义校验在审阅前以及 write-back 前各执行一次。
 - 范围感知风险策略由 runtime 强制执行，而不只是 UI 展示。
-- 同一 `[documentId, format]` 的 commit 串行执行。
+- Promise 队列只在进程内串行化同一 `[documentId, 规范格式]`；跨进程由共享存储事务保证同一
+  `[documentId, 规范格式, 源 SHA-256]` 只准入一次，不能把该队列视为跨进程锁。
 - 只有后端开始执行前才允许选择 fallback。
 - 输出验证是强制步骤，分别报告包有效性、局部性、逐 edit 语义状态和兼容性警告；未知语义
   状态必须是 `unverifiable`，不能静默写成 `verified`。
@@ -73,6 +74,88 @@ OtterPatch 保护源文档字节、审阅决定、Provider 凭据和写入修改
 - 浏览器开发模式由用户显式填写两个本机令牌，保存在该本机开发 Origin 的 storage。
 - Electron 的令牌只存在主进程。Renderer 开启 `contextIsolation` 和 sandbox、关闭 Node
   integration；preload 只暴露有 schema/大小限制的窄 IPC，不暴露凭据或通用鉴权 fetch。
+
+## 共享审阅状态：部署与事务边界
+
+设置 `OtterPatch_REVIEW_STATE_DIR` 后使用 `FileReviewAuthorityStore`。所有实例必须指向同一个
+私有目录，位于正确支持 SQLite 文件锁和同步落盘的**本机文件系统**。不支持 NFS/SMB、对象存储、
+跨机器共享或不可信用户可写的目录。该存储要求带 `node:sqlite` 的 **Node.js 22.16+**；Node 22 中
+此模块仍属实验功能。本次没有新增第三方或原生扩展依赖，只有构造文件存储时才加载 SQLite。
+默认内存存储和 Electron 默认进程内流程不加载它；若旧 Electron 的内嵌 Node 不满足版本要求，
+共享存储须升级运行时或放入 Node 22.16+ 服务，不允许静默降级为内存存储。
+
+`authority-v2/` 包含 `review-secret.key`、`review-state.json`（身份、版本及密钥指纹）和
+`review-state.sqlite`。初始化先在私有暂存目录中完整写入、同步，再发布非空目录；并发初始化
+只有一个发布者获胜，其他进程读取获胜者的密钥与状态。尚未发布的暂存目录从未签发过权威，
+崩溃后会被忽略。构造函数返回前还会同步同级的 `review-initialized/` 标记；此后若已发布目录
+丢失，就拒绝重新初始化。不得删除已发布目录或初始化标记来排障。
+
+每次操作检查元数据、密钥指纹、数据库身份与版本、SQLite `quick_check`、记录结构及资源上限。
+缺失、截断、格式错误、未知版本、权限/读取失败、密钥与状态不匹配均拒绝操作；Runtime 也拒绝
+继续签发 proposal/receipt。错误码分别为 `REVIEW_STORE_CORRUPT`、`REVIEW_STORE_IO`（保留底层
+错误及 cause）、`REVIEW_STORE_BUSY`（最多等待锁 5 秒）及 `REVIEW_STORE_CAPACITY`。
+等待准入期间已过期的 receipt 返回 `REVIEW_STORE_EXPIRED`。不会自动清空账本或修复/替换密钥。
+
+准入通过 `BEGIN IMMEDIATE` 在**同一事务中消费 nonce 并写入 pending 源预占**，持久化成功后
+才执行异步写回。SQLite 唯一键、操作系统锁和回滚日志避免丢失更新，`synchronous=FULL` 要求
+事务同步落盘。健康检查、准入、完成状态各自是短事务，短暂串行化不同文档的数据库操作；整个
+异步写回和验证期间不持有数据库锁，因此某文档后端阻塞不会阻止其他文档写回。禁止手工删除
+日志或锁相关文件；被终止进程的 OS 锁由系统释放，SQLite 在重新打开时恢复未完成事务。
+
+只有写回及结构化回读验证通过后，第二个持久化事务才将源标为 committed。完成状态保存失败
+会抛错，Runtime 不返回成功或输出字节。后端抛错、返回失败、进程崩溃或完成结果不确定时，
+**pending 预占和已消费 nonce 保留**，没有自动租约过期或自动释放后重试。兼容方法
+`isCommittedSource` 对 pending 和 committed 均返回 true。这以保守拒绝换取单次准入保证；
+自定义 `ReviewAuthorityStore` 必须实现新增的原子 `beginCommit`，不能用旧的先查后记接口替代。
+Runtime 同时传入 `reviewStore` 和 `reviewSecret` 时，两者密钥必须一致。
+
+nonce 仅在 receipt 过期后可清理，旧 receipt 仍被签名/过期校验拒绝。源预占和提交历史永不自动
+清理。两张表各限 10,000 条，达到上限拒绝新操作，绝不驱逐重放历史；`xlsx`/`excel`、
+`docx`/`word` 等别名共用同一源保护键。
+
+Runtime 的事务不包含宿主文件替换：完成状态已落盘但响应尚未交付时崩溃，可能留下 committed
+记录却没有交付输出。宿主文件替换、备份及审计仍由宿主负责；本实现保证至多一次准入，不承诺
+响应恰好交付一次，也不将任意后端副作用和数据库组成分布式事务。
+
+### 离线迁移与人工恢复
+
+1. 停止使用该目录的**所有实例，包括旧版本服务**。先完整备份目录，包含 SQLite 日志，再检查。
+   POSIX shell 示例（Windows 使用具有同等保全效果的目录复制工具）：
+
+   ```bash
+   state_dir=/absolute/private/review-state
+   cp -a -- "$state_dir" "${state_dir}.backup-$(date -u +%Y%m%dT%H%M%SZ)"
+   ```
+
+2. 健康 v1 状态须显式离线迁移。在仓库根目录构建后执行：
+
+   ```bash
+   node --input-type=module - "$state_dir" <<'JS'
+   import { FileReviewAuthorityStore } from './packages/runtime/dist/index.js';
+   new FileReviewAuthorityStore(process.argv[2], undefined, { migrateLegacy: true });
+   console.log('审阅权威已验证/迁移，未输出密钥。');
+   JS
+   ```
+
+   两个 v1 文件必须成对存在且严格合法。迁移保留密钥与全部 nonce/已提交源，补充格式别名保护，
+   不修改原文件。v1 本身没有密钥指纹，无法事后证明密钥与历史是否匹配，必须使用可信的配套来源。
+   迁移后不得再启动旧写入者，也不得回退使用已过时的 JSON 历史。
+
+3. 状态损坏时，从可信且足够新的备份恢复**完整配套权威**到另一个私有目录，用构造函数验证后
+   再切换配置。旧快照会丢失后续重放记录，恢复前必须根据可信证据补齐其后的 nonce、pending
+   和 committed 源历史。`quick_check` 通过不能证明备份足够新；不得只恢复密钥或单个文件。
+
+4. 根据宿主输出、源哈希和审计证据核对 pending。结果不确定就继续阻止该源，不得删除预占来
+   重试；后续应使用已验证的最新输出/新源并重新人工审阅。进程崩溃不需要人工删除锁。
+
+5. 无法恢复可信历史时，保持旧文档提交关闭。另建目录会产生新密钥并使旧 proposal/receipt 失效，
+   但**不会重建源重放历史**。恢复旧受保护源之前，必须恢复完整拒绝清单，或明确退役这些源；
+   仅重新审阅不能弥补已经丢失的单次提交保证。保留损坏文件和备份用于调查。
+
+POSIX 初始化同步文件与目录；Node 在 Windows 无法 fsync 目录，SQLite 仍使用原生 FULL-sync
+日志，但首次目录发布有断电持久性限制。本测试覆盖进程崩溃；硬件故障、不兑现同步承诺的文件
+系统、恶意本机修改、整个权威目录被删除、回滚到旧的一致快照均不在保证内。
+Windows/macOS 的实际执行仍需在对应平台验证。
 
 ## 当前限制
 
