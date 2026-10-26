@@ -28,6 +28,8 @@ jobs:
         run: npm run test:real-writeback
       - name: Build all workspaces
         run: npm run build
+      - name: External skill host discovery regression
+        run: npm run test:skill-surfaces
       - name: Serve security regression
         run: npm run test:serve-security
       - name: Install Playwright Chromium

@@ -15,6 +15,7 @@ import { docRevFromSha256, isResourceLimitError, type DocRev } from '@otterpatch
 import { createModelClient, MockModelClient, type ModelClient, type Provider, type ProposeRequest } from '@otterpatch/agent';
 import { OtterPatchRuntime, sha256Bytes, writeFileSafely, auditLedgerFromEnv } from '@otterpatch/runtime';
 import { readDocumentFile } from './document-input.js';
+import { skillLibraryFromEnv } from '@otterpatch/skills';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf('--' + name);
@@ -35,8 +36,17 @@ const confirmed = has('yes');
 const backup = !has('no-backup');
 
 const auditLedger = auditLedgerFromEnv();
-const rt = new OtterPatchRuntime({ ...(auditLedger ? { auditLedger } : {}) });
+const skillLibrary = skillLibraryFromEnv();
+const rt = new OtterPatchRuntime({ skills: skillLibrary, ...(auditLedger ? { auditLedger } : {}) });
 rt.on(emit);
+if (has('list-skills')) {
+  emit({ untrusted_data: true, skills: skillLibrary.all().map((card) => ({
+    id: `${card.namespace}/${card.name}`, version: card.version, checksum: card.checksum,
+    trust: card.trust, description: card.description, formats: card.formats, allowedOps: card.allowedOps,
+    license: card.license, provenance: card.provenance,
+  })) });
+  process.exit(0);
+}
 
 const isWord = format === 'word' || format === 'docx';
 const mockProposal = isWord

@@ -4,9 +4,11 @@
  * Bundles document authoring skills plus installed external skill metadata.
  */
 export { MAX_SKILL_MD_BYTES, assertSkillCard, parseSkillMd, skillId } from './parse.js';
-export type { SkillCard } from './parse.js';
+export type { SkillCard, SkillMetadata, SkillReference, SkillImportProvenance } from './parse.js';
 export * from './library.js';
 export * from './distill.js';
 export * from './directory.js';
 export * from './catalog.js';
 export * from './playbooks.js';
+export * from './importer.js';
+export * from './initialize.js';

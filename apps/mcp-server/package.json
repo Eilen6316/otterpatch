@@ -6,14 +6,16 @@
   "bin": {
     "otterpatch-mcp": "./dist/mcp.js",
     "otterpatch-run": "./dist/cli.js",
-    "otterpatch-serve": "./dist/serve.js"
+    "otterpatch-serve": "./dist/serve.js",
+    "otterpatch-skills": "./dist/skills-cli.js"
   },
   "scripts": {
     "build": "tsc -b",
     "test": "node --import tsx --test src/client-abort.test.ts src/document-input.test.ts src/http-security.test.ts",
     "mcp": "node --import tsx src/mcp.ts",
     "run": "node --import tsx src/cli.ts",
-    "serve": "node --import tsx src/serve.ts"
+    "serve": "node --import tsx src/serve.ts",
+    "skills": "node --import tsx src/skills-cli.ts"
   },
   "dependencies": {
     "@otterpatch/core": "0.0.1",

@@ -10,10 +10,12 @@
     "prebuild": "npm run generate:playbooks",
     "build": "tsc -b",
     "pretest": "npm run generate:playbooks",
-    "test": "node --import tsx --test src/skills.test.ts src/playbooks.test.ts src/distill.test.ts src/directory.test.ts"
+    "test": "node --import tsx --test src/skills.test.ts src/playbooks.test.ts src/distill.test.ts src/directory.test.ts src/importer.test.ts"
   },
   "dependencies": {
-    "@noble/hashes": "2.2.0"
+    "@noble/hashes": "2.2.0",
+    "@otterpatch/core": "0.0.1",
+    "yaml": "2.8.2"
   },
   "devDependencies": {
     "tsx": "^4.19.0"

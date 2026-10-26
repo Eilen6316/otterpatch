@@ -56,6 +56,16 @@ test('loadSkillDirectory: a missing directory is empty, not an error', () => {
   assert.deepEqual(result.errors, []);
 });
 
+test('legacy directory loader does not install reference or script Markdown as skills', () => {
+  const dir = tempDir();
+  try {
+    for (const sub of ['references', 'scripts']) {
+      mkdirSync(join(dir, sub)); writeFileSync(join(dir, sub, 'SKILL.md'), GOOD);
+    }
+    assert.deepEqual(loadSkillDirectory(dir).cards, []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('writeSkillFile: writes and returns a safe path', () => {
   const dir = tempDir();
   try {

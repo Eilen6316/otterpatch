@@ -34,7 +34,7 @@ import {
   docRevFromSha256,
   isResourceLimitError,
 } from '@otterpatch/core';
-import { defaultLibrary } from '@otterpatch/skills';
+import { skillLibraryFromEnv } from '@otterpatch/skills';
 import type { SkillLibrary } from '@otterpatch/skills';
 import { buildDiff, type OtterPatchDiff } from './diff.js';
 import { createBuiltinAdapterRegistry, decorateAdapter } from './adapters.js';
@@ -105,7 +105,7 @@ export class OtterPatchRuntime {
   private readonly commitTails = new Map<string, Promise<void>>();
 
   constructor(opts: OtterPatchRuntimeOptions = {}) {
-    this.skills = opts.skills ?? defaultLibrary();
+    this.skills = opts.skills ?? skillLibraryFromEnv();
     this.adapters = opts.adapterRegistry ?? createBuiltinAdapterRegistry();
     this.reviewStore = opts.reviewStore ?? new InMemoryReviewAuthorityStore();
     if (opts.reviewStore && opts.reviewSecret !== undefined) {

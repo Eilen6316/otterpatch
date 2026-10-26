@@ -91,6 +91,7 @@ OtterPatch_PORT
 OtterPatch_REVIEW_STATE_DIR   # shared review-authority store (multi-process deployments)
 OtterPatch_AUDIT_DIR          # durable commit audit ledger ("merged PR" records)
 OtterPatch_SKILLS_DIR         # external skill directory (demonstration-distilled skills)
+OtterPatch_SKILL_REGISTRY     # administrator-enabled, version-locked Agent Skills imports
 ```
 
 `OtterPatch_AUDIT_DIR` turns on the append-only commit audit ledger: every commit

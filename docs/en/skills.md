@@ -83,6 +83,97 @@ External skills are intentionally lower trust:
 An advisory skill can use `allowed_ops: []`. This is the right representation for chart selection
 or other expert advice when no corresponding write-back operation exists.
 
+## Controlled Agent Skills import
+
+The YAML compatibility layer supports quoted strings, block descriptions, sequences and nested
+metadata. Duplicate keys, aliases, unknown tags, prototype keys and excessive size/depth are rejected.
+Legacy numeric keywords such as `9704` retain string matching behavior. Markdown and metadata remain
+untrusted data. `allowed_ops` is a compatibility restriction, never a permission grant.
+
+`importAllowedSkill` is an administrator-only **offline** operation, separate from model tools.
+It never clones/fetches, runs `npx skills add`, installs packages or executes repository code.
+Its manually reviewed `SkillImportConfig` requires a private registry, allowlisted source ID/local
+checkout, GitHub `owner/repository`, full 40-character commit SHA, selected `SKILL.md` path/hash,
+namespace/version/formats/operations, `mode: "text-only"`, `approvedBy`, license identifier/file/hash,
+and individually approved reference paths/hashes. Hashes use `sha256:<64 lowercase hex characters>`.
+The license text and original Markdown are retained in the immutable release snapshot.
+
+The importer checks origin identity (GitHub HTTPS or SCP-style SSH) and reads pinned Git objects with
+lazy fetching disabled. Git must support `--no-lazy-fetch` (validated with 2.52). Uncommitted changes
+are ignored. Origin configuration does not prove authorship or licensing; verify authorization
+independently. Gitlinks, executable blobs, symlinks, path traversal, Windows/absolute/control-character
+paths, binary NULs and invalid UTF-8 are refused. Limits: SKILL/license 128 KiB each; at most eight
+`references/*.md`/`.txt` files, 32 KiB each; serialized release 256 KiB. No links are followed.
+
+Every approved format must be active/default in the capability manifest: PDF and default PPTX remain
+unavailable. Unsupported operations, changed upstream operation/format declarations, tool permissions,
+scripts, hooks, dependencies or runtime requirements cause rejection instead of silent adaptation.
+Unclear semantics require independent rewriting and fresh approval. Human review must also inspect
+the prose; automatic parsing cannot prove arbitrary natural language is safe.
+
+### Original pilots and administrator workflow
+
+`examples/agent-skills/` contains independently authored Excel data-quality and Word technical-document
+review pilots, including checklists, under Apache-2.0. No proprietary Office skills or unverified plugin
+content was reused. See [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
+
+After the pilot files exist in an audited commit, print an allowlist for review. This does not install:
+
+```bash
+npm run typecheck
+node scripts/prepare-pilot-import.mjs --checkout /absolute/otterpatch \
+  --revision <full-commit-sha> --registry /private/skill-registry \
+  --approved-by <reviewer-id> > /private/skill-import.json
+```
+
+Verify the source, license, operations and references. Import one selected skill, inspect its returned
+release hash, then explicitly enable it:
+
+```bash
+npm run skills --workspace @otterpatch/mcp-server -- import --config /private/skill-import.json --source otterpatch-pilots --path examples/agent-skills/excel-data-quality/SKILL.md
+npm run skills --workspace @otterpatch/mcp-server -- inspect --config /private/skill-import.json --release <release-hash>
+npm run skills --workspace @otterpatch/mcp-server -- enable --config /private/skill-import.json --id pilot/excel-data-quality --release <release-hash>
+```
+
+Repeat explicitly for `word-technical-review` if approved. Import does not change activation; a new
+release is not automatically enabled. Set `OtterPatch_SKILL_REGISTRY=/private/skill-registry` and
+restart hosts. Runtime, HTTP, CLI and MCP use `skillLibraryFromEnv`; Electron inherits this environment
+when starting the HTTP service. Explicit Runtime libraries take precedence. Existing
+`OtterPatch_SKILLS_DIR` stays compatible for local/distilled content, not third-party import approval;
+its loader skips `references/` and `scripts/` as standalone skills. Approved locked imports take
+precedence over conflicting loose external files; conflicts are reported. `--list-skills` exposes the
+CLI catalog without a provider key. Removing an allowlist entry alone does not revoke an already
+imported release: disable it and restart hosts.
+
+Enabled external cards are discoverable through untrusted catalogs, never trusted System Prompt
+metadata. `load_skill` returns their body and reference index; optional `load_skill_reference(name,path)`
+returns only exact approved in-memory snapshots as `untrusted_data`, without filesystem/network
+resolution. Bundle checksums enter Agent provenance. No import or activation tool is exposed to the
+model, HTTP or MCP. Proposal, receipt, commit and output-verification rules are unchanged.
+
+### Disable, rollback and limits
+
+```bash
+npm run skills --workspace @otterpatch/mcp-server -- disable --config /private/skill-import.json --id pilot/excel-data-quality --release <current-release-hash>
+npm run skills --workspace @otterpatch/mcp-server -- rollback --config /private/skill-import.json --id pilot/excel-data-quality --release <previous-release-hash>
+```
+
+Restart **all** hosts after state changes; already-created libraries are snapshots. Old releases remain
+available for explicit rollback and are revalidated for checksum, ID, license and current capabilities.
+Disabling guidance does not revoke already-signed reviews. Keep registry/configuration private and
+backed up; serialize administrator changes. Pointer replacement is atomic, but multi-administrator
+CAS, distributed storage, automatic remote updates and garbage collection are not implemented.
+Invalid releases/pointers are reported and omitted, never promoted or silently repaired.
+
+Runtime pilot regressions compare a simulated model before/after activation: six Chinese/traditional
+Chinese queries match the intended pilot first from 0/6 to 6/6. Tests exercise actual body/reference
+loading, valid ChangeSets, provenance, mandatory review, signature/replay rejection and real XLSX/DOCX
+read-back. Excel's mock display proposal changes from `0` to `0.00` after reading its checklist; Word
+keeps the requested replacement while adding checklist evidence. This validates integration, not
+real-model quality improvements. Real provider evaluation and native packaged-platform runs remain
+separate checks. `npm run test:skill-surfaces` starts real HTTP/MCP/CLI hosts against a temporary
+approved registry and checks discovery and disable behavior; CI runs it after the build.
+
 ## Authoring rules
 
 - Start with observations the model must collect before making changes.

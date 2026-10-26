@@ -84,6 +84,7 @@ OtterPatch_PORT
 OtterPatch_REVIEW_STATE_DIR   # 共享审阅权威存储(多进程部署)
 OtterPatch_AUDIT_DIR          # 持久提交审计留痕(“已合并 PR”记录)
 OtterPatch_SKILLS_DIR         # 外部技能目录(示范蒸馏出的技能)
+OtterPatch_SKILL_REGISTRY     # 管理员启用的 Agent Skills 版本锁仓库
 ```
 
 `OtterPatch_AUDIT_DIR` 打开 append-only 的提交审计账本：每次提交（已审阅或显式启用的

@@ -5,9 +5,8 @@ import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, docRevFromSha256,
 import { ProviderCallError, createModelClient, sanitizeStreamStatus, type AgentResponse, type ProposeRequest, type Provider } from '@otterpatch/agent';
 import {
   BUILTIN_SKILLS,
-  defaultLibrary,
+  skillLibraryFromEnv,
   distillSkillDraft,
-  loadSkillDirectory,
   renderSkillMd,
   writeSkillFile,
   type SkillCard,
@@ -35,17 +34,7 @@ const auditLedger = auditLedgerFromEnv();
 // 示范即技能:外部技能目录(OtterPatch_SKILLS_DIR)启动时加载,运行时与 /skills/save
 // 共用同一个可变 SkillLibrary——新蒸馏的技能对随后的 propose 立即生效。
 const skillsDir = process.env.OtterPatch_SKILLS_DIR?.trim();
-const skillLibrary: SkillLibrary = defaultLibrary();
-if (skillsDir) {
-  const loaded = loadSkillDirectory(skillsDir);
-  for (const card of loaded.cards) {
-    try {
-      skillLibrary.add(card);
-    } catch {
-      // 冲突的技能跳过(reject 策略);坏文件在 loadSkillDirectory 已记录。
-    }
-  }
-}
+const skillLibrary: SkillLibrary = skillLibraryFromEnv();
 const rt = new OtterPatchRuntime({
   ...(reviewStore ? { reviewStore } : {}),
   ...(auditLedger ? { auditLedger } : {}),
@@ -450,6 +439,8 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
             description: card.description,
             formats: [...card.formats],
             allowedOps: [...card.allowedOps],
+            trust: card.trust, untrusted_data: true,
+            version: card.version, checksum: card.checksum, license: card.license, provenance: card.provenance,
           }));
         send(req, res, 200, { ok: true, skills, directory: skillsDir ?? null });
         return;

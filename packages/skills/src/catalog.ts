@@ -4,8 +4,8 @@
  * it → built-in; domain/template/region/industry-specific skills (e.g. academic paper templates,
  * company weekly reports, investment-banking models) → not built-in; users install them from
  * external SKILL.md files (SkillLibrary.install).
- * Security: built-ins are trusted by default; external skills (which may carry L2 scripts)
- * require sandboxing + explicit trust before installation.
+ * Security: only immutable bundled cards are trusted; external text is always untrusted.
+ * No external L2 script executor or third-party tool permission is enabled.
  */
 import { defineBuiltinSkill, type SkillCard } from './parse.js';
 import { SkillLibrary } from './library.js';

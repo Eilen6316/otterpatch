@@ -37,9 +37,15 @@ const SYNONYM_GROUPS = [
   ['spreadsheet', 'spreadsheets', 'sheet', 'sheets', 'excel', 'xlsx', '电子表格', '表格'],
   ['document', 'documents', 'word', 'docx', '文档'],
   ['format', 'formatting', 'layout', '排版', '格式'],
+  ['quality', '数据质量', '质量检查', '数据校验', '資料品質', '数据核查'],
+  ['duplicate', 'duplicates', '重复值', '重复数据', '去重', '重複值'],
+  ['missing', 'missing values', '缺失值', '空值', '空白单元格', '缺漏值'],
+  ['technical', '技术文档', '技術文件', '技术规范', '技術文檔'],
+  ['terminology', '术语', '術語', '名词一致性'],
 ] as const;
 
 const SYNONYM_CANONICAL = new Map<string, string>();
+const REVIEW_SIGNALS = new Set(['quality', 'duplicate', 'missing', 'technical', 'terminology']);
 for (const group of SYNONYM_GROUPS) {
   for (const value of group) SYNONYM_CANONICAL.set(normalize(value), normalize(group[0]));
 }
@@ -78,11 +84,15 @@ function containsSignal(intent: string, intentWords: ReadonlySet<string>, signal
   if (!normalized) return false;
   if (/^[a-z0-9_-]+$/.test(normalized)) {
     const canonical = SYNONYM_CANONICAL.get(normalized) ?? stem(normalized);
-    return intentWords.has(canonical);
+    return intentWords.has(canonical) || (REVIEW_SIGNALS.has(canonical) && [...SYNONYM_CANONICAL].some(([alias, group]) => group === canonical
+      && /[^a-z0-9_-]/.test(alias) && intent.includes(alias)));
   }
   const compact = normalized.replace(/\s+/g, ' ');
   if (compact.length < 2) return false;
-  return intent.includes(compact);
+  if (intent.includes(compact)) return true;
+  const canonical = SYNONYM_CANONICAL.get(compact);
+  return Boolean(canonical && REVIEW_SIGNALS.has(canonical) && [...SYNONYM_CANONICAL].some(([alias, group]) => group === canonical
+    && (/^[a-z0-9_-]+$/.test(alias) ? intentWords.has(canonical) : intent.includes(alias))));
 }
 
 function primaryLocale(locale: string): string {

@@ -2,9 +2,9 @@
  * 技能目录的文件层:从目录加载外部 SKILL.md、把蒸馏产物写入目录。
  * 与 SkillLibrary(纯内存)解耦——加载失败永不抛错,坏文件只是跳过并给出原因。
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseSkillMd, type SkillCard } from './parse.js';
+import { MAX_SKILL_MD_BYTES, parseSkillMd, type SkillCard } from './parse.js';
 
 export interface SkillDirectoryLoadResult {
   cards: SkillCard[];
@@ -32,7 +32,7 @@ export function loadSkillDirectory(directory: string): SkillDirectoryLoadResult 
     }
     for (const entry of entries) {
       const full = join(dir, entry.name);
-      if (entry.isDirectory()) collect(full, depth + 1);
+      if (entry.isDirectory() && !['references', 'scripts', '.git', 'releases', 'active'].includes(entry.name)) collect(full, depth + 1);
       else if (entry.isFile() && (entry.name.endsWith('.md') || entry.name.endsWith('.markdown'))) files.push(full);
     }
   };
@@ -40,6 +40,8 @@ export function loadSkillDirectory(directory: string): SkillDirectoryLoadResult 
 
   for (const file of files) {
     try {
+      const stat = lstatSync(file);
+      if (!stat.isFile() || stat.size > MAX_SKILL_MD_BYTES) throw new Error('invalid skill file/size limit');
       const card = parseSkillMd(readFileSync(file, 'utf8'), file);
       cards.push(card);
     } catch (error) {
