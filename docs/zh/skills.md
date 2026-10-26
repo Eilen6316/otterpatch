@@ -166,3 +166,10 @@ MCP、CLI，检查批准 registry 的发现与禁用；CI 在构建后执行。
 - 元数据保持 versioned 和 locale-specific；行为变化时提升 version。
 - 修改后运行 `npm test --workspace @otterpatch/skills`。测试会确保所有内置技能都有 checksum、
   namespace、能力边界，并不包含陈旧操作声明；同时验证冻结的 PPTX 元数据不会泄漏进默认库。
+
+
+## Official internal-comms / 官方技能验收
+
+见 [官方 internal-comms 接入审计](./internal-comms-audit.md)：固定上游 SHA、文件引用型许可证、
+批准的 examples、独立本地适配、实际 CLI 生命周期，以及工程 PASS 与真实模型 SKIPPED 的分别报告。
+损坏或禁用的 registry ID 不会回退到同名松散文件。

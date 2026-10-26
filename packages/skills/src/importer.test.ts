@@ -35,7 +35,7 @@ function fixture(md = markdown) {
   mkdirSync(join(checkout, 'quality', 'references'), { recursive: true });
   writeFileSync(join(checkout, 'quality', 'SKILL.md'), md);
   writeFileSync(join(checkout, 'quality', 'references', 'check.md'), '核对缺失值与显示格式。');
-  writeFileSync(join(checkout, 'LICENSE'), 'Fixture license approved by test administrator.');
+  writeFileSync(join(checkout, 'LICENSE'), readFileSync(new URL('../../../third-party/anthropic-internal-comms/LICENSE.txt', import.meta.url)));
   git('add', '.'); git('commit', '-qm', 'approved skill');
   const config: SkillImportConfig = { version: 1, registryDirectory: join(root, 'registry'), sources: [{
     id: 'approved', checkoutDirectory: checkout, repository: 'example/approved', revision: git('rev-parse', 'HEAD'), skills: [{
@@ -174,4 +174,96 @@ test('Git symlinks, gitlinks, oversized files, and invalid UTF-8 cannot become r
       assert.throws(() => importAllowedSkill(f.config, 'approved', f.approval.path));
     } finally { f.cleanup(); }
   }
+});
+
+test('file-reference licenses require exact path, standard terms, original declaration and review source', () => {
+  const declaration = 'Complete terms in LICENSE.txt';
+  const f = fixture(markdown.replace('license: Apache-2.0', `license: ${declaration}`));
+  try {
+    writeFileSync(join(f.checkout, 'quality', 'LICENSE.txt'), readFileSync(join(f.checkout, 'LICENSE')));
+    f.git('add', '.'); f.git('commit', '-qm', 'license file'); f.config.sources[0]!.revision = f.git('rev-parse', 'HEAD');
+    f.approval.license = { ...f.approval.license, path: 'quality/LICENSE.txt', declaration, reviewSource: 'test: reviewed standard Apache normative terms' };
+    const imported = importAllowedSkill(f.config, 'approved', f.approval.path);
+    assert.equal(imported.card.license, 'Apache-2.0');
+    assert.equal(imported.card.provenance?.licenseDeclaration, declaration);
+    assert.equal(imported.card.provenance?.licenseReviewSource, f.approval.license.reviewSource);
+    delete f.approval.license.reviewSource;
+    assert.throws(() => importAllowedSkill(f.config, 'approved', f.approval.path), /audit source/);
+    f.approval.license.reviewSource = 'test: reviewed';
+    f.approval.license.path = 'LICENSE';
+    assert.throws(() => importAllowedSkill(f.config, 'approved', f.approval.path), /different file/);
+    f.approval.license.path = 'quality/LICENSE.txt';
+    const conflict = readFileSync(join(f.checkout, 'LICENSE'), 'utf8') + '\nProprietary: no license granted.';
+    writeFileSync(join(f.checkout, 'quality', 'LICENSE.txt'), conflict);
+    f.git('add', '.'); f.git('commit', '-qm', 'conflicting license footer'); f.config.sources[0]!.revision = f.git('rev-parse', 'HEAD');
+    f.approval.license.checksum = skillChecksum(conflict);
+    assert.throws(() => importAllowedSkill(f.config, 'approved', f.approval.path), /conflicts/);
+  } finally { f.cleanup(); }
+});
+
+for (const declaration of ['Proprietary', 'All rights reserved', 'unknown', 'MIT', 'See the license somewhere']) {
+  test(`license declaration is not automatically upgraded: ${declaration}`, () => {
+    const f = fixture(markdown.replace('license: Apache-2.0', `license: ${declaration}`));
+    try { assert.throws(() => importAllowedSkill(f.config, 'approved', f.approval.path), /license/); }
+    finally { f.cleanup(); }
+  });
+}
+
+test('forged Apache text with an approved checksum and unknown SPDX are both rejected', () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.checkout, 'LICENSE'), 'Apache-2.0 heading only. Proprietary, no license granted.');
+    f.git('add', '.'); f.git('commit', '-qm', 'forged license'); f.config.sources[0]!.revision = f.git('rev-parse', 'HEAD');
+    f.approval.license.checksum = skillChecksum(readFileSync(join(f.checkout, 'LICENSE'), 'utf8'));
+    assert.throws(() => importAllowedSkill(f.config, 'approved', f.approval.path), /reviewed Apache/);
+    f.approval.license.spdx = 'Fake-License-1.0';
+    assert.throws(() => importAllowedSkill(f.config, 'approved', f.approval.path), /unknown.*SPDX/);
+  } finally { f.cleanup(); }
+});
+
+test('approved examples are locked text; local adaptation is separate, bounded and hash-bound', () => {
+  const f = fixture();
+  try {
+    mkdirSync(join(f.checkout, 'quality', 'examples'));
+    writeFileSync(join(f.checkout, 'quality', 'examples', 'check.md'), 'Approved example.');
+    f.git('add', '.'); f.git('commit', '-qm', 'example'); f.config.sources[0]!.revision = f.git('rev-parse', 'HEAD');
+    f.approval.references = [{ path: 'examples/check.md', checksum: skillChecksum('Approved example.') }];
+    const original = importAllowedSkill(f.config, 'approved', f.approval.path);
+    f.approval.adaptation = { sourceChecksum: f.approval.checksum, keywords: ['项目周报'], triggers: ['核查周报'], scope: 'advisory', instructions: 'Local guidance, never tool authority.' };
+    const adapted = importAllowedSkill(f.config, 'approved', f.approval.path);
+    assert.equal(adapted.card.instructions, original.card.instructions);
+    assert.equal(adapted.card.provenance?.sourceChecksum, f.approval.checksum);
+    assert.notEqual(adapted.release, original.release);
+    assert.equal(adapted.card.references?.[0]?.path, 'examples/check.md');
+    f.approval.adaptation.sourceChecksum = 'sha256:' + '0'.repeat(64);
+    assert.throws(() => importAllowedSkill(f.config, 'approved', f.approval.path), /checksum binding/);
+  } finally { f.cleanup(); }
+});
+
+test('corrupt or disabled registry entries reserve IDs against loose-file impersonation', () => {
+  const f = fixture();
+  try {
+    const imported = importAllowedSkill(f.config, 'approved', f.approval.path);
+    const loose = join(f.root, 'loose'); mkdirSync(loose);
+    writeFileSync(join(loose, 'shadow.md'), markdown.replace('name: quality', 'name: quality\nnamespace: pilot'));
+    assert.ok(initializeSkillLibrary({ directory: loose }).library.resolve(imported.id), 'the loose shadow is otherwise loadable');
+    const assertReserved = (expectsRegistryError: boolean): void => {
+      const registry = loadImportedSkills(f.config.registryDirectory);
+      assert.deepEqual(registry.reservedIds, [imported.id]);
+      assert.deepEqual(registry.cards, []);
+      assert.equal(registry.errors.length > 0, expectsRegistryError);
+      const initialized = initializeSkillLibrary({ registry: f.config.registryDirectory, directory: loose });
+      assert.equal(initialized.library.resolve(imported.id), undefined);
+      assert.ok(initialized.errors.some(({ reason }) => reason.includes('registry-reserved ID')));
+    };
+    setImportedSkillState(f.config.registryDirectory, imported.id, imported.release, false);
+    assertReserved(false);
+    setImportedSkillState(f.config.registryDirectory, imported.id, imported.release, true);
+    writeFileSync(join(f.config.registryDirectory, 'releases', `${imported.release}.json`), '{}');
+    assertReserved(true);
+    writeFileSync(join(f.config.registryDirectory, 'active', 'pilot', 'quality.json'), '{truncated');
+    assertReserved(true);
+    writeFileSync(join(f.config.registryDirectory, 'active', 'pilot', 'quality.json'), JSON.stringify({ version: 1, id: 'pilot/other', release: imported.release, enabled: true }));
+    assertReserved(true); // A corrupt pointer's payload must not release its filename identity.
+  } finally { f.cleanup(); }
 });

@@ -14,6 +14,7 @@ export interface SkillImportProvenance {
   readonly repository: string; readonly revision: string; readonly path: string;
   readonly sourceChecksum: string; readonly licensePath: string; readonly licenseChecksum: string;
   readonly approvedBy: string; readonly capabilityVersion: string;
+  readonly licenseDeclaration?: string; readonly licenseReviewSource?: string;
 }
 export interface SkillCard {
   name: string;
@@ -33,6 +34,7 @@ export interface SkillCard {
   metadata?: Readonly<Record<string, SkillMetadata>>;
   references?: readonly SkillReference[];
   provenance?: SkillImportProvenance;
+  adaptation?: { readonly instructions: string; readonly scope: string; readonly checksum: string };
   trust: 'builtin' | 'external';
   immutable: boolean;
 }

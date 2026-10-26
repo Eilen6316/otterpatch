@@ -198,9 +198,10 @@ export class OtterPatchRuntime {
    *  drawio simulates topology and PPTX resolves text against exact run boundaries. */
   private verifyOpts(req: ProposeRequest, adapter: HostAdapter, control: ModelCallOptions = {}): RespondOptions | undefined {
     const structural = adapter.proposalVerifier({ context: req.context, snapshot: req });
-    if (!structural && !control.signal) return undefined;
+    if (!structural && !control.signal && !control.onUsage) return undefined;
     return {
       ...(control.signal ? { signal: control.signal } : {}),
+      ...(control.onUsage ? { onUsage: control.onUsage } : {}),
       ...(structural ? { verify: withFinalModelReview(structural), maxRepairs: 2 } : {}),
     };
   }

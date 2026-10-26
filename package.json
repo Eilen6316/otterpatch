@@ -35,7 +35,9 @@
     "test:drawio:roundtrip": "node test/drawio-roundtrip.mjs",
     "test:drawio:shapes": "node test/shape-engine-e2e.mjs",
     "eval:excel:copysheet": "node test/eval-excel-copysheet.mjs",
-    "test:skill-surfaces": "node test/skill-surfaces.mjs"
+    "test:skill-surfaces": "node test/skill-surfaces.mjs",
+    "test:internal-comms": "node --test test/internal-comms-regression.mjs",
+    "eval:internal-comms": "node test/eval-internal-comms.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",

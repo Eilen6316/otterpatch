@@ -5,6 +5,7 @@ import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readF
 import { join, posix, resolve } from 'node:path';
 import { CAPABILITY_MANIFEST_VERSION, capabilityManifestFor } from '@otterpatch/core';
 import { assertSkillCard, MAX_SKILL_MD_BYTES, parseSkillMd, skillId, type SkillCard, type SkillReference } from './parse.js';
+import { validateSkillLicense, type ApprovedSkillLicense } from './license.js';
 
 export const MAX_REFERENCE_BYTES = 32 * 1024;
 const MAX_BUNDLE_BYTES = 256 * 1024;
@@ -17,8 +18,10 @@ export interface SkillImportApproval extends ApprovedFile {
   allowedOps: string[];
   mode: 'text-only';
   approvedBy: string;
-  license: ApprovedFile & { spdx: string };
+  license: ApprovedSkillLicense;
   references: ApprovedFile[];
+  /** Local guidance is separate from unchanged upstream text and included in the release hash. */
+  adaptation?: { sourceChecksum: string; keywords: string[]; triggers: string[]; instructions: string; scope: string };
 }
 export interface AllowedSkillSource {
   id: string;
@@ -90,7 +93,7 @@ function cardFromRelease(payload: ReleasePayload): SkillCard {
     }
   }
   if (parsed.metadata?.version !== undefined && parsed.version !== approval.version) throw new Error('approved version changes upstream meaning');
-  if (parsed.license && parsed.license !== approval.license.spdx) throw new Error('license declaration conflicts with approval');
+  validateSkillLicense(parsed.license, approval.license, payload.licenseText, approval.path);
   const formats = canonicalFormats(approval.formats);
   if (parsed.metadata?.formats !== undefined && !same(canonicalFormats(parsed.formats), formats)) throw new Error('approved formats conflict with upstream');
   if (!Array.isArray(approval.allowedOps) || approval.allowedOps.length > 64 || !approval.allowedOps.every((op) => typeof op === 'string')) throw new Error('invalid approved operations');
@@ -104,7 +107,7 @@ function cardFromRelease(payload: ReleasePayload): SkillCard {
   const seen = new Set<string>();
   const references: SkillReference[] = approval.references.map((file, i) => {
     safePath(file.path);
-    if (!/^references\/.+\.(?:md|txt)$/i.test(file.path) || seen.has(file.path)) throw new Error('only unique approved references/ text paths allowed');
+    if (!/^(?:references|examples)\/.+\.(?:md|txt)$/i.test(file.path) || seen.has(file.path)) throw new Error('only unique approved references/examples text paths allowed');
     seen.add(file.path);
     const reference = payload.references[i]!;
     if (reference.path !== file.path || Buffer.byteLength(reference.content, 'utf8') > MAX_REFERENCE_BYTES) throw new Error('reference mismatch/size limit');
@@ -113,14 +116,25 @@ function cardFromRelease(payload: ReleasePayload): SkillCard {
   });
   const id = `${approval.namespace}/${parsed.name}`;
   safeId(id);
+  const adaptation = approval.adaptation;
+  if (adaptation) {
+    if (adaptation.sourceChecksum !== approval.checksum || typeof adaptation.instructions !== 'string'
+      || Buffer.byteLength(adaptation.instructions, 'utf8') > 8192 || typeof adaptation.scope !== 'string' || adaptation.scope.length > 200
+      || !Array.isArray(adaptation.keywords) || !Array.isArray(adaptation.triggers)
+      || [...adaptation.keywords, ...adaptation.triggers].some((item) => typeof item !== 'string')) throw new Error('invalid adaptation or upstream checksum binding');
+  }
   const card: SkillCard = Object.freeze({
     ...parsed, namespace: approval.namespace, version: approval.version, formats: Object.freeze(formats),
     allowedOps: Object.freeze([...approval.allowedOps]), trust: 'external', immutable: false,
     checksum: skillChecksum(JSON.stringify(payload)), license: approval.license.spdx,
+    keywords: Object.freeze([...parsed.keywords, ...(adaptation?.keywords ?? [])]),
+    triggers: Object.freeze([...parsed.triggers, ...(adaptation?.triggers ?? [])]),
+    ...(adaptation ? { adaptation: Object.freeze({ instructions: adaptation.instructions, scope: adaptation.scope, checksum: skillChecksum(JSON.stringify(adaptation)) }) } : {}),
     source: `github:${payload.repository}@${payload.revision}:${approval.path}`,
     provenance: Object.freeze({ repository: payload.repository, revision: payload.revision, path: approval.path,
       sourceChecksum: approval.checksum, licensePath: approval.license.path, licenseChecksum: approval.license.checksum,
-      approvedBy: approval.approvedBy, capabilityVersion: CAPABILITY_MANIFEST_VERSION }),
+      approvedBy: approval.approvedBy, capabilityVersion: CAPABILITY_MANIFEST_VERSION,
+      licenseDeclaration: parsed.license, licenseReviewSource: approval.license.reviewSource }),
     references: Object.freeze(references),
   });
   assertSkillCard(card);
@@ -216,17 +230,20 @@ export function setImportedSkillState(registry: string, id: string, release: str
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   atomicWrite(join(directory, `${id.split('/')[1]}.json`), JSON.stringify({ version: 1, id, release, enabled }));
 }
-export function loadImportedSkills(registry: string): { cards: SkillCard[]; errors: Array<{ file: string; reason: string }> } {
+export function loadImportedSkills(registry: string): { cards: SkillCard[]; errors: Array<{ file: string; reason: string }>; reservedIds: string[] } {
   const cards: SkillCard[] = [];
   const errors: Array<{ file: string; reason: string }> = [];
+  const reservedIds: string[] = [];
   const active = join(registry, 'active');
   rejectDirectorySymlink(registry);
   rejectDirectorySymlink(active);
-  if (!existsSync(active)) return { cards, errors };
+  if (!existsSync(active)) return { cards, errors, reservedIds };
   for (const namespace of readdirSync(active, { withFileTypes: true })) {
     if (!namespace.isDirectory()) { errors.push({ file: namespace.name, reason: 'invalid registry namespace' }); continue; }
     for (const entry of readdirSync(join(active, namespace.name), { withFileTypes: true })) {
       const file = join(active, namespace.name, entry.name);
+      const reservedId = `${namespace.name}/${entry.name.slice(0, -5)}`;
+      if (entry.name.endsWith('.json')) { try { safeId(reservedId); reservedIds.push(reservedId); } catch { /* invalid IDs cannot be installed */ } }
       try {
         if (!entry.isFile() || !entry.name.endsWith('.json')) throw new Error('invalid registry pointer');
         const pointer = JSON.parse(readBoundedFile(file)) as { version: number; id: string; release: string; enabled: boolean };
@@ -238,7 +255,7 @@ export function loadImportedSkills(registry: string): { cards: SkillCard[]; erro
       } catch (error) { errors.push({ file, reason: error instanceof Error ? error.message : String(error) }); }
     }
   }
-  return { cards, errors };
+  return { cards, errors, reservedIds };
 }
 function atomicWrite(path: string, text: string): void {
   const temp = `${path}.${randomUUID()}.tmp`;

@@ -103,7 +103,7 @@ lazy fetching disabled. Git must support `--no-lazy-fetch` (validated with 2.52)
 are ignored. Origin configuration does not prove authorship or licensing; verify authorization
 independently. Gitlinks, executable blobs, symlinks, path traversal, Windows/absolute/control-character
 paths, binary NULs and invalid UTF-8 are refused. Limits: SKILL/license 128 KiB each; at most eight
-`references/*.md`/`.txt` files, 32 KiB each; serialized release 256 KiB. No links are followed.
+`references/` or `examples/` Markdown/text files, 32 KiB each; serialized release 256 KiB. No links are followed.
 
 Every approved format must be active/default in the capability manifest: PDF and default PPTX remain
 unavailable. Unsupported operations, changed upstream operation/format declarations, tool permissions,
@@ -186,3 +186,11 @@ approved registry and checks discovery and disable behavior; CI runs it after th
 - Run `npm test --workspace @otterpatch/skills` after editing. Tests ensure every built-in stays
   checksummed, namespaced, capability-bounded, and free of obsolete operation claims; they also
   verify that frozen PPTX metadata never leaks into the default library.
+
+
+## Official internal-comms / 官方技能验收
+
+See [the official internal-comms audit](./internal-comms-audit.md) for the fixed upstream SHA,
+file-reference license rules, exact example resources, separate local adaptation, actual CLI lifecycle
+and the distinct engineering PASS versus real-model SKIPPED result. Damaged or disabled registry
+IDs cannot fall back to same-name loose files.

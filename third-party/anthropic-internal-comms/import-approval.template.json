@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "registryDirectory": "./.work/internal-comms-registry",
+  "sources": [
+    {
+      "id": "anthropic-internal-comms",
+      "checkoutDirectory": "../skill-audit/anthropics-skills",
+      "repository": "anthropics/skills",
+      "revision": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
+      "skills": [
+        {
+          "path": "skills/internal-comms/SKILL.md",
+          "checksum": "sha256:067b7587a344a928fc6534ef66b1bcd591fc7c26d207ea7ca3334aeb678d6475",
+          "namespace": "anthropic",
+          "version": "1.0.0",
+          "formats": [
+            "word"
+          ],
+          "allowedOps": [
+            "replaceText",
+            "setStyle"
+          ],
+          "mode": "text-only",
+          "approvedBy": "",
+          "license": {
+            "spdx": "Apache-2.0",
+            "path": "skills/internal-comms/LICENSE.txt",
+            "checksum": "sha256:bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362",
+            "declaration": "Complete terms in LICENSE.txt",
+            "reviewSource": "https://github.com/anthropics/skills/blob/dbd4588f9e1033efb41dad4bef2f7947c8993d44/skills/internal-comms/LICENSE.txt; docs/zh/internal-comms-audit.md"
+          },
+          "references": [
+            {
+              "path": "examples/3p-updates.md",
+              "checksum": "sha256:087e4363c0f3513728a7e695eeb9ead5c3ecd12a4681b59340691180e65b68fc"
+            },
+            {
+              "path": "examples/company-newsletter.md",
+              "checksum": "sha256:30f81cfbdb03858a006169c72169024089c7c5d3d32611d337782da4f38c86b5"
+            },
+            {
+              "path": "examples/faq-answers.md",
+              "checksum": "sha256:5ecd3356cd6666937f2ebefa753253edfdbdca15e368d07baf398bfcced72484"
+            },
+            {
+              "path": "examples/general-comms.md",
+              "checksum": "sha256:4d3a4bb198a77626bcf018e96b2b45a2dbabed172d4ade0fcd70d23ae8a47a47"
+            }
+          ],
+          "adaptation": {
+            "sourceChecksum": "sha256:067b7587a344a928fc6534ef66b1bcd591fc7c26d207ea7ca3334aeb678d6475",
+            "keywords": [
+              "项目周报",
+              "工作汇报",
+              "领导汇报",
+              "内部通知",
+              "内部 FAQ",
+              "团队周报"
+            ],
+            "triggers": [
+              "项目周报",
+              "工作汇报",
+              "领导汇报",
+              "团队内部通知",
+              "FAQ 的语言和结构"
+            ],
+            "scope": "existing-word-review; existing replaceText/setStyle capabilities only",
+            "instructions": "这是独立批准的本地适配，不是上游原文。只审阅已有 Word 文档，基于已读段落提出唯一锚定的局部 replaceText/setStyle；权限来自既有 capability，不来自本技能。保留用户事实、数值、日期与不确定性，未知事实应澄清。四份 examples 仅作低信任写作参考；原文提到的 Slack/邮件/日历或外部工具在本宿主不可用，不得伪称已查询，不得扩充工具或执行脚本。不能自由新建 DOCX、任意增删段落或改写 OOXML。格式要求与用户现有文档冲突时先澄清；不要强行加入 emoji、指标或新章节。所有编辑必须经 Proposal、人工 ReviewReceipt、Commit 和语义回读，不得自动提交。"
+          }
+        }
+      ]
+    }
+  ]
+}

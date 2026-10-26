@@ -10,6 +10,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, type ChangeSet } from '@otterpatch/core';
 import type { AgentResponse, HostDialect, ModelCallOptions, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
+import { notifyModelUsage } from './model.js';
 import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, execReadTool, limitToolResult, parseClarify, proposalSystem, recentHistory, respondSystem, validMaxTokens, validProviderTimeout } from './sheet-tools.js';
 import { NUDGE_DIRECT, NUDGE_TOOLIFY, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
 import { salvageProposalArgs, salvageText, salvagedProposalPayload } from './json-salvage.js';
@@ -128,6 +129,7 @@ export class AnthropicModelClient implements ModelClient {
     const output = res.content.map((block) => block.type === 'text' ? block.text : block.type === 'tool_use' ? block.name + JSON.stringify(block.input) : '').join('');
     assertModelOutputChars(output.length);
     budget.recordOutput(output, res.usage?.output_tokens);
+    notifyModelUsage(opts, res.usage?.input_tokens, res.usage?.output_tokens, (res.usage?.cache_read_input_tokens ?? 0) + (res.usage?.cache_creation_input_tokens ?? 0));
     const block = res.content.find((b) => b.type === 'tool_use');
     if (!block || block.type !== 'tool_use') {
       throw new Error(`AnthropicModelClient: model did not call ${dialect.toolName}`);
@@ -162,6 +164,7 @@ export class AnthropicModelClient implements ModelClient {
       const output = text + toolUses.map((tool) => tool.name + JSON.stringify(tool.input)).join('');
       assertModelOutputChars(output.length);
       budget.recordOutput(output, res.usage?.output_tokens);
+      notifyModelUsage(opts, res.usage?.input_tokens, res.usage?.output_tokens, (res.usage?.cache_read_input_tokens ?? 0) + (res.usage?.cache_creation_input_tokens ?? 0));
       if (!toolUses.length) {
         // No tool call this turn: empty text → nudge to produce a result; non-empty prose →
         // "prose proposal" failure mode, nudge once to toolify it (routing contract: every

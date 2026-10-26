@@ -1,0 +1,19 @@
+{
+  "status": "SKIPPED — no real model evaluation",
+  "reason": "no BYOK API key",
+  "provider": "claude",
+  "plannedTasksPerGroup": 12,
+  "groups": {
+    "A": {
+      "executed": 0,
+      "metrics": null
+    },
+    "B": {
+      "executed": 0,
+      "metrics": null
+    }
+  },
+  "humanReview": "NOT PERFORMED",
+  "tokens": null,
+  "costUSD": null
+}

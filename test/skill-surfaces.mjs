@@ -10,6 +10,7 @@ import { once } from 'node:events';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { importAllowedSkill, setImportedSkillState } from '@otterpatch/skills';
+import { officialRegistry } from './internal-comms-fixture.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'otterpatch-skill-surfaces-'));
 let service;
@@ -26,6 +27,8 @@ try {
     '--revision', git('rev-parse', 'HEAD'), '--registry', join(root, 'registry'), '--approved-by', 'surface-test'], { encoding: 'utf8' }));
   const releases = config.sources[0].skills.map((skill) => importAllowedSkill(config, 'otterpatch-pilots', skill.path));
   for (const release of releases) setImportedSkillState(config.registryDirectory, release.id, release.release, true);
+  const official = officialRegistry(config.registryDirectory);
+  releases.push(official);
   const env = Object.fromEntries(Object.entries({ ...process.env,
     OtterPatch_SKILL_REGISTRY: config.registryDirectory, OtterPatch_SKILLS_DIR: '',
     OtterPatch_REVIEW_STATE_DIR: '', OtterPatch_AUDIT_DIR: '',
@@ -36,7 +39,7 @@ try {
       assert.ok(card, `missing ${release.id}`);
       assert.equal(card.trust, 'external'); assert.equal(card.checksum, release.card.checksum);
       assert.equal(card.license, 'Apache-2.0');
-      assert.equal(card.provenance.revision, config.sources[0].revision);
+      assert.equal(card.provenance.revision, release.id === official.id ? official.card.provenance.revision : config.sources[0].revision);
     }
     assert.ok(!skills.some((skill) => skill.formats?.some((format) => ['pdf', 'ppt', 'pptx'].includes(format))));
   };
@@ -74,8 +77,8 @@ try {
 
   for (const release of releases) setImportedSkillState(config.registryDirectory, release.id, release.release, false);
   const disabled = JSON.parse(execFileSync(process.execPath, ['apps/mcp-server/dist/cli.js', '--list-skills'], { env, encoding: 'utf8', timeout: 10_000 }));
-  assert.ok(!disabled.skills.some((skill) => skill.id.startsWith('pilot/')));
-  console.log('[skill-surfaces] HTTP/MCP/CLI discover both approved external pilots; restarted CLI honors disable; no install/exec tools');
+  assert.ok(!disabled.skills.some((skill) => skill.id.startsWith('pilot/') || skill.id === official.id));
+  console.log('[skill-surfaces] HTTP/MCP/CLI discover the official internal-comms and both pilots; restarted CLI honors disable; no install/exec tools');
 } finally {
   await client?.close(); await transport?.close();
   if (service && service.exitCode === null && service.signalCode === null) {

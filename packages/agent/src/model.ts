@@ -90,6 +90,14 @@ export type ChangeSetVerifier = (cs: ChangeSet) => VerifyReport | Promise<Verify
 export interface ModelCallOptions {
   /** Cancels provider calls, retry backoff, and streaming iteration for this request. */
   signal?: AbortSignal;
+  /** Optional non-streaming usage observer; never receives response content or credentials. */
+  onUsage?: (usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number }) => void;
+}
+
+export function notifyModelUsage(options: ModelCallOptions | undefined, input: number | undefined, output: number | undefined, cached = 0): void {
+  if (!Number.isSafeInteger(input) || input! < 0 || !Number.isSafeInteger(output) || output! < 0 || !Number.isSafeInteger(cached) || cached < 0) return;
+  try { options?.onUsage?.({ inputTokens: input!, outputTokens: output!, cachedInputTokens: cached }); }
+  catch { /* Telemetry cannot change model/commit control flow. */ }
 }
 
 /** Options for respond/respondStream: pre-commit checks + repair round cap + host-supplied extra tools. */

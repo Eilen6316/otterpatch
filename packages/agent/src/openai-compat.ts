@@ -10,6 +10,7 @@
 import OpenAI from 'openai';
 import { RESOURCE_LIMITS, ResourceLimitError, assertChangeSet, type ChangeSet } from '@otterpatch/core';
 import type { AgentResponse, HostDialect, ModelCallOptions, ModelClient, ProposeRequest, RespondOptions, StreamEvent } from './model.js';
+import { notifyModelUsage } from './model.js';
 import { STEP_LIMIT, TOO_MANY_STEPS_MSG, auxToolDefs, currentRequestMessage, execReadTool, limitToolResult, parseClarify, proposalSystem, recentHistory, respondSystem, validMaxTokens, validProviderTimeout } from './sheet-tools.js';
 import { NUDGE_DIRECT, NUDGE_TOOLIFY, EMPTY_RESULT_FALLBACK, TRUNCATED_FALLBACK } from './prompts/index.js';
 import { salvageProposalArgs, salvageText, safeParse, salvagedProposalPayload } from './json-salvage.js';
@@ -158,6 +159,7 @@ export class OpenAICompatModelClient implements ModelClient {
     const output = (message?.content ?? '') + (message?.tool_calls ?? []).map((item) => item.type === 'function' ? item.function.name + item.function.arguments : JSON.stringify(item)).join('');
     assertModelOutputChars(output.length);
     budget.recordOutput(output, res.usage?.completion_tokens);
+    notifyModelUsage(opts, res.usage?.prompt_tokens, res.usage?.completion_tokens, res.usage?.prompt_tokens_details?.cached_tokens ?? 0);
     if (!toolCall || toolCall.type !== 'function') {
       throw new Error(`OpenAICompatModelClient: model did not call ${dialect.toolName}`);
     }
@@ -213,6 +215,7 @@ export class OpenAICompatModelClient implements ModelClient {
       const output = (msg.content ?? '') + calls.map((call) => call.function.name + call.function.arguments).join('');
       assertModelOutputChars(output.length);
       budget.recordOutput(output, res.usage?.completion_tokens);
+      notifyModelUsage(opts, res.usage?.prompt_tokens, res.usage?.completion_tokens, res.usage?.prompt_tokens_details?.cached_tokens ?? 0);
       if (!calls.length) {
         // No tool call: empty text → nudge for a result; prose final → toolify it once
         // ("prose proposal" failure mode: plan/clarify written as raw text).

@@ -699,3 +699,28 @@ test('read-tool budget stops the loop before the ninth tool is executed', async 
   assert.equal(result.kind, 'answer');
   assert.match(result.kind === 'answer' ? result.text : '', /read-tool limit/);
 });
+
+test('provider-reported non-stream usage is observable and telemetry cannot fail the model call', async () => {
+  const client = new OpenAICompatModelClient({ apiKey: 'test-key', model: 'usage-fixture' });
+  (client as unknown as { client: { chat: { completions: { create: () => Promise<unknown> } } } }).client = {
+    chat: { completions: { create: async () => ({ ...(openAiToolResponse('propose_changeset', JSON.stringify(VALID_EXCEL_PROPOSAL), 'usage-call') as Record<string, unknown>), usage: { prompt_tokens: 20, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 10 } } }) } },
+  };
+  const usages: unknown[] = [];
+  const result = await client.respond(LOOP_REQ, excelDialect, { onUsage: (usage) => { usages.push(usage); throw new Error('observer failed'); } });
+  assert.equal(result.kind, 'changeset');
+  assert.deepEqual(usages, [{ inputTokens: 20, outputTokens: 5, cachedInputTokens: 10 }]);
+});
+
+test('Anthropic non-stream usage records input, output and cache counts without response content', async () => {
+  const client = new AnthropicModelClient({ apiKey: 'test-key', model: 'usage-fixture' });
+  (client as unknown as { client: { messages: { create: () => Promise<unknown> } } }).client = {
+    messages: { create: async () => ({ id: 'usage-call', model: 'usage-fixture',
+      content: [{ type: 'tool_use', id: 't1', name: 'propose_changeset', input: VALID_EXCEL_PROPOSAL }],
+      usage: { input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 20, cache_creation_input_tokens: 3 },
+    }) },
+  };
+  const usages: unknown[] = [];
+  const result = await client.respond(LOOP_REQ, excelDialect, { onUsage: (usage) => { usages.push(usage); } });
+  assert.equal(result.kind, 'changeset');
+  assert.deepEqual(usages, [{ inputTokens: 10, outputTokens: 4, cachedInputTokens: 23 }]);
+});

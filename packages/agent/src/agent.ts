@@ -182,6 +182,7 @@ export class Agent {
             allowedOps: card.allowedOps,
             license: card.license,
             provenance: card.provenance,
+            adaptation: card.adaptation,
             references: card.references?.map(({ path, checksum }) => ({ path, checksum })),
             content: card.instructions,
           });

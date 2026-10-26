@@ -28,6 +28,8 @@ jobs:
         run: npm run test:real-writeback
       - name: Build all workspaces
         run: npm run build
+      - name: Official internal-comms engineering regression
+        run: npm run test:internal-comms
       - name: External skill host discovery regression
         run: npm run test:skill-surfaces
       - name: Serve security regression
